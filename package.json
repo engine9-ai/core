@@ -1,0 +1,69 @@
+{
+  "name": "@engine9/client",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Engine9 thin client: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./utilities": "./lib/utilities.js",
+    "./ids": "./lib/ids.js",
+    "./schemas": "./lib/schemas.js",
+    "./sql/shared": "./lib/sql/shared.js",
+    "./sql/sqliteDDL": "./lib/sql/sqliteDDL.js",
+    "./sql/dialects/MySQL": "./lib/sql/dialects/MySQL.js",
+    "./sql/dialects/MySQLBinaryTypes": "./lib/sql/dialects/MySQLBinaryTypes.js",
+    "./sql/dialects/SQLite": "./lib/sql/dialects/SQLite.js",
+    "./SQLWorker": "./lib/SQLWorker.js",
+    "./SchemaWorker": "./lib/SchemaWorker.js",
+    "./PersonWorker": "./lib/PersonWorker.js",
+    "./auth": "./auth/index.js",
+    "./api": "./api/index.js",
+    "./logging": "./logging/index.js",
+    "./cloudflare/worker": "./cloudflare/worker.js",
+    "./cloudflare/input-tools-shim": "./cloudflare/input-tools-shim.js",
+  "./cloudflare/unavailable-module": "./cloudflare/unavailable-module.js"
+  },
+  "bin": {
+    "e9client": "./bin/e9client.js"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "author": "Engine9",
+  "license": "ISC",
+  "dependencies": {
+    "@engine9/input-tools": "file:../input-tools",
+    "@engine9/interfaces": "file:../interfaces",
+    "camelcase": "^9.0.0",
+    "dayjs": "^1.11.13",
+    "debug": "^4.3.4",
+    "json5": "^2.2.3",
+    "p-limit": "^7.1.1",
+    "uuid": "^13.0.0"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=11",
+    "knex": ">=3",
+    "mysql2": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "knex": {
+      "optional": true
+    },
+    "mysql2": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "better-sqlite3": "^11.7.0",
+    "knex": "^3.1.0",
+    "mysql2": "^3.11.0"
+  }
+}

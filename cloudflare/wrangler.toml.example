@@ -1,0 +1,33 @@
+# Example wrangler configuration for the Engine9 client API on Cloudflare.
+# Copy the relevant pieces into your site's wrangler.toml.
+
+name = "engine9-client-api"
+main = "node_modules/@engine9/client/cloudflare/worker.js"
+compatibility_date = "2026-07-01"
+# Required: the client uses node:crypto and node:buffer via nodejs_compat
+compatibility_flags = ["nodejs_compat"]
+
+# The engine9 database
+[[d1_databases]]
+binding = "DB"
+database_name = "engine9"
+database_id = "<your d1 database id>"
+
+# API keys in KV (optional -- omit to store keys in the api_key D1 table)
+[[kv_namespaces]]
+binding = "API_KEYS"
+id = "<your kv namespace id>"
+
+# Batch modification logs in R2 (optional)
+[[r2_buckets]]
+binding = "LOG_BUCKET"
+bucket_name = "engine9-modification-logs"
+
+[vars]
+E9_ACCOUNT_ID = "my-account"
+E9_PLUGIN_ID = "<uuid of the website plugin row>"
+
+# Replace the heavy @engine9/input-tools package with the portable shim
+# (only needed because some interface transforms import it)
+[alias]
+"@engine9/input-tools" = "@engine9/client/cloudflare/input-tools-shim"
