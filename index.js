@@ -8,7 +8,7 @@ export { default as SchemaWorker, STANDARD_INSTALL_SCHEMAS } from './lib/SchemaW
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export { SCHEMAS } from './lib/schemas.js';
 export * as utilities from './lib/utilities.js';
-export * as ids from './lib/ids.js';
+export { assignPersonIds, appendPersonId } from './lib/id/index.js';
 export * as sqlShared from './lib/sql/shared.js';
 export { buildCreateTable, buildAlterTable } from './lib/sql/sqliteDDL.js';
 export {

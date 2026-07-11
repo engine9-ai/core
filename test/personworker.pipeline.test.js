@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import PersonWorker from '../lib/PersonWorker.js';
-import { getPluginUUID } from '../lib/ids.js';
+import { getPluginUUID } from '../lib/utilities.js';
 
 test('client PersonWorker: processPeople runs the inbound pipeline end to end', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });

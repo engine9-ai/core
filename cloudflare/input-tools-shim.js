@@ -25,5 +25,5 @@ export {
   getEntryType,
   getEntryTypeId,
   TIMELINE_ENTRY_TYPES
-} from '../lib/ids.js';
+} from '../lib/utilities.js';
 export { bool, getStringArray, relativeDate, isValidDate, ObjectError } from '../lib/utilities.js';

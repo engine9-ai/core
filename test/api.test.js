@@ -4,7 +4,7 @@ import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore, API_KEY_SCHEMA, hashApiKey } from '../auth/index.js';
 import { BatchLogger } from '../logging/index.js';
 import { createApi } from '../api/index.js';
-import { getPluginUUID, getVersionedUUID } from '../lib/ids.js';
+import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
 
 test('client API: auth, people POST, table upsert, segment-gated reads, modification log', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
