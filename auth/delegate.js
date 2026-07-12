@@ -68,7 +68,7 @@ const DELEGATE_LOGIN_ERRORS = {
   cloudflare_challenge: {
     kind: 'configuration',
     message:
-      'Sign-in cannot be completed because Cloudflare is challenging the server-to-server handoff to the delegate service. For local development, point DELEGATE_URL at a local delegate (http://localhost:8787) so /handoff/exchange is not blocked. Contact the site operator.'
+      'Local development needs an extra browser step: Cloudflare blocks server-to-server handoff from your machine. Open the continue link to finish sign-in in your browser.'
   },
   missing_delegate_code: {
     kind: 'auth',
@@ -144,6 +144,81 @@ export function delegateAuthorizeUrl({ delegateUrl, returnTo }) {
   const url = new URL('/handoff/authorize', delegateUrl);
   url.searchParams.set('return_to', returnTo);
   return url.toString();
+}
+
+/**
+ * Browser URL that converts a one-time handoff code into a signed
+ * ?delegate_bridge= redirect. Used when local POST /handoff/exchange is
+ * blocked by Cloudflare Bot Fight.
+ */
+export function delegateBrowserExchangeUrl({ delegateUrl, code, returnTo }) {
+  if (!delegateUrl) throw new Error('delegateBrowserExchangeUrl requires delegateUrl');
+  if (!code) throw new Error('delegateBrowserExchangeUrl requires code');
+  if (!returnTo) throw new Error('delegateBrowserExchangeUrl requires returnTo');
+  const url = new URL('/handoff/browser-exchange', delegateUrl);
+  url.searchParams.set('code', code);
+  url.searchParams.set('return_to', returnTo);
+  return url.toString();
+}
+
+/**
+ * Verify a browser-delivered handoff bridge token (HMAC with DELEGATE_SHARED_SECRET).
+ * Returns the same identity shape as exchangeDelegateCode, or throws.
+ */
+export function verifyHandoffBridgeToken({ secret, token, expectedReturnTo }) {
+  if (!secret) throw new Error('verifyHandoffBridgeToken requires DELEGATE_SHARED_SECRET');
+  if (typeof token !== 'string' || !token.includes('.')) {
+    throw createDelegateLoginFailure('invalid_or_expired_code', {
+      detail: 'delegate bridge token missing or malformed'
+    });
+  }
+  const dot = token.indexOf('.');
+  const encoded = token.slice(0, dot);
+  const signature = token.slice(dot + 1);
+  const expected = sign(encoded, secret);
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw createDelegateLoginFailure('invalid_or_expired_code', {
+      detail: 'delegate bridge token signature mismatch'
+    });
+  }
+  let payload;
+  try {
+    payload = JSON.parse(base64urlDecode(encoded));
+  } catch {
+    throw createDelegateLoginFailure('incomplete_delegate_payload', {
+      detail: 'delegate bridge token is not valid JSON'
+    });
+  }
+  if (!payload?.unid || !payload?.firebaseUid) {
+    throw createDelegateLoginFailure('incomplete_delegate_payload');
+  }
+  if (typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
+    throw createDelegateLoginFailure('invalid_or_expired_code', {
+      detail: 'delegate bridge token expired'
+    });
+  }
+  if (expectedReturnTo) {
+    try {
+      if (new URL(payload.returnTo).origin !== new URL(expectedReturnTo).origin) {
+        throw createDelegateLoginFailure('invalid_return_to', {
+          detail: 'delegate bridge returnTo origin mismatch'
+        });
+      }
+    } catch (err) {
+      if (err.reason) throw err;
+      throw createDelegateLoginFailure('invalid_return_to');
+    }
+  }
+  return {
+    unid: payload.unid,
+    firebaseUid: payload.firebaseUid,
+    email: payload.email,
+    auth: payload.auth || {},
+    returnTo: payload.returnTo,
+    createdAt: payload.createdAt
+  };
 }
 
 /*
@@ -391,18 +466,51 @@ export function createDelegateAuth({
     return delegateAuthorizeUrl({ delegateUrl, returnTo });
   }
 
+  function browserExchangeUrl({ code, returnTo }) {
+    return delegateBrowserExchangeUrl({ delegateUrl, code, returnTo });
+  }
+
   /*
-    Full login: exchange the one-time code, resolve/dedupe the person via
-    id_type "delegate", snapshot roles, and mint the signed session (which
-    carries the credential level delegate reported).
+    Full login from either:
+      - a one-time ?delegate_code= (server POST /handoff/exchange), or
+      - a signed ?delegate_bridge= token (browser delivery for localhost /
+        Cloudflare Bot Fight bypass).
+
+    Bridge tokens contain a "." and are not 64-char hex codes. On a
+    cloudflare_challenge from exchange, the thrown error includes
+    `browserExchangeUrl` when returnTo is provided.
   */
-  async function login(code, { person = {} } = {}) {
-    const delegateUser = await exchangeDelegateCode({
-      delegateUrl,
-      secret: handoffSecret,
-      code,
-      fetchImpl
-    });
+  async function login(token, { person = {}, returnTo } = {}) {
+    let delegateUser;
+    const isBridge =
+      typeof token === 'string' && token.includes('.') && !/^[0-9a-f]{64}$/i.test(token);
+
+    if (isBridge) {
+      delegateUser = verifyHandoffBridgeToken({
+        secret: handoffSecret,
+        token,
+        expectedReturnTo: returnTo
+      });
+    } else {
+      try {
+        delegateUser = await exchangeDelegateCode({
+          delegateUrl,
+          secret: handoffSecret,
+          code: token,
+          fetchImpl
+        });
+      } catch (err) {
+        if (err?.reason === 'cloudflare_challenge' && returnTo && token) {
+          err.browserExchangeUrl = delegateBrowserExchangeUrl({
+            delegateUrl,
+            code: token,
+            returnTo
+          });
+        }
+        throw err;
+      }
+    }
+
     const personId = await resolveDelegatePersonId({
       worker,
       delegateUser,
@@ -429,6 +537,7 @@ export function createDelegateAuth({
 
   return {
     loginUrl,
+    browserExchangeUrl,
     login,
     verify,
     issueToken,
@@ -440,7 +549,9 @@ export function createDelegateAuth({
 export default {
   createDelegateLoginFailure,
   delegateAuthorizeUrl,
+  delegateBrowserExchangeUrl,
   exchangeDelegateCode,
+  verifyHandoffBridgeToken,
   resolveDelegatePersonId,
   createSessionToken,
   verifySessionToken,

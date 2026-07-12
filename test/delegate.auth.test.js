@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import {
@@ -7,6 +8,8 @@ import {
   verifySessionToken,
   exchangeDelegateCode,
   delegateAuthorizeUrl,
+  delegateBrowserExchangeUrl,
+  verifyHandoffBridgeToken,
   resolveDelegatePersonId,
   createDelegateAuth,
   createDelegateLoginFailure,
@@ -188,7 +191,7 @@ test('exchangeDelegateCode posts the shared secret and returns the payload', asy
     (err) => {
       assert.equal(err.reason, 'cloudflare_challenge');
       assert.equal(err.kind, 'configuration');
-      assert.match(err.userMessage, /Cloudflare|DELEGATE_URL|localhost:8787/i);
+      assert.match(err.userMessage, /browser step|Continue|Cloudflare/i);
       return true;
     }
   );
@@ -287,4 +290,38 @@ test('delegateAuthorizeUrl builds the handoff login URL', () => {
   assert.equal(parsed.origin, 'https://delegate.engine9.ai');
   assert.equal(parsed.pathname, '/handoff/authorize');
   assert.equal(parsed.searchParams.get('return_to'), 'https://site.example.com/auth/delegate');
+});
+
+test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () => {
+  const url = delegateBrowserExchangeUrl({
+    delegateUrl: 'https://delegate.engine9.ai',
+    code: 'abc123',
+    returnTo: 'http://localhost:5001/auth/delegate'
+  });
+  const parsed = new URL(url);
+  assert.equal(parsed.pathname, '/handoff/browser-exchange');
+  assert.equal(parsed.searchParams.get('code'), 'abc123');
+
+  const secret = 'bridge-secret';
+  const payload = {
+    unid: 'u1',
+    firebaseUid: 'fb1',
+    email: 'a@b.c',
+    auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
+    returnTo: 'http://localhost:5001/auth/delegate',
+    createdAt: new Date().toISOString(),
+    exp: Date.now() + 60_000
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
+  const token = `${encoded}.${sig}`;
+
+  const verified = verifyHandoffBridgeToken({
+    secret,
+    token,
+    expectedReturnTo: 'http://localhost:5001/auth/delegate'
+  });
+  assert.equal(verified.unid, 'u1');
+  assert.equal(verified.firebaseUid, 'fb1');
+  assert.equal(verified.email, 'a@b.c');
 });

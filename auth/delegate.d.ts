@@ -42,6 +42,8 @@ export interface DelegateLoginFailure extends Error {
   kind: DelegateLoginErrorKind;
   userMessage: string;
   status?: number;
+  /** Present on cloudflare_challenge when returnTo was passed to login(). */
+  browserExchangeUrl?: string;
 }
 
 export function createDelegateLoginFailure(
@@ -64,12 +66,24 @@ export function delegateAuthorizeUrl(options: {
   returnTo: string;
 }): string;
 
+export function delegateBrowserExchangeUrl(options: {
+  delegateUrl: string;
+  code: string;
+  returnTo: string;
+}): string;
+
 export function exchangeDelegateCode(options: {
   delegateUrl: string;
   secret: string;
   code: string;
   fetchImpl?: typeof fetch;
 }): Promise<DelegateUser>;
+
+export function verifyHandoffBridgeToken(options: {
+  secret: string;
+  token: string;
+  expectedReturnTo?: string;
+}): DelegateUser;
 
 export function resolveDelegatePersonId(options: {
   worker: unknown;
@@ -107,10 +121,16 @@ export function sessionNeedsRole(
 export interface DelegateAuth<Role extends string = string> {
   /** Browser URL that starts a delegate login for this site. */
   loginUrl(options: { returnTo: string }): string;
-  /** Exchange a one-time code: person pipeline + roles + signed session. */
+  /** Browser URL that finishes a blocked local code exchange via Delegate. */
+  browserExchangeUrl(options: { code: string; returnTo: string }): string;
+  /**
+   * Complete login from ?delegate_code= (server exchange) or ?delegate_bridge=
+   * (signed browser token). Pass returnTo so CF-challenge errors include a
+   * browserExchangeUrl for the local-dev continue step.
+   */
   login(
-    code: string,
-    options?: { person?: Record<string, unknown> }
+    codeOrBridge: string,
+    options?: { person?: Record<string, unknown>; returnTo?: string }
   ): Promise<{
     session: DelegateSession<Role>;
     token: string;
@@ -129,7 +149,7 @@ export interface DelegateAuth<Role extends string = string> {
 export function createDelegateAuth<Role extends string = string>(config: {
   worker: unknown;
   delegateUrl: string;
-  /** DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange. */
+  /** DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange / bridge HMAC. */
   handoffSecret: string;
   sessionSecret: string;
   sessionTtlSeconds?: number;
@@ -143,7 +163,9 @@ export function createDelegateAuth<Role extends string = string>(config: {
 declare const _default: {
   createDelegateLoginFailure: typeof createDelegateLoginFailure;
   delegateAuthorizeUrl: typeof delegateAuthorizeUrl;
+  delegateBrowserExchangeUrl: typeof delegateBrowserExchangeUrl;
   exchangeDelegateCode: typeof exchangeDelegateCode;
+  verifyHandoffBridgeToken: typeof verifyHandoffBridgeToken;
   resolveDelegatePersonId: typeof resolveDelegatePersonId;
   createSessionToken: typeof createSessionToken;
   verifySessionToken: typeof verifySessionToken;

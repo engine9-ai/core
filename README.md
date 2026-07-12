@@ -101,10 +101,16 @@ Delegate is Engine9's shared identity service. Sites built on `@engine9/core`
 never talk to the identity provider directly — they use **core handoff**:
 
 1. Browser goes to `{delegateUrl}/handoff/authorize?return_to=<your callback>`.
-2. After login, delegate redirects to your callback with a one-time
-   `?delegate_code=`.
-3. Your server exchanges the code at `POST {delegateUrl}/handoff/exchange`
-   with `Authorization: Bearer <DELEGATE_SHARED_SECRET>`.
+2. After login, delegate redirects to your callback with either:
+   - `?delegate_code=` (production hosts — your server exchanges it), or
+   - `?delegate_bridge=` (localhost / loopback — signed identity for local
+     development, so your machine never needs to `POST /handoff/exchange`
+     through Cloudflare Bot Fight).
+3. For codes: your server exchanges at `POST {delegateUrl}/handoff/exchange`
+   with `Authorization: Bearer <DELEGATE_SHARED_SECRET>`. If that POST is
+   challenged, `login(code, { returnTo })` attaches `error.browserExchangeUrl`
+   so you can prompt the developer to open `/handoff/browser-exchange` in
+   the browser and finish with `?delegate_bridge=`.
 4. Core maps the returned `unid` into a `person_id` (id_type `delegate`),
    snapshots roles from `person_segment`, and signs a local session cookie.
 
@@ -124,8 +130,8 @@ const auth = createDelegateAuth({
 // Start login
 res.redirect(auth.loginUrl({ returnTo: 'https://yoursite.example/auth/delegate' }));
 
-// Callback: exchange code → person + roles + signed token
-const { session, token } = await auth.login(code);
+// Callback: code or bridge → person + roles + signed token
+const { session, token } = await auth.login(codeOrBridge, { returnTo: callbackUrl });
 ```
 
 `DELEGATE_SHARED_SECRET` must match the value configured on the delegate
