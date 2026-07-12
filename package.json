@@ -19,6 +19,8 @@
     "./SQLWorker": "./lib/SQLWorker.js",
     "./SchemaWorker": "./lib/SchemaWorker.js",
     "./PersonWorker": "./lib/PersonWorker.js",
+    "./peoplePipeline": "./lib/peoplePipeline/index.js",
+    "./batchStallWatcher": "./lib/batchStallWatcher.js",
     "./auth": "./auth/index.js",
     "./auth/delegate": "./auth/delegate.js",
     "./api": "./api/index.js",

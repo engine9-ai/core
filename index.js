@@ -6,6 +6,17 @@
 export { default as SQLWorker } from './lib/SQLWorker.js';
 export { default as SchemaWorker, STANDARD_INSTALL_SCHEMAS } from './lib/SchemaWorker.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
+export {
+  buildInboundTransforms,
+  runPeopleTransformStep,
+  runPeopleBatchPipeline,
+  runLoadPeopleStream
+} from './lib/peoplePipeline/index.js';
+export {
+  batchStallKey,
+  createBatchStallWatcher,
+  resolveBatchStallTimeoutMs
+} from './lib/batchStallWatcher.js';
 export { SCHEMAS } from './lib/schemas.js';
 export * as utilities from './lib/utilities.js';
 export {
