@@ -24,6 +24,119 @@
 */
 import crypto from 'node:crypto';
 
+/*
+  Classify delegate login failures for end-user messaging.
+
+  configuration — site/deployment misconfiguration; retrying sign-in will not help
+  auth          — normal sign-in flow failure; the user can try again
+*/
+const DELEGATE_LOGIN_ERRORS = {
+  invalid_shared_secret: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site is misconfigured: DELEGATE_SHARED_SECRET does not match the delegate service. Contact the site operator.'
+  },
+  invalid_return_to: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site callback URL is not allowed by the delegate service. Contact the site operator.'
+  },
+  invalid_json_body: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site sent an invalid request to the delegate service. Contact the site operator.'
+  },
+  missing_code: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site did not send a handoff code to the delegate service. Contact the site operator.'
+  },
+  incomplete_delegate_payload: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because the delegate service returned an unexpected response. Contact the site operator.'
+  },
+  person_resolution_failed: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site could not create or look up your person record. Contact the site operator.'
+  },
+  invalid_or_expired_code: {
+    kind: 'auth',
+    message: 'Your sign-in link expired or was already used. Please sign in again.'
+  },
+  cloudflare_challenge: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because Cloudflare is challenging the server-to-server handoff to the delegate service. For local development, point DELEGATE_URL at a local delegate (http://localhost:8787) so /handoff/exchange is not blocked. Contact the site operator.'
+  },
+  missing_delegate_code: {
+    kind: 'auth',
+    message: 'Sign-in did not finish because no authorization code was received. Please sign in again.'
+  },
+  login_failed: {
+    kind: 'auth',
+    message: 'Sign-in did not complete. Please try signing in again.'
+  }
+};
+
+/**
+ * Build login failure metadata for a delegate handoff reason code.
+ * @returns {{ reason: string, kind: 'configuration' | 'auth', userMessage: string }}
+ */
+function loginErrorForReason(reason) {
+  const key = String(reason || 'login_failed').trim();
+  const known = DELEGATE_LOGIN_ERRORS[key];
+  if (known) return { reason: key, kind: known.kind, userMessage: known.message };
+
+  const statusMatch = /^status_(\d+)$/.exec(key);
+  if (statusMatch) {
+    const status = Number(statusMatch[1]);
+    if (status >= 500) {
+      return {
+        reason: key,
+        kind: 'configuration',
+        userMessage:
+          'Sign-in cannot be completed because the delegate service is unavailable. If this keeps happening, contact the site operator.'
+      };
+    }
+    if (status === 404) {
+      return {
+        reason: key,
+        kind: 'auth',
+        userMessage: 'Your sign-in link expired or was already used. Please sign in again.'
+      };
+    }
+    if (status >= 400) {
+      return {
+        reason: key,
+        kind: 'configuration',
+        userMessage:
+          'Sign-in cannot be completed because this site could not exchange the authorization code with the delegate service. Contact the site operator.'
+      };
+    }
+  }
+
+  return {
+    reason: key,
+    kind: 'auth',
+    userMessage: DELEGATE_LOGIN_ERRORS.login_failed.message
+  };
+}
+
+/**
+ * Create a delegate login failure error with user-facing text on `userMessage`.
+ * Callback handlers can forward `reason`, `kind`, and `userMessage` to the UI.
+ */
+export function createDelegateLoginFailure(reason, { detail } = {}) {
+  const described = loginErrorForReason(reason);
+  const error = new Error(detail || `delegate login failed: ${described.reason}`);
+  error.reason = described.reason;
+  error.kind = described.kind;
+  error.userMessage = described.userMessage;
+  return error;
+}
+
 /** Build the browser URL that starts a delegate login for this site. */
 export function delegateAuthorizeUrl({ delegateUrl, returnTo }) {
   if (!delegateUrl) throw new Error('delegateAuthorizeUrl requires delegateUrl');
@@ -57,17 +170,26 @@ export async function exchangeDelegateCode({ delegateUrl, secret, code, fetchImp
   try {
     body = await response.json();
   } catch {
-    /* non-JSON error body */
+    /* non-JSON error body (e.g. Cloudflare challenge HTML) */
   }
   if (!response.ok) {
-    const reason = body?.error || `status_${response.status}`;
-    const error = new Error(`delegate handoff exchange failed: ${reason}`);
+    // 403 with no JSON error is almost always Cloudflare Bot Fight / managed
+    // challenge blocking a non-browser POST (common for local → production).
+    const reason =
+      body?.error ||
+      (response.status === 403 && !body
+        ? 'cloudflare_challenge'
+        : `status_${response.status}`);
+    const error = createDelegateLoginFailure(reason, {
+      detail: `delegate handoff exchange failed: ${reason}`
+    });
     error.status = response.status;
-    error.reason = reason;
     throw error;
   }
   if (!body?.unid || !body?.firebaseUid) {
-    throw new Error('delegate handoff exchange returned an incomplete payload');
+    throw createDelegateLoginFailure('incomplete_delegate_payload', {
+      detail: 'delegate handoff exchange returned an incomplete payload'
+    });
   }
   return body;
 }
@@ -97,7 +219,11 @@ export async function resolveDelegatePersonId({
     batch: [record]
   });
   const personId = summary.personIds?.[0];
-  if (!personId) throw new Error('delegate person resolution did not produce a person_id');
+  if (!personId) {
+    throw createDelegateLoginFailure('person_resolution_failed', {
+      detail: 'delegate person resolution did not produce a person_id'
+    });
+  }
   return personId;
 }
 
@@ -312,6 +438,7 @@ export function createDelegateAuth({
 }
 
 export default {
+  createDelegateLoginFailure,
   delegateAuthorizeUrl,
   exchangeDelegateCode,
   resolveDelegatePersonId,

@@ -33,6 +33,22 @@ export interface CredentialLevel {
   authTime?: number;
 }
 
+/** Whether a delegate login failure is a site misconfiguration or a user retry. */
+export type DelegateLoginErrorKind = "configuration" | "auth";
+
+/** Thrown when delegate login cannot complete. */
+export interface DelegateLoginFailure extends Error {
+  reason: string;
+  kind: DelegateLoginErrorKind;
+  userMessage: string;
+  status?: number;
+}
+
+export function createDelegateLoginFailure(
+  reason?: string | null,
+  options?: { detail?: string }
+): DelegateLoginFailure;
+
 /** Local session payload minted after a delegate login. */
 export interface DelegateSession<Role extends string = string> {
   personId: number;
@@ -125,6 +141,7 @@ export function createDelegateAuth<Role extends string = string>(config: {
 }): DelegateAuth<Role>;
 
 declare const _default: {
+  createDelegateLoginFailure: typeof createDelegateLoginFailure;
   delegateAuthorizeUrl: typeof delegateAuthorizeUrl;
   exchangeDelegateCode: typeof exchangeDelegateCode;
   resolveDelegatePersonId: typeof resolveDelegatePersonId;

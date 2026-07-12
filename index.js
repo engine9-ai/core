@@ -33,6 +33,7 @@ export {
   API_KEY_SCHEMA
 } from './auth/index.js';
 export {
+  createDelegateLoginFailure,
   delegateAuthorizeUrl,
   exchangeDelegateCode,
   resolveDelegatePersonId,
