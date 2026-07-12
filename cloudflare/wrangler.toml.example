@@ -23,6 +23,17 @@ id = "<your kv namespace id>"
 binding = "LOG_BUCKET"
 bucket_name = "engine9-modification-logs"
 
+# Compact person identifier lookups via Durable Object (optional).
+# Without this binding, D1/SQLite still uses compact person_id_<id_type> tables;
+# MySQL deployments use the full person_identifier table.
+[[durable_objects.bindings]]
+name = "PERSON_IDS"
+class_name = "PersonIdentifierDO"
+
+[[migrations]]
+tag = "v1-person-ids"
+new_classes = ["PersonIdentifierDO"]
+
 [vars]
 E9_ACCOUNT_ID = "my-account"
 E9_PLUGIN_ID = "<uuid of the website plugin row>"

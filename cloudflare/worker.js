@@ -16,12 +16,16 @@ import PersonWorker from '@engine9/client/PersonWorker';
 import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/client/auth';
 import { BatchLogger, NullLogger, r2Sink } from '@engine9/client/logging';
 import { createApi } from '@engine9/client/api';
+import { PersonIdentifierDO } from '@engine9/client/id';
+
+export { PersonIdentifierDO };
 
 export default {
   async fetch(request, env, ctx) {
     const worker = new PersonWorker({
       accountId: env.E9_ACCOUNT_ID || 'cloudflare',
-      d1: env.DB
+      d1: env.DB,
+      personIds: env.PERSON_IDS
     });
     const keyStore = env.API_KEYS ? new KVApiKeyStore({ kv: env.API_KEYS }) : new SqlApiKeyStore({ worker });
     const logger = env.LOG_BUCKET ? new BatchLogger({ sink: r2Sink(env.LOG_BUCKET) }) : new NullLogger();

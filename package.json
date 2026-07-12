@@ -8,6 +8,7 @@
     ".": "./index.js",
     "./utilities": "./lib/utilities.js",
     "./id": "./lib/id/index.js",
+    "./id/PersonIdentifierDO": "./lib/id/PersonIdentifierDO.js",
     "./ids": "./lib/utilities.js",
     "./schemas": "./lib/schemas.js",
     "./sql/shared": "./lib/sql/shared.js",
@@ -29,7 +30,8 @@
     "e9client": "./bin/e9client.js"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "test:id-large": "E9_LARGE_ID_TEST=1 node --test --test-concurrency=1 test/id.large.test.js"
   },
   "engines": {
     "node": ">=22"

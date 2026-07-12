@@ -30,9 +30,17 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
     const [aliceId, bobId] = summary.personIds;
     assert.ok(aliceId && bobId && aliceId !== bobId, 'both records got distinct person_ids');
 
-    const { data: identifiers } = await worker.query('select id_type, person_id from person_identifier order by person_id');
-    assert.ok(identifiers.find((i) => i.id_type === 'email_hash_v1' && i.person_id === aliceId));
-    assert.ok(identifiers.find((i) => i.id_type === 'phone_hash_v1' && i.person_id === aliceId));
+    // SQLite defaults to compact person_id_<id_type> tables (not person_identifier)
+    const { data: emailIds } = await worker.query(
+      'select person_id from person_id_email_hash_v1 order by person_id'
+    );
+    const { data: phoneIds } = await worker.query(
+      'select person_id from person_id_phone_hash_v1 order by person_id'
+    );
+    assert.ok(emailIds.find((i) => i.person_id === aliceId));
+    assert.ok(phoneIds.find((i) => i.person_id === aliceId));
+    const { data: legacyIds } = await worker.query('select * from person_identifier');
+    assert.equal(legacyIds.length, 0);
 
     const { data: emails } = await worker.query('select person_id, email, subscription_status from person_email order by person_id');
     assert.equal(emails.length, 2);
