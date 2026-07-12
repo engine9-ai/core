@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /*
-  e9client -- Engine9 client command line.
+  e9core -- Engine9 core command line.
 
-    e9client install --db sqlite://./engine9.db
+    e9core install --db sqlite://./engine9.db
         Create/update the Engine9 database from scratch: all standard
         interface schemas plus the api_key table.
 
-    e9client create-api-key --db sqlite://./engine9.db --name "website" [--scopes people:write,data:read]
+    e9core create-api-key --db sqlite://./engine9.db --name "website" [--scopes people:write,data:read]
         Create an API key.  The plaintext key is printed once and only the
         hash is stored.
 
-    e9client create-api-key --print-sql --name "website" [--scopes ...]
+    e9core create-api-key --print-sql --name "website" [--scopes ...]
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9client diff --db sqlite://./engine9.db [--schema @engine9/interfaces/person]
+    e9core diff --db sqlite://./engine9.db [--schema @engine9/interfaces/person]
         Show schema differences without applying them.
 
-    e9client sqlite-ddl [--schema @engine9/interfaces/person]
+    e9core sqlite-ddl [--schema @engine9/interfaces/person]
         Print the SQLite/D1 create statements for a schema (all standard
         schemas when omitted) -- useful for D1 migration files.
 
@@ -135,7 +135,7 @@ async function main() {
       break;
     }
     default:
-      console.log('Usage: e9client <install|create-api-key|diff|sqlite-ddl> [--db <connection>] [options]');
+      console.log('Usage: e9core <install|create-api-key|diff|sqlite-ddl> [--db <connection>] [options]');
       process.exit(command ? 1 : 0);
   }
 }

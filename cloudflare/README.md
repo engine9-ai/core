@@ -1,6 +1,6 @@
 # Engine9 Client on Cloudflare
 
-Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/client`.
+Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
 The D1 database *is* the engine9 database: the client creates the schema,
 installs the standard interfaces, and serves the people/upsert/read API from a
 Worker.
@@ -19,7 +19,7 @@ Worker.
 1. **Add the client to your site**
 
    ```bash
-   npm install @engine9/client
+   npm install @engine9/core
    ```
 
 2. **Create the D1 database**
@@ -35,14 +35,14 @@ Worker.
    timeline, source_code, transaction, plugin):
 
    ```bash
-   npx e9client sqlite-ddl > migrations/0001_engine9.sql
+   npx e9core sqlite-ddl > migrations/0001_engine9.sql
    wrangler d1 migrations apply engine9 --remote
    ```
 
    Alternatively, deploy directly from a Worker or script with a D1 binding:
 
    ```js
-   import SchemaWorker from '@engine9/client/SchemaWorker';
+   import SchemaWorker from '@engine9/core/SchemaWorker';
    const schema = new SchemaWorker({ accountId: 'my-account', d1: env.DB });
    await schema.installStandard();
    ```
@@ -55,7 +55,7 @@ Worker.
 
    ```bash
    # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)
-   npx e9client create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
+   npx e9core create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
    ```
 
    The plaintext key (`e9k_...`) is printed once; only its SHA-256 hash is
@@ -69,7 +69,7 @@ Worker.
    - `compatibility_flags = ["nodejs_compat"]` (the client uses `node:crypto`
      and `node:buffer`)
    - the `[alias]` mapping `@engine9/input-tools` to
-     `@engine9/client/cloudflare/input-tools-shim`, which keeps server-only
+     `@engine9/core/cloudflare/input-tools-shim`, which keeps server-only
      dependencies (AWS SDK, archiver, googleapis) out of the bundle
 
 6. **Deploy**

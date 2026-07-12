@@ -58,7 +58,7 @@ function json(status, body) {
 
 export function createApi({ worker, keyStore, logger = new NullLogger(), config = {} }) {
   if (!worker) throw new Error('createApi requires a worker (client PersonWorker)');
-  if (!keyStore) throw new Error('createApi requires a keyStore (see @engine9/client/auth)');
+  if (!keyStore) throw new Error('createApi requires a keyStore (see @engine9/core/auth)');
   const {
     pluginId,
     defaultRemoteInputId = 'website',

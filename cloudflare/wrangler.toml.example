@@ -1,10 +1,10 @@
-# Example wrangler configuration for the Engine9 client API on Cloudflare.
+# Example wrangler configuration for the Engine9 core API on Cloudflare.
 # Copy the relevant pieces into your site's wrangler.toml.
 
-name = "engine9-client-api"
-main = "node_modules/@engine9/client/cloudflare/worker.js"
+name = "engine9-core-api"
+main = "node_modules/@engine9/core/cloudflare/worker.js"
 compatibility_date = "2026-07-01"
-# Required: the client uses node:crypto and node:buffer via nodejs_compat
+# Required: core uses node:crypto and node:buffer via nodejs_compat
 compatibility_flags = ["nodejs_compat"]
 
 # The engine9 database
@@ -41,4 +41,4 @@ E9_PLUGIN_ID = "<uuid of the website plugin row>"
 # Replace the heavy @engine9/input-tools package with the portable shim
 # (only needed because some interface transforms import it)
 [alias]
-"@engine9/input-tools" = "@engine9/client/cloudflare/input-tools-shim"
+"@engine9/input-tools" = "@engine9/core/cloudflare/input-tools-shim"

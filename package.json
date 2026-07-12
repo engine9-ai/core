@@ -1,8 +1,8 @@
 {
-  "name": "@engine9/client",
+  "name": "@engine9/core",
   "version": "0.1.0",
   "type": "module",
-  "description": "Engine9 thin client: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
+  "description": "Engine9 core: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -27,7 +27,7 @@
   "./cloudflare/unavailable-module": "./cloudflare/unavailable-module.js"
   },
   "bin": {
-    "e9client": "./bin/e9client.js"
+    "e9core": "./bin/e9core.js"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1",
@@ -39,8 +39,8 @@
   "author": "Engine9",
   "license": "ISC",
   "dependencies": {
-    "@engine9/input-tools": "file:../input-tools",
-    "@engine9/interfaces": "file:../interfaces",
+    "@engine9/input-tools": "^2.3.9",
+    "@engine9/interfaces": "github:engine9-io/interfaces",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
@@ -68,5 +68,8 @@
     "better-sqlite3": "^11.7.0",
     "knex": "^3.1.0",
     "mysql2": "^3.11.0"
+  },
+  "overrides": {
+    "@engine9/input-tools": "^2.3.9"
   }
 }

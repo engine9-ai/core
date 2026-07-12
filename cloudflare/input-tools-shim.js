@@ -4,13 +4,13 @@
   The real @engine9/input-tools index imports server-only dependencies
   (@aws-sdk/client-s3, archiver, unzipper, googleapis) that cannot ship in a
   Worker bundle.  The interface transforms used by the client only need the
-  small portable pieces below, which are implemented in @engine9/client
+  small portable pieces below, which are implemented in @engine9/core
   without those dependencies.
 
   Alias it in wrangler.toml (see cloudflare/README.md):
 
     [alias]
-    "@engine9/input-tools" = "@engine9/client/cloudflare/input-tools-shim"
+    "@engine9/input-tools" = "@engine9/core/cloudflare/input-tools-shim"
 */
 export {
   uuidIsValid,

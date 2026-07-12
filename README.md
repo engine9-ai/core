@@ -1,4 +1,4 @@
-# @engine9/client
+# @engine9/core
 
 Slim Engine9 deployment for websites: a JavaScript library plus API endpoints
 that run alongside an existing site, using the same core code as the full
@@ -11,11 +11,11 @@ The client is the minimum needed for a functioning website:
 - **Create/update the engine9 database from scratch** -- standardize, diff, and
   deploy the standard interface schemas (person, person_email, person_phone,
   person_address, segment, timeline, source_code, transaction, plugin) on
-  SQLite, Cloudflare D1, or MySQL (`SchemaWorker`, `e9client install`).
+  SQLite, Cloudflare D1, or MySQL (`SchemaWorker`, `e9core install`).
 - **Install plugins** -- plugin rows and their schemas (`SchemaWorker.install`).
 - **Authenticate with API keys** -- pluggable key stores (SQL table or
   Cloudflare KV), SHA-256 hashed at rest, scoped, revocable
-  (`@engine9/client/auth`, `e9client create-api-key`). The auth layer is
+  (`@engine9/core/auth`, `e9core create-api-key`). The auth layer is
   isolated from the API handlers for easy upgrades.
 - **Create/update single people in real time** -- the exact `loadPeople`
   inbound pipeline (normalize, extract identifiers, resolve input, assign
@@ -30,7 +30,7 @@ The client is the minimum needed for a functioning website:
   by the caller (e.g. via delegate), never looked up (`GET /read/:name`).
 - **Log every modification** -- database write first, then a record to the
   modification log: JSONL files for generic deployments, Cloudflare-style
-  batch logging (R2/Queues) for Workers (`@engine9/client/logging`).
+  batch logging (R2/Queues) for Workers (`@engine9/core/logging`).
 
 Everything else -- person exports, file processing (FileWorker), messaging,
 reports, EQL search, scheduled jobs, remote plugin execution -- stays in the
@@ -46,15 +46,15 @@ this package.
 ## Quick start (Node + SQLite)
 
 ```bash
-npm install @engine9/client better-sqlite3 knex
+npm install @engine9/core better-sqlite3 knex
 
 # create the database and an API key
-npx e9client install --db sqlite://./engine9.db
-npx e9client create-api-key --db sqlite://./engine9.db --name website
+npx e9core install --db sqlite://./engine9.db
+npx e9core create-api-key --db sqlite://./engine9.db --name website
 ```
 
 ```js
-import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from '@engine9/client';
+import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from '@engine9/core';
 
 const worker = new PersonWorker({
   accountId: 'my-account',
@@ -101,7 +101,7 @@ Keys with no scopes recorded have full access.
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide
-- `bin/e9client.js` -- `install`, `create-api-key`, `diff`, `sqlite-ddl`
+- `bin/e9core.js` -- `install`, `create-api-key`, `diff`, `sqlite-ddl`
 
 ## Tests
 

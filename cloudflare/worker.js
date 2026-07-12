@@ -9,14 +9,14 @@
   Vars:
     E9_ACCOUNT_ID  -- account identifier used in logs
     E9_PLUGIN_ID   -- plugin id (UUID) used for people writes; create it once
-                      with `e9client install` + a plugin row, or set any
+                      with `e9core install` + a plugin row, or set any
                       stable UUID from getPluginUUID()
 */
-import PersonWorker from '@engine9/client/PersonWorker';
-import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/client/auth';
-import { BatchLogger, NullLogger, r2Sink } from '@engine9/client/logging';
-import { createApi } from '@engine9/client/api';
-import { PersonIdentifierDO } from '@engine9/client/id';
+import PersonWorker from '@engine9/core/PersonWorker';
+import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';
+import { BatchLogger, NullLogger, r2Sink } from '@engine9/core/logging';
+import { createApi } from '@engine9/core/api';
+import { PersonIdentifierDO } from '@engine9/core/id';
 
 export { PersonIdentifierDO };
 

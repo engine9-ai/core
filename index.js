@@ -1,5 +1,5 @@
 /*
-  @engine9/client -- slim Engine9 deployment for websites.
+  @engine9/core -- slim Engine9 deployment for websites.
 
   See README.md for the client/server responsibility split.
 */
