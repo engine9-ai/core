@@ -17,6 +17,14 @@ The client is the minimum needed for a functioning website:
   Cloudflare KV), SHA-256 hashed at rest, scoped, revocable
   (`@engine9/core/auth`, `e9core create-api-key`). The auth layer is
   isolated from the API handlers for easy upgrades.
+- **Authenticate end users via delegate** -- the shared cross-organization
+  auth service. `createDelegateAuth` exchanges delegate's one-time handoff
+  codes server-to-server under `DELEGATE_SHARED_SECRET`, maps the delegate
+  unid into a `person_id` through the normal identifier pipeline (id_type
+  `delegate` → `person_id_delegate` on SQLite/D1), derives roles from
+  `person_segment` membership, and signs local sessions carrying the reported
+  credential level (`@engine9/core/auth/delegate`). See [Delegate
+  authentication](#delegate-authentication) below.
 - **Create/update single people in real time** -- the exact `loadPeople`
   inbound pipeline (normalize, extract identifiers, resolve input, assign
   person ids with deduplication, resolve source codes, upsert person/email/
@@ -87,6 +95,56 @@ app.use('/api', express.json(), api.expressHandler());
 Keys are passed as `Authorization: Bearer e9k_...` or `X-API-Key: e9k_...`.
 Keys with no scopes recorded have full access.
 
+## Delegate authentication
+
+Delegate is Engine9's shared identity service. Sites built on `@engine9/core`
+never talk to the identity provider directly — they use **core handoff**:
+
+1. Browser goes to `{delegateUrl}/handoff/authorize?return_to=<your callback>`.
+2. After login, delegate redirects to your callback with a one-time
+   `?delegate_code=`.
+3. Your server exchanges the code at `POST {delegateUrl}/handoff/exchange`
+   with `Authorization: Bearer <DELEGATE_SHARED_SECRET>`.
+4. Core maps the returned `unid` into a `person_id` (id_type `delegate`),
+   snapshots roles from `person_segment`, and signs a local session cookie.
+
+```js
+import { createDelegateAuth } from '@engine9/core/auth/delegate';
+
+const auth = createDelegateAuth({
+  worker,                                    // PersonWorker for this site's DB
+  delegateUrl: process.env.DELEGATE_URL,     // e.g. https://delegate.engine9.ai
+  handoffSecret: process.env.DELEGATE_SHARED_SECRET,
+  sessionSecret: process.env.SESSION_SECRET, // signs this site's cookie only
+  pluginId: '<website plugin uuid>',
+  remoteInputId: 'delegate-login',
+  roleSegments: { admin: '<segment uuid>', vip: '<segment uuid>' }
+});
+
+// Start login
+res.redirect(auth.loginUrl({ returnTo: 'https://yoursite.example/auth/delegate' }));
+
+// Callback: exchange code → person + roles + signed token
+const { session, token } = await auth.login(code);
+```
+
+`DELEGATE_SHARED_SECRET` must match the value configured on the delegate
+deployment (comma-separated values allow rotation). `SESSION_SECRET` is local
+to your site and never shared with delegate.
+
+### When to use which mechanism
+
+Delegate exposes **two** authorization mechanisms that share one secret
+(`DELEGATE_SHARED_SECRET`) but serve different callers:
+
+| Mechanism | Use when | What you get |
+| --- | --- | --- |
+| **Core handoff** (`/handoff/*`) | Your site runs `@engine9/core` and needs a local `person_id` session | One-time code → server exchange → identity (`unid`, email, credential level). You run the person pipeline yourself. |
+| **Session bridge** (`/oauth/session-bridge`) | Your host is an Engine9 API server that already speaks Firebase sessions | Short-lived HMAC token carrying Firebase credentials so the API host can mint its own `engine9_session` cookie. |
+
+Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
+`data.engine9.io`); see the delegate service README for that flow.
+
 ## Package layout
 
 - `lib/utilities.js` -- shared environment-agnostic utilities (canonical copy; the server re-exports these)
@@ -98,6 +156,9 @@ Keys with no scopes recorded have full access.
 - `lib/SchemaWorker.js` -- standardize/diff/deploy schemas, install plugins
 - `lib/PersonWorker.js` -- the inbound person pipeline (`processPeople`)
 - `auth/` -- API key creation/verification, SQL + KV stores
+- `auth/delegate.js` -- delegate login via core handoff: code exchange, person
+  resolution via id_type `delegate`, roles-as-segments, signed sessions
+  (ships `delegate.d.ts` for TypeScript consumers)
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide

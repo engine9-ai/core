@@ -88,6 +88,8 @@ describe('id hash helpers', () => {
     assert.ok(a.equals(expected));
     assert.equal(hashIdValueToU128Hex('alice@example.com'), expected.toString('hex'));
     assert.equal(u128ToHexKey(a), expected.toString('hex'));
+    // Cloudflare D1 deserializes BLOBs as plain number arrays
+    assert.equal(u128ToHexKey(Array.from(a)), expected.toString('hex'));
   });
 
   test('different id_values usually differ', () => {

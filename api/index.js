@@ -210,6 +210,8 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
   }
 
   /* Cloudflare Workers adapter.  basePath is stripped from the URL. */
+  /** @param {Request} request
+      @param {{ basePath?: string, ctx?: { waitUntil?: (p: Promise<unknown>) => void } }} [options] */
   async function handleFetch(request, { basePath = '/api', ctx } = {}) {
     const url = new URL(request.url);
     let path = url.pathname;

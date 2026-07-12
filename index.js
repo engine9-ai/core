@@ -32,5 +32,16 @@ export {
   extractApiKey,
   API_KEY_SCHEMA
 } from './auth/index.js';
+export {
+  delegateAuthorizeUrl,
+  exchangeDelegateCode,
+  resolveDelegatePersonId,
+  createSessionToken,
+  verifySessionToken,
+  sessionHasRole,
+  sessionPrimaryRole,
+  sessionNeedsRole,
+  createDelegateAuth
+} from './auth/delegate.js';
 export { JsonlFileLogger, BatchLogger, NullLogger, r2Sink } from './logging/index.js';
 export { createApi, SCOPES } from './api/index.js';

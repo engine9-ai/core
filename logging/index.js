@@ -46,6 +46,7 @@ export class JsonlFileLogger {
      new BatchLogger({ sink: (records) => env.LOG_QUEUE.sendBatch(records.map((body) => ({ body }))) })
 */
 export class BatchLogger {
+  /** @param {{ sink: (records: object[]) => unknown, maxRecords?: number }} options */
   constructor({ sink, maxRecords = 250 } = {}) {
     if (typeof sink !== 'function') throw new Error('BatchLogger requires a sink function');
     this.sink = sink;

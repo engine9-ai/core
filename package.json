@@ -20,6 +20,7 @@
     "./SchemaWorker": "./lib/SchemaWorker.js",
     "./PersonWorker": "./lib/PersonWorker.js",
     "./auth": "./auth/index.js",
+    "./auth/delegate": "./auth/delegate.js",
     "./api": "./api/index.js",
     "./logging": "./logging/index.js",
     "./cloudflare/worker": "./cloudflare/worker.js",
