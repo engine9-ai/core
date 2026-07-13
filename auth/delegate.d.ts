@@ -54,6 +54,10 @@ export function createDelegateLoginFailure(
 /** Local session payload minted after a delegate login. */
 export interface DelegateSession<Role extends string = string> {
   personId: number;
+  /**
+   * Site-defined role names only. Core and Delegate define no role vocabulary;
+   * strings come from the implementing site's `roleSegments` / grantRole policy.
+   */
   roles: Role[];
   unid: string;
   email?: string;
@@ -64,6 +68,8 @@ export interface DelegateSession<Role extends string = string> {
 export function delegateAuthorizeUrl(options: {
   delegateUrl: string;
   returnTo: string;
+  /** When 'consent', Delegate requires an explicit button click even if already logged in. */
+  prompt?: string;
 }): string;
 
 export function delegateBrowserExchangeUrl(options: {
@@ -104,23 +110,26 @@ export function verifySessionToken(
   options: { secret: string }
 ): Record<string, unknown> | null;
 
+/** True when the session holds any of the given site-defined roles. */
 export function sessionHasRole(
   session: { roles?: readonly string[] } | null | undefined,
   ...roles: string[]
 ): boolean;
 
+/** First role from the site's roleOrder present on the session, or null. */
 export function sessionPrimaryRole<Role extends string>(
   session: { roles?: readonly string[] } | null | undefined,
   roleOrder?: readonly Role[]
 ): Role | null;
 
+/** Logged in, but the site has not assigned any roles on this session yet. */
 export function sessionNeedsRole(
   session: { roles?: readonly unknown[] } | null | undefined
 ): boolean;
 
 export interface DelegateAuth<Role extends string = string> {
   /** Browser URL that starts a delegate login for this site. */
-  loginUrl(options: { returnTo: string }): string;
+  loginUrl(options: { returnTo: string; prompt?: string }): string;
   /** Browser URL that finishes a blocked local code exchange via Delegate. */
   browserExchangeUrl(options: { code: string; returnTo: string }): string;
   /**
@@ -140,10 +149,18 @@ export interface DelegateAuth<Role extends string = string> {
   verify(token: string | null | undefined): DelegateSession<Role> | null;
   /** Re-sign an updated session payload. */
   issueToken(session: DelegateSession<Role>): string;
-  /** Roles from person_segment membership for the configured roleSegments. */
+  /** Roles from person_segment membership for the site-configured roleSegments. */
   rolesForPerson(personId: number): Promise<Role[]>;
-  /** Upsert the person_segment row for a role; returns the refreshed roles. */
-  grantRole(personId: number, role: Role): Promise<Role[]>;
+  /**
+   * Upsert the person_segment row for a site-defined role; returns refreshed roles.
+   * Pass exclusive: true to remove other configured roleSegments first.
+   * Role names must appear in this auth instance's roleSegments — core has none built in.
+   */
+  grantRole(
+    personId: number,
+    role: Role,
+    options?: { exclusive?: boolean }
+  ): Promise<Role[]>;
 }
 
 export function createDelegateAuth<Role extends string = string>(config: {
@@ -156,7 +173,17 @@ export function createDelegateAuth<Role extends string = string>(config: {
   pluginId?: string;
   remoteInputId?: string;
   inputType?: string;
+  /**
+   * Site-owned role map only. Core and Delegate define no roles (no vip/admin builtins).
+   * Keys are opaque role names chosen by the implementing site; values are that
+   * deployment's segment ids. Omit or pass {} when the site does not use roles.
+   */
   roleSegments?: Record<Role, string>;
+  /**
+   * When false, login() always returns session.roles = [] so the site can
+   * re-prompt role selection every login. Default true.
+   */
+  loadRolesOnLogin?: boolean;
   fetchImpl?: typeof fetch;
 }): DelegateAuth<Role>;
 

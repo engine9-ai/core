@@ -275,7 +275,72 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.equal(again.session.personId, session.personId, 'delegate id dedupes to the same person');
     assert.deepEqual(again.session.roles, ['vip']);
 
+    // Exclusive grant replaces other configured role segments
+    const exclusive = await auth.grantRole(session.personId, 'admin', { exclusive: true });
+    assert.deepEqual(exclusive, ['admin']);
+    const { data: afterExclusive } = await worker.query({
+      sql: 'select segment_id from person_segment where person_id=?',
+      values: [session.personId]
+    });
+    assert.deepEqual(
+      afterExclusive.map((r) => r.segment_id),
+      [adminSegmentId]
+    );
+
     await assert.rejects(auth.grantRole(session.personId, 'superuser'), /Unknown role/);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installStandard();
+    const pluginId = getPluginUUID('engine9.test', 'test-delegate-site-session-roles');
+    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
+
+    const vipSegmentId = getVersionedUUID();
+    const adminSegmentId = getVersionedUUID();
+    await worker.insertArray({
+      table: 'segment',
+      array: [
+        { id: vipSegmentId, plugin_id: pluginId, name: 'VIP', build_type: 'list' },
+        { id: adminSegmentId, plugin_id: pluginId, name: 'Admin', build_type: 'list' }
+      ]
+    });
+
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          unid: UNID_A,
+          firebaseUid: 'fb-1',
+          email: 'alice@example.com',
+          auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
+          returnTo: 'https://site.example.com/auth/delegate'
+        }),
+        { status: 200 }
+      );
+
+    const auth = createDelegateAuth({
+      worker,
+      delegateUrl: 'https://delegate.engine9.ai',
+      handoffSecret: 'shared-secret',
+      sessionSecret: 'session-secret',
+      pluginId,
+      remoteInputId: 'delegate-login',
+      roleSegments: { admin: adminSegmentId, vip: vipSegmentId },
+      loadRolesOnLogin: false,
+      fetchImpl
+    });
+
+    const first = await auth.login('code-1');
+    await auth.grantRole(first.session.personId, 'vip');
+    const again = await auth.login('code-2');
+    assert.equal(again.session.personId, first.session.personId);
+    assert.deepEqual(again.session.roles, [], 'session roles stay empty when loadRolesOnLogin is false');
+    assert.equal(sessionNeedsRole(again.session), true);
+    assert.deepEqual(await auth.rolesForPerson(first.session.personId), ['vip']);
   } finally {
     await worker.destroy();
   }
@@ -290,6 +355,17 @@ test('delegateAuthorizeUrl builds the handoff login URL', () => {
   assert.equal(parsed.origin, 'https://delegate.engine9.ai');
   assert.equal(parsed.pathname, '/handoff/authorize');
   assert.equal(parsed.searchParams.get('return_to'), 'https://site.example.com/auth/delegate');
+  assert.equal(parsed.searchParams.get('prompt'), null);
+});
+
+test('delegateAuthorizeUrl includes prompt=consent when requested', () => {
+  const url = delegateAuthorizeUrl({
+    delegateUrl: 'https://delegate.engine9.ai',
+    returnTo: 'https://site.example.com/auth/delegate',
+    prompt: 'consent'
+  });
+  const parsed = new URL(url);
+  assert.equal(parsed.searchParams.get('prompt'), 'consent');
 });
 
 test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () => {

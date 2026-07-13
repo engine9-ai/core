@@ -15,8 +15,12 @@
        credential level delegate reported (`createSessionToken` /
        `verifySessionToken`)
 
-  Delegate knows nothing about person_id or segments; everything person-related
-  happens here, on the core deployment.
+  Delegate knows nothing about person_id, segments, or site roles. Everything
+  person-related happens here, on the core deployment. Roles (e.g. "vip",
+  "admin") are NOT defined by core or Delegate: the implementing site supplies
+  its own role names and segment ids via `roleSegments`. Core only stores
+  opaque role strings on the session and optionally maps them to that site's
+  person_segment rows. Omit `roleSegments` (or pass {}) if the site has no roles.
 
   This is the *core handoff* mechanism. Engine9 API hosts use a different
   mechanism (session bridge) with the same DELEGATE_SHARED_SECRET — see the
@@ -138,11 +142,14 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
 }
 
 /** Build the browser URL that starts a delegate login for this site. */
-export function delegateAuthorizeUrl({ delegateUrl, returnTo }) {
+export function delegateAuthorizeUrl({ delegateUrl, returnTo, prompt }) {
   if (!delegateUrl) throw new Error('delegateAuthorizeUrl requires delegateUrl');
   if (!returnTo) throw new Error('delegateAuthorizeUrl requires returnTo (absolute callback URL)');
   const url = new URL('/handoff/authorize', delegateUrl);
   url.searchParams.set('return_to', returnTo);
+  // prompt=consent: Delegate shows its login/continue page and requires a
+  // button click even when the user already has a Delegate session.
+  if (prompt) url.searchParams.set('prompt', prompt);
   return url.toString();
 }
 
@@ -362,21 +369,25 @@ export function verifySessionToken(token, { secret }) {
    A delegate session payload is:
      { personId, roles: [...], unid, email?, auth: { signInProvider?,
        twoFactor?, signInSecondFactor?, authTime? }, exp }
+
+   `roles` is an opaque string list owned by the implementing site. Core does
+   not define role vocabulary (no built-in vip/admin/etc.). Helpers below only
+   inspect whatever strings the site put on the session.
 --------------------------------------------------------------------------- */
 
-/** True when the session holds any of the given roles. */
+/** True when the session holds any of the given site-defined roles. */
 export function sessionHasRole(session, ...roles) {
   if (!session || !Array.isArray(session.roles)) return false;
   return roles.some((role) => session.roles.includes(role));
 }
 
-/** First role from roleOrder present on the session, or null. */
+/** First role from the site's roleOrder present on the session, or null. */
 export function sessionPrimaryRole(session, roleOrder = []) {
   if (!session || !Array.isArray(session.roles)) return null;
   return roleOrder.find((role) => session.roles.includes(role)) ?? null;
 }
 
-/** Logged in, but no role has been assigned/granted yet. */
+/** Logged in, but the site has not assigned any roles on this session yet. */
 export function sessionNeedsRole(session) {
   return Boolean(session && Array.isArray(session.roles) && session.roles.length === 0);
 }
@@ -391,20 +402,28 @@ export function sessionNeedsRole(session) {
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes
       remoteInputId: 'delegate',   // input the delegate logins record under
+      // Site-defined only — example names, not core builtins:
       roleSegments: { admin: '<segment uuid>', vip: '<segment uuid>' },
       sessionTtlSeconds: 86400
     });
 
-    auth.loginUrl({ returnTo })    // browser URL that starts a delegate login
-    await auth.login(code)         // exchange + person pipeline + roles + token
-    auth.verify(token)             // session payload | null
-    auth.issueToken(session)       // re-sign an updated session
-    await auth.rolesForPerson(id)  // roles from person_segment membership
-    await auth.grantRole(id, role) // add person_segment row, return new roles
+    auth.loginUrl({ returnTo, prompt? })  // browser URL; prompt=consent forces a click
+    await auth.login(code)                // exchange + person pipeline + roles + token
+    auth.verify(token)                    // session payload | null
+    auth.issueToken(session)              // re-sign an updated session
+    await auth.rolesForPerson(id)         // roles from person_segment membership
+    await auth.grantRole(id, role, opts?) // add person_segment row, return new roles
 
-  Roles are segments: roleSegments maps role names to segment ids in this
-  deployment's segment/person_segment tables. Whether (and when) to grantRole
-  is deployment policy -- core only provides the mechanism.
+  Roles are exclusively site policy. Core and Delegate define none. The site
+  passes `roleSegments` (role name -> this deployment's segment id). Core only
+  provides the mechanism: read/write person_segment for those ids and carry
+  the resulting opaque role strings on the signed session. Whether (and when)
+  to call grantRole, which names to use, and how to gate pages is up to the
+  site. Pass roleSegments: {} (default) when the site does not use roles.
+
+  loadRolesOnLogin (default true): when false, login() always returns
+  session.roles = [] so the site can re-prompt role selection every login
+  (roles still live on the signed session after grantRole).
 */
 export function createDelegateAuth({
   worker,
@@ -416,6 +435,7 @@ export function createDelegateAuth({
   remoteInputId = 'delegate',
   inputType = 'api',
   roleSegments = {},
+  loadRolesOnLogin = true,
   fetchImpl = fetch
 }) {
   if (!worker) throw new Error('createDelegateAuth requires a worker (PersonWorker)');
@@ -433,10 +453,21 @@ export function createDelegateAuth({
     return roleNames.filter((role) => found.has(roleSegments[role]));
   }
 
-  async function grantRole(personId, role) {
+  async function grantRole(personId, role, { exclusive = false } = {}) {
     const segmentId = roleSegments[role];
     if (!segmentId) {
       throw new Error(`Unknown role '${role}' -- configured roles: ${roleNames.join(', ')}`);
+    }
+    if (exclusive) {
+      const otherIds = roleNames
+        .filter((name) => name !== role)
+        .map((name) => roleSegments[name]);
+      if (otherIds.length > 0) {
+        await worker.query({
+          sql: `delete from person_segment where person_id=? and segment_id in (${otherIds.map(() => '?').join(',')})`,
+          values: [personId, ...otherIds]
+        });
+      }
     }
     await worker.upsertArray({
       table: 'person_segment',
@@ -462,8 +493,8 @@ export function createDelegateAuth({
     };
   }
 
-  function loginUrl({ returnTo }) {
-    return delegateAuthorizeUrl({ delegateUrl, returnTo });
+  function loginUrl({ returnTo, prompt } = {}) {
+    return delegateAuthorizeUrl({ delegateUrl, returnTo, prompt });
   }
 
   function browserExchangeUrl({ code, returnTo }) {
@@ -519,7 +550,7 @@ export function createDelegateAuth({
       inputType,
       person
     });
-    const roles = await rolesForPerson(personId);
+    const roles = loadRolesOnLogin ? await rolesForPerson(personId) : [];
     const session = {
       personId,
       roles,
