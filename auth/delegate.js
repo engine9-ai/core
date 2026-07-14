@@ -65,6 +65,16 @@ const DELEGATE_LOGIN_ERRORS = {
     message:
       'Sign-in cannot be completed because this site could not create or look up your person record. Contact the site operator.'
   },
+  missing_handoff_secret: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site is misconfigured: DELEGATE_SHARED_SECRET is not set. Contact the site operator.'
+  },
+  missing_session_secret: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site is misconfigured: SESSION_SECRET is not set. Contact the site operator.'
+  },
   invalid_or_expired_code: {
     kind: 'auth',
     message: 'Your sign-in link expired or was already used. Please sign in again.'
@@ -80,9 +90,24 @@ const DELEGATE_LOGIN_ERRORS = {
   },
   login_failed: {
     kind: 'auth',
-    message: 'Sign-in did not complete. Please try signing in again.'
+    message:
+      'Sign-in did not finish on this site after Delegate sent you back. Please try signing in again.'
   }
 };
+
+/** Map unexpected Error messages to a known delegate login reason when possible. */
+function inferLoginReasonFromMessage(message) {
+  const text = String(message || '').toLowerCase();
+  if (!text) return null;
+  if (text.includes('delegate_shared_secret')) return 'missing_handoff_secret';
+  if (text.includes('sessionsecret') || text.includes('session_secret')) {
+    return 'missing_session_secret';
+  }
+  if (text.includes('person resolution') || text.includes('processpeople')) {
+    return 'person_resolution_failed';
+  }
+  return null;
+}
 
 /**
  * Build login failure metadata for a delegate handoff reason code.
@@ -121,11 +146,39 @@ function loginErrorForReason(reason) {
     }
   }
 
+  const unknownMessage = DELEGATE_LOGIN_ERRORS.login_failed.message;
   return {
     reason: key,
     kind: 'auth',
-    userMessage: DELEGATE_LOGIN_ERRORS.login_failed.message
+    userMessage: `${unknownMessage} (code: ${key})`
   };
+}
+
+/**
+ * Normalize any thrown value into a DelegateLoginFailure for UI redirects.
+ * Preserves structured failures; maps common Error text to known reasons.
+ */
+export function normalizeDelegateLoginFailure(err, { detail } = {}) {
+  const candidate = err && typeof err === 'object' ? err : {};
+  if (candidate.userMessage && candidate.reason && candidate.kind) {
+    const failure = createDelegateLoginFailure(candidate.reason, {
+      detail: detail || candidate.message
+    });
+    failure.userMessage = candidate.userMessage;
+    if (candidate.browserExchangeUrl) failure.browserExchangeUrl = candidate.browserExchangeUrl;
+    if (candidate.status) failure.status = candidate.status;
+    return failure;
+  }
+
+  const message = detail || candidate.message || String(err || '');
+  const reason =
+    candidate.reason ||
+    inferLoginReasonFromMessage(message) ||
+    (candidate.status ? `status_${candidate.status}` : 'login_failed');
+  const failure = createDelegateLoginFailure(reason, { detail: message });
+  if (candidate.browserExchangeUrl) failure.browserExchangeUrl = candidate.browserExchangeUrl;
+  if (candidate.status) failure.status = candidate.status;
+  return failure;
 }
 
 /**
@@ -579,6 +632,7 @@ export function createDelegateAuth({
 
 export default {
   createDelegateLoginFailure,
+  normalizeDelegateLoginFailure,
   delegateAuthorizeUrl,
   delegateBrowserExchangeUrl,
   exchangeDelegateCode,

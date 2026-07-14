@@ -45,6 +45,7 @@ export {
 } from './auth/index.js';
 export {
   createDelegateLoginFailure,
+  normalizeDelegateLoginFailure,
   delegateAuthorizeUrl,
   exchangeDelegateCode,
   resolveDelegatePersonId,

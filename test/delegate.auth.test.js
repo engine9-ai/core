@@ -13,6 +13,7 @@ import {
   resolveDelegatePersonId,
   createDelegateAuth,
   createDelegateLoginFailure,
+  normalizeDelegateLoginFailure,
   sessionHasRole,
   sessionPrimaryRole,
   sessionNeedsRole
@@ -116,6 +117,25 @@ test('createDelegateLoginFailure separates configuration and auth failures', () 
 
   const unknown = createDelegateLoginFailure('something_weird');
   assert.equal(unknown.kind, 'auth');
+  assert.match(unknown.userMessage, /code: something_weird/);
+});
+
+test('normalizeDelegateLoginFailure maps plain errors and preserves structured failures', () => {
+  const structured = createDelegateLoginFailure('invalid_or_expired_code');
+  assert.equal(
+    normalizeDelegateLoginFailure(structured).userMessage,
+    structured.userMessage
+  );
+
+  const missingSecret = normalizeDelegateLoginFailure(
+    new Error('exchangeDelegateCode requires DELEGATE_SHARED_SECRET')
+  );
+  assert.equal(missingSecret.reason, 'missing_handoff_secret');
+  assert.equal(missingSecret.kind, 'configuration');
+
+  const generic = normalizeDelegateLoginFailure(new Error('database is locked'));
+  assert.equal(generic.reason, 'login_failed');
+  assert.match(generic.message, /database is locked/);
 });
 
 test('exchangeDelegateCode posts the shared secret and returns the payload', async () => {
@@ -372,7 +392,7 @@ test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () =>
   const url = delegateBrowserExchangeUrl({
     delegateUrl: 'https://delegate.engine9.ai',
     code: 'abc123',
-    returnTo: 'http://localhost:5001/auth/delegate'
+    returnTo: 'http://localhost:3001/auth/delegate'
   });
   const parsed = new URL(url);
   assert.equal(parsed.pathname, '/handoff/browser-exchange');
@@ -384,7 +404,7 @@ test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () =>
     firebaseUid: 'fb1',
     email: 'a@b.c',
     auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
-    returnTo: 'http://localhost:5001/auth/delegate',
+    returnTo: 'http://localhost:3001/auth/delegate',
     createdAt: new Date().toISOString(),
     exp: Date.now() + 60_000
   };
@@ -395,7 +415,7 @@ test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () =>
   const verified = verifyHandoffBridgeToken({
     secret,
     token,
-    expectedReturnTo: 'http://localhost:5001/auth/delegate'
+    expectedReturnTo: 'http://localhost:3001/auth/delegate'
   });
   assert.equal(verified.unid, 'u1');
   assert.equal(verified.firebaseUid, 'fb1');

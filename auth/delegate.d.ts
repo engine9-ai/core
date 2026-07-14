@@ -51,6 +51,12 @@ export function createDelegateLoginFailure(
   options?: { detail?: string }
 ): DelegateLoginFailure;
 
+/** Normalize any thrown value into a DelegateLoginFailure for UI redirects. */
+export function normalizeDelegateLoginFailure(
+  err: unknown,
+  options?: { detail?: string }
+): DelegateLoginFailure;
+
 /** Local session payload minted after a delegate login. */
 export interface DelegateSession<Role extends string = string> {
   personId: number;
@@ -189,6 +195,7 @@ export function createDelegateAuth<Role extends string = string>(config: {
 
 declare const _default: {
   createDelegateLoginFailure: typeof createDelegateLoginFailure;
+  normalizeDelegateLoginFailure: typeof normalizeDelegateLoginFailure;
   delegateAuthorizeUrl: typeof delegateAuthorizeUrl;
   delegateBrowserExchangeUrl: typeof delegateBrowserExchangeUrl;
   exchangeDelegateCode: typeof exchangeDelegateCode;
