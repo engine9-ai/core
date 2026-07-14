@@ -22,7 +22,14 @@
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
     "./batchStallWatcher": "./lib/batchStallWatcher.js",
     "./auth": "./auth/index.js",
-    "./auth/delegate": "./auth/delegate.js",
+    "./auth/delegate": {
+      "types": "./auth/delegate.d.ts",
+      "workerd": "./auth/delegate.js",
+      "worker": "./auth/delegate.js",
+      "browser": "./auth/delegate.js",
+      "import": "./auth/delegate.js",
+      "default": "./auth/delegate.js"
+    },
     "./api": "./api/index.js",
     "./logging": "./logging/index.js",
     "./cloudflare/worker": "./cloudflare/worker.js",
