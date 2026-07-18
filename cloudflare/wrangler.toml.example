@@ -18,6 +18,19 @@ database_id = "<your d1 database id>"
 binding = "API_KEYS"
 id = "<your kv namespace id>"
 
+# Edge caches of SQL lookup tables (Cloudflare deployments only).
+# Helpers live in @engine9/core/cloudflare/kv — not wired into the API yet.
+# Source of truth remains D1 (person_id_delegate / person_segment).
+[[kv_namespaces]]
+binding = "PERSON_ID_DELEGATE_KV"
+id = "<your kv namespace id>"
+# Cache of person_id_delegate: unid:<unid> -> person_id, person:<id> -> unid
+
+[[kv_namespaces]]
+binding = "PERSON_SEGMENT_VK"
+id = "<your kv namespace id>"
+# Cache of person_segment: seg:<segment_id>:<person_id> -> joinedAt
+
 # Batch modification logs in R2 (optional)
 [[r2_buckets]]
 binding = "LOG_BUCKET"

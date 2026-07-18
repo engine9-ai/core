@@ -12,7 +12,15 @@ Worker.
 | Engine9 database | D1 (SQLite dialect) |
 | API endpoints | Worker (`api.handleFetch`) |
 | API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
+| Delegate id cache | KV `PERSON_ID_DELEGATE_KV` — edge cache of `person_id_delegate` (`@engine9/core/cloudflare/kv`) |
+| Segment membership cache | KV `PERSON_SEGMENT_VK` — edge cache of `person_segment` (`@engine9/core/cloudflare/kv`) |
 | Modification logs | R2 batch objects (`BatchLogger` + `r2Sink`), flushed via `ctx.waitUntil` |
+
+> **Cloudflare-only KV caches.** `PERSON_ID_DELEGATE_KV` and `PERSON_SEGMENT_VK`
+> exist only on Cloudflare-style deployments. Generic Node / MySQL sites read
+> `person_id_delegate` and `person_segment` from SQL directly. The cache helpers
+> in [`kv/`](kv/) are **not wired into the API or PersonWorker yet** — they are
+> ready for a future edge path; D1 remains the source of truth.
 
 ## Install
 
@@ -101,6 +109,25 @@ curl -X POST https://your-worker.example.workers.dev/api/upsert/person_segment \
 curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
   -H "Authorization: Bearer e9k_..."
 ```
+
+## KV caches (Cloudflare only)
+
+Optional edge caches for hot lookups. Import from `@engine9/core/cloudflare/kv`.
+**Not used by `createApi` / `PersonWorker` yet** — wire them in when adding an
+edge cache path. Always treat D1 as authoritative.
+
+### `PERSON_ID_DELEGATE_KV` — cache of `person_id_delegate`
+
+| Key | Value |
+| --- | --- |
+| `unid:<unid>` | `<person_id>` |
+| `person:<person_id>` | `<unid>` |
+
+### `PERSON_SEGMENT_VK` — cache of `person_segment`
+
+| Key | Value |
+| --- | --- |
+| `seg:<segment_id>:<person_id>` | ISO timestamp (existence = member) |
 
 ## Modification logs
 

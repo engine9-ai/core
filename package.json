@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Engine9 core: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
   "main": "index.js",
@@ -34,7 +34,8 @@
     "./logging": "./logging/index.js",
     "./cloudflare/worker": "./cloudflare/worker.js",
     "./cloudflare/input-tools-shim": "./cloudflare/input-tools-shim.js",
-  "./cloudflare/unavailable-module": "./cloudflare/unavailable-module.js"
+    "./cloudflare/unavailable-module": "./cloudflare/unavailable-module.js",
+    "./cloudflare/kv": "./cloudflare/kv/index.js"
   },
   "bin": {
     "e9core": "./bin/e9core.js"
@@ -49,7 +50,7 @@
   "author": "Engine9",
   "license": "ISC",
   "dependencies": {
-    "@engine9/input-tools": "^2.3.9",
+    "@engine9/input-tools": "^2.3.10",
     "@engine9/interfaces": "github:engine9-io/interfaces",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
@@ -78,8 +79,5 @@
     "better-sqlite3": "^11.7.0",
     "knex": "^3.1.0",
     "mysql2": "^3.11.0"
-  },
-  "overrides": {
-    "@engine9/input-tools": "^2.3.9"
   }
 }
