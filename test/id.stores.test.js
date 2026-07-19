@@ -106,6 +106,7 @@ describe('id hash helpers', () => {
     assert.equal(personIdTableName('remote_person_id'), 'person_id_remote_person_id');
     assert.throws(() => personIdTableName('bad-type!'), /Invalid id_type/);
   });
+
 });
 
 describe('memory identifier store (DO-shaped)', () => {
