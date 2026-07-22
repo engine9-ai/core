@@ -50,7 +50,7 @@
   "author": "Engine9",
   "license": "ISC",
   "dependencies": {
-    "@engine9/input-tools": "^2.3.10",
+    "@engine9/input-tools": "^2.3.11",
     "@engine9/interfaces": "github:engine9-io/interfaces",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
