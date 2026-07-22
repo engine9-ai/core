@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Engine9 core: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
   "main": "index.js",
@@ -50,14 +50,14 @@
   "author": "Engine9",
   "license": "ISC",
   "dependencies": {
-    "@engine9/input-tools": "^2.3.11",
+    "@engine9/input-tools": "^2.3.12",
     "@engine9/interfaces": "github:engine9-io/interfaces",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
     "json5": "^2.2.3",
     "p-limit": "^7.1.1",
-    "uuid": "^13.0.0"
+    "uuid": "^14.0.1"
   },
   "peerDependencies": {
     "better-sqlite3": ">=11",
