@@ -51,7 +51,7 @@
   "license": "ISC",
   "dependencies": {
     "@engine9/input-tools": "^2.3.12",
-    "@engine9/interfaces": "github:engine9-io/interfaces",
+    "@engine9/interfaces": "1.7.0",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
