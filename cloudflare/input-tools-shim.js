@@ -27,3 +27,9 @@ export {
   TIMELINE_ENTRY_TYPES
 } from '../lib/utilities.js';
 export { bool, getStringArray, relativeDate, isValidDate, ObjectError } from '../lib/utilities.js';
+// Portable; prefer deep import `@engine9/input-tools/checkUnicode.js` when possible.
+export {
+  checkUnicode,
+  collectInvalidUnicodeValues,
+  cleanUnicodeValues
+} from '@engine9/input-tools/checkUnicode.js';
