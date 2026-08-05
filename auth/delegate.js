@@ -1,5 +1,5 @@
 /*
-  Delegate authentication for core deployments.
+  Delegate authentication for core deployments (auth layer 3 + role helpers).
 
   "Delegate" is the shared, cross-organization authentication service. A core
   deployment never talks to the identity provider itself; it:
@@ -15,18 +15,23 @@
        credential level delegate reported (`createSessionToken` /
        `verifySessionToken`)
 
-  Delegate knows nothing about person_id, segments, or site roles. Everything
-  person-related happens here, on the core deployment. Roles (e.g. "vip",
-  "admin") are NOT defined by core or Delegate: the implementing site supplies
-  its own role names and segment ids via `roleSegments`. Core only stores
-  opaque role strings on the session and optionally maps them to that site's
-  person_segment rows. Omit `roleSegments` (or pass {}) if the site has no roles.
+  Roles (auth layer 2): role_id === segment_id (UUID). The site supplies a
+  UUID-keyed `roles` registry (display name, scopes, requiredAuth). Session
+  `roles` is an array of those segment UUIDs. Legacy `roleSegments: { name: uuid }`
+  is normalized to the UUID-keyed shape. Omit `roles` / `roleSegments` when unused.
 
   This is the *core handoff* mechanism. Engine9 API hosts use a different
   mechanism (session bridge) with the same DELEGATE_SHARED_SECRET — see the
-  delegate service docs.
+  Engine9 auth map in the package README.
 */
-import crypto from 'node:crypto';
+import {
+  parseSharedSecrets,
+  base64urlEncode,
+  base64urlDecode,
+  signPayload,
+  verifySignedPayload,
+  splitSignedToken
+} from './hmac.js';
 
 /*
   Classify delegate login failures for end-user messaging.
@@ -222,30 +227,78 @@ export function delegateBrowserExchangeUrl({ delegateUrl, code, returnTo }) {
 }
 
 /**
+ * Normalize site role config to a UUID-keyed registry.
+ *
+ * Preferred:
+ *   roles: { '<segment-uuid>': { name, scopes?, requiredAuth? } }
+ *
+ * Legacy (deprecated):
+ *   roleSegments: { admin: '<segment-uuid>', vip: '<segment-uuid>' }
+ */
+export function normalizeRoleRegistry({ roles, roleSegments } = {}) {
+  const out = {};
+  if (roles && typeof roles === 'object') {
+    for (const [key, cfg] of Object.entries(roles)) {
+      if (typeof cfg === 'string') {
+        // Accidental legacy shape inside `roles`: name -> uuid
+        out[cfg] = { name: key, scopes: [], requiredAuth: {} };
+        continue;
+      }
+      const entry = cfg && typeof cfg === 'object' ? cfg : {};
+      out[key] = {
+        name: entry.name || key,
+        scopes: Array.isArray(entry.scopes) ? entry.scopes : [],
+        requiredAuth: entry.requiredAuth && typeof entry.requiredAuth === 'object' ? entry.requiredAuth : {}
+      };
+    }
+  }
+  if (roleSegments && typeof roleSegments === 'object') {
+    for (const [name, segmentId] of Object.entries(roleSegments)) {
+      if (!segmentId) continue;
+      if (!out[segmentId]) {
+        out[segmentId] = { name, scopes: [], requiredAuth: {} };
+      } else if (!out[segmentId].name || out[segmentId].name === segmentId) {
+        out[segmentId] = { ...out[segmentId], name };
+      }
+    }
+  }
+  return out;
+}
+
+/** Resolve a role_id (UUID) or display name to a registry key. */
+export function resolveRoleId(registry, roleIdOrName) {
+  if (!roleIdOrName) return null;
+  if (registry[roleIdOrName]) return roleIdOrName;
+  const needle = String(roleIdOrName).toLowerCase();
+  const match = Object.entries(registry).find(
+    ([, cfg]) => String(cfg.name || '').toLowerCase() === needle
+  );
+  return match ? match[0] : null;
+}
+
+/**
  * Verify a browser-delivered handoff bridge token (HMAC with DELEGATE_SHARED_SECRET).
- * Returns the same identity shape as exchangeDelegateCode, or throws.
+ * Accepts comma-separated secrets for rotation. Returns the same identity shape
+ * as exchangeDelegateCode, or throws.
  */
 export function verifyHandoffBridgeToken({ secret, token, expectedReturnTo }) {
   if (!secret) throw new Error('verifyHandoffBridgeToken requires DELEGATE_SHARED_SECRET');
-  if (typeof token !== 'string' || !token.includes('.')) {
+  const parts = splitSignedToken(token);
+  if (!parts) {
     throw createDelegateLoginFailure('invalid_or_expired_code', {
       detail: 'delegate bridge token missing or malformed'
     });
   }
-  const dot = token.indexOf('.');
-  const encoded = token.slice(0, dot);
-  const signature = token.slice(dot + 1);
-  const expected = sign(encoded, secret);
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+  const secrets = parseSharedSecrets(typeof secret === 'string' ? secret : String(secret));
+  const list = secrets.length ? secrets : [String(secret)];
+  if (!verifySignedPayload(parts.encoded, parts.signature, list)) {
     throw createDelegateLoginFailure('invalid_or_expired_code', {
       detail: 'delegate bridge token signature mismatch'
     });
   }
   let payload;
   try {
-    payload = JSON.parse(base64urlDecode(encoded));
+    payload = JSON.parse(base64urlDecode(parts.encoded));
   } catch {
     throw createDelegateLoginFailure('incomplete_delegate_payload', {
       detail: 'delegate bridge token is not valid JSON'
@@ -293,10 +346,13 @@ export async function exchangeDelegateCode({ delegateUrl, secret, code, fetchImp
   if (!secret) throw new Error('exchangeDelegateCode requires DELEGATE_SHARED_SECRET');
   if (!code) throw new Error('exchangeDelegateCode requires a code');
   const url = new URL('/handoff/exchange', delegateUrl);
+  // Use the first secret when rotating (comma-separated).
+  const secrets = parseSharedSecrets(secret);
+  const bearer = secrets[0] || secret;
   const response = await fetchImpl(url.toString(), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${secret}`,
+      Authorization: `Bearer ${bearer}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ code })
@@ -370,18 +426,6 @@ export async function resolveDelegatePersonId({
    person_id plus the credential level reported by delegate.
 --------------------------------------------------------------------------- */
 
-function base64urlEncode(input) {
-  return Buffer.from(input, 'utf8').toString('base64url');
-}
-
-function base64urlDecode(input) {
-  return Buffer.from(input, 'base64url').toString('utf8');
-}
-
-function sign(encoded, secret) {
-  return crypto.createHmac('sha256', String(secret)).update(encoded).digest('base64url');
-}
-
 /**
  * Create a signed session token. `payload` is any JSON-serializable object;
  * an `exp` (unix ms) is added from ttlSeconds.
@@ -391,24 +435,18 @@ export function createSessionToken(payload, { secret, ttlSeconds = 86400 }) {
   const encoded = base64urlEncode(
     JSON.stringify({ ...payload, exp: Date.now() + ttlSeconds * 1000 })
   );
-  return `${encoded}.${sign(encoded, secret)}`;
+  return `${encoded}.${signPayload(encoded, secret)}`;
 }
 
 /** Verify a session token; returns the payload or null when invalid/expired. */
 export function verifySessionToken(token, { secret }) {
   if (!secret) throw new Error('verifySessionToken requires a secret');
-  if (typeof token !== 'string') return null;
-  const dot = token.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const encoded = token.slice(0, dot);
-  const signature = token.slice(dot + 1);
-  const expected = sign(encoded, secret);
-  const a = Buffer.from(signature);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const parts = splitSignedToken(token);
+  if (!parts) return null;
+  if (!verifySignedPayload(parts.encoded, parts.signature, [secret])) return null;
   let payload;
   try {
-    payload = JSON.parse(base64urlDecode(encoded));
+    payload = JSON.parse(base64urlDecode(parts.encoded));
   } catch {
     return null;
   }
@@ -420,24 +458,23 @@ export function verifySessionToken(token, { secret }) {
    Session shape helpers (pure -- no worker or secrets required).
 
    A delegate session payload is:
-     { personId, roles: [...], unid, email?, auth: { signInProvider?,
+     { personId, roles: [role_id...], unid, email?, auth: { signInProvider?,
        twoFactor?, signInSecondFactor?, authTime? }, exp }
 
-   `roles` is an opaque string list owned by the implementing site. Core does
-   not define role vocabulary (no built-in vip/admin/etc.). Helpers below only
-   inspect whatever strings the site put on the session.
+   `roles` is an array of role_id values (segment UUIDs). Helpers below only
+   inspect whatever role ids the site put on the session.
 --------------------------------------------------------------------------- */
 
-/** True when the session holds any of the given site-defined roles. */
-export function sessionHasRole(session, ...roles) {
+/** True when the session holds any of the given role_ids (segment UUIDs). */
+export function sessionHasRole(session, ...roleIds) {
   if (!session || !Array.isArray(session.roles)) return false;
-  return roles.some((role) => session.roles.includes(role));
+  return roleIds.some((roleId) => session.roles.includes(roleId));
 }
 
-/** First role from the site's roleOrder present on the session, or null. */
+/** First role_id from the site's roleOrder present on the session, or null. */
 export function sessionPrimaryRole(session, roleOrder = []) {
   if (!session || !Array.isArray(session.roles)) return null;
-  return roleOrder.find((role) => session.roles.includes(role)) ?? null;
+  return roleOrder.find((roleId) => session.roles.includes(roleId)) ?? null;
 }
 
 /** Logged in, but the site has not assigned any roles on this session yet. */
@@ -455,28 +492,25 @@ export function sessionNeedsRole(session) {
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes
       remoteInputId: 'delegate',   // input the delegate logins record under
-      // Site-defined only — example names, not core builtins:
-      roleSegments: { admin: '<segment uuid>', vip: '<segment uuid>' },
+      // Preferred — role_id === segment UUID:
+      roles: {
+        '<segment-uuid>': { name: 'Admin', scopes: ['*'], requiredAuth: {} }
+      },
+      // Legacy (deprecated): roleSegments: { admin: '<segment uuid>' },
       sessionTtlSeconds: 86400
     });
 
-    auth.loginUrl({ returnTo, prompt? })  // browser URL; prompt=consent forces a click
-    await auth.login(code)                // exchange + person pipeline + roles + token
-    auth.verify(token)                    // session payload | null
-    auth.issueToken(session)              // re-sign an updated session
-    await auth.rolesForPerson(id)         // roles from person_segment membership
-    await auth.grantRole(id, role, opts?) // add person_segment row, return new roles
-
-  Roles are exclusively site policy. Core and Delegate define none. The site
-  passes `roleSegments` (role name -> this deployment's segment id). Core only
-  provides the mechanism: read/write person_segment for those ids and carry
-  the resulting opaque role strings on the signed session. Whether (and when)
-  to call grantRole, which names to use, and how to gate pages is up to the
-  site. Pass roleSegments: {} (default) when the site does not use roles.
+    auth.loginUrl({ returnTo, prompt? })
+    await auth.login(code)
+    auth.verify(token)
+    auth.issueToken(session)
+    await auth.rolesForPerson(id)           // role_ids from person_segment
+    await auth.grantRole(id, roleId, opts?)
+    await auth.changeRole({ personId, roleId, exclusive?, session? })
+    auth.roleRegistry                       // normalized UUID-keyed map
 
   loadRolesOnLogin (default true): when false, login() always returns
-  session.roles = [] so the site can re-prompt role selection every login
-  (roles still live on the signed session after grantRole).
+  session.roles = [] so the site can re-prompt role selection every login.
 */
 export function createDelegateAuth({
   worker,
@@ -487,34 +521,35 @@ export function createDelegateAuth({
   pluginId,
   remoteInputId = 'delegate',
   inputType = 'api',
+  roles,
   roleSegments = {},
   loadRolesOnLogin = true,
   fetchImpl = fetch
 }) {
   if (!worker) throw new Error('createDelegateAuth requires a worker (PersonWorker)');
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
-  const roleNames = Object.keys(roleSegments);
+  const roleRegistry = normalizeRoleRegistry({ roles, roleSegments });
+  const roleIds = Object.keys(roleRegistry);
 
   async function rolesForPerson(personId) {
-    if (roleNames.length === 0) return [];
-    const segmentIds = roleNames.map((role) => roleSegments[role]);
+    if (roleIds.length === 0) return [];
     const { data } = await worker.query({
-      sql: `select segment_id from person_segment where person_id=? and segment_id in (${segmentIds.map(() => '?').join(',')})`,
-      values: [personId, ...segmentIds]
+      sql: `select segment_id from person_segment where person_id=? and segment_id in (${roleIds.map(() => '?').join(',')})`,
+      values: [personId, ...roleIds]
     });
     const found = new Set(data.map((row) => row.segment_id));
-    return roleNames.filter((role) => found.has(roleSegments[role]));
+    return roleIds.filter((id) => found.has(id));
   }
 
-  async function grantRole(personId, role, { exclusive = false } = {}) {
-    const segmentId = roleSegments[role];
-    if (!segmentId) {
-      throw new Error(`Unknown role '${role}' -- configured roles: ${roleNames.join(', ')}`);
+  async function grantRole(personId, roleIdOrName, { exclusive = false } = {}) {
+    const roleId = resolveRoleId(roleRegistry, roleIdOrName);
+    if (!roleId) {
+      throw new Error(
+        `Unknown role '${roleIdOrName}' -- configured role_ids: ${roleIds.join(', ') || '(none)'}`
+      );
     }
     if (exclusive) {
-      const otherIds = roleNames
-        .filter((name) => name !== role)
-        .map((name) => roleSegments[name]);
+      const otherIds = roleIds.filter((id) => id !== roleId);
       if (otherIds.length > 0) {
         await worker.query({
           sql: `delete from person_segment where person_id=? and segment_id in (${otherIds.map(() => '?').join(',')})`,
@@ -524,7 +559,7 @@ export function createDelegateAuth({
     }
     await worker.upsertArray({
       table: 'person_segment',
-      array: [{ person_id: personId, segment_id: segmentId }]
+      array: [{ person_id: personId, segment_id: roleId }]
     });
     return rolesForPerson(personId);
   }
@@ -543,6 +578,30 @@ export function createDelegateAuth({
       email: payload.email,
       auth: payload.auth || {},
       exp: payload.exp
+    };
+  }
+
+  /**
+   * Change the person's role (person_segment + optional re-signed session).
+   * roleId must be a configured segment UUID (or legacy display name).
+   */
+  async function changeRole({ personId, roleId, exclusive = true, session = null } = {}) {
+    if (!personId) throw new Error('changeRole requires personId');
+    if (!roleId) throw new Error('changeRole requires roleId');
+    const nextRoles = await grantRole(personId, roleId, { exclusive });
+    const nextSession = session
+      ? { ...session, personId, roles: nextRoles }
+      : { personId, roles: nextRoles, unid: session?.unid, email: session?.email, auth: session?.auth || {} };
+    // Prefer full session fields when provided
+    if (session) {
+      nextSession.unid = session.unid;
+      nextSession.email = session.email;
+      nextSession.auth = session.auth || {};
+    }
+    return {
+      roles: nextRoles,
+      session: nextSession,
+      token: issueToken(nextSession)
     };
   }
 
@@ -603,10 +662,10 @@ export function createDelegateAuth({
       inputType,
       person
     });
-    const roles = loadRolesOnLogin ? await rolesForPerson(personId) : [];
+    const sessionRoles = loadRolesOnLogin ? await rolesForPerson(personId) : [];
     const session = {
       personId,
-      roles,
+      roles: sessionRoles,
       unid: delegateUser.unid,
       email: delegateUser.email,
       auth: {
@@ -626,7 +685,9 @@ export function createDelegateAuth({
     verify,
     issueToken,
     rolesForPerson,
-    grantRole
+    grantRole,
+    changeRole,
+    roleRegistry
   };
 }
 
@@ -643,5 +704,7 @@ export default {
   sessionHasRole,
   sessionPrimaryRole,
   sessionNeedsRole,
+  normalizeRoleRegistry,
+  resolveRoleId,
   createDelegateAuth
 };

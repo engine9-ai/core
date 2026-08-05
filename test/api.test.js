@@ -131,3 +131,110 @@ test('client API: auth, people POST, table upsert, segment-gated reads, modifica
     await worker.destroy();
   }
 });
+
+test('client API: role scopes, default_role_id, and POST /auth/role', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installStandard();
+    const pluginId = getPluginUUID('engine9.test', 'website-roles');
+    await worker.install({ type: 'local', id: pluginId, path: 'website', name: 'Website' });
+
+    const vipRoleId = getVersionedUUID();
+    const adminRoleId = getVersionedUUID();
+    await worker.insertArray({
+      table: 'segment',
+      array: [
+        { id: vipRoleId, plugin_id: pluginId, name: 'VIP', build_type: 'list' },
+        { id: adminRoleId, plugin_id: pluginId, name: 'Admin', build_type: 'list' }
+      ]
+    });
+
+    const { createDelegateAuth } = await import('../auth/delegate.js');
+    const delegateAuth = createDelegateAuth({
+      worker,
+      delegateUrl: 'https://delegate.engine9.ai',
+      handoffSecret: 'shared',
+      sessionSecret: 'session-secret',
+      pluginId,
+      roles: {
+        [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
+        [adminRoleId]: { name: 'Admin', scopes: ['*'] }
+      },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            unid: '11111111-2222-8001-8333-444444444444',
+            firebaseUid: 'fb-1',
+            email: 'role@example.com',
+            auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false }
+          }),
+          { status: 200 }
+        )
+    });
+
+    const keyStore = new SqlApiKeyStore({ worker });
+    await keyStore.deploy();
+    const { key } = await keyStore.create({
+      name: 'site',
+      scopes: ['data:read', 'people:write'],
+      defaultRoleId: vipRoleId
+    });
+
+    const api = createApi({
+      worker,
+      keyStore,
+      delegateAuth,
+      config: {
+        pluginId,
+        roles: {
+          [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
+          [adminRoleId]: { name: 'Admin', scopes: ['*'] }
+        },
+        upsertTables: ['person_segment'],
+        reads: { open: { table: 'segment', columns: ['id', 'name'] } }
+      }
+    });
+
+    const headers = { authorization: `Bearer ${key}` };
+
+    // default_role_id → VIP scopes: people:write is not allowed
+    const deniedPeople = await api.handle({
+      method: 'POST',
+      path: '/people',
+      headers,
+      body: { people: [{ email: 'x@example.com' }] }
+    });
+    assert.equal(deniedPeople.status, 403);
+
+    // data:read still works via intersection
+    const readOk = await api.handle({ method: 'GET', path: '/read/open', headers, query: {} });
+    assert.equal(readOk.status, 200);
+
+    const { session } = await delegateAuth.login('code');
+    const changed = await api.handle({
+      method: 'POST',
+      path: '/auth/role',
+      headers,
+      body: {
+        role_id: adminRoleId,
+        session_token: delegateAuth.issueToken(session),
+        exclusive: true
+      }
+    });
+    assert.equal(changed.status, 200, JSON.stringify(changed.body));
+    assert.deepEqual(changed.body.roles, [adminRoleId]);
+    assert.ok(changed.body.token);
+
+    // Without delegateAuth, endpoint reports 501
+    const bare = createApi({ worker, keyStore, config: { pluginId } });
+    const noAuth = await bare.handle({
+      method: 'POST',
+      path: '/auth/role',
+      headers,
+      body: { role_id: vipRoleId, person_id: session.personId }
+    });
+    assert.equal(noAuth.status, 501);
+  } finally {
+    await worker.destroy();
+  }
+});

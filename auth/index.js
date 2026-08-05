@@ -1,19 +1,51 @@
 /*
-  Engine9 client API key authentication.
+  Engine9 client API key authentication (auth layer 1).
 
-  Deliberately isolated from the API handlers so the auth mechanism can be
-  upgraded (e.g. to signed tokens) without touching endpoint code.  The API
-  layer only depends on the `verify(request-or-key)` contract.
+  Every core API request requires a valid API key. Keys enable/disable access,
+  carry optional scopes (ceiling), and may set default_role_id (layer 2).
+  Rate limiting / volume checks are extension points keyed by apiKey.id —
+  not implemented here; callers can wrap verify() or createApi handle().
 
-  Keys look like: e9k_<40 hex chars>.  Only the SHA-256 hash of the key is
+  Keys look like: e9k_<40 hex chars>. Only the SHA-256 hash of the key is
   stored -- a leaked key store does not reveal usable keys.
 
   Two stores are provided:
     SqlApiKeyStore -- api_key table managed by the client's SchemaWorker
     KVApiKeyStore  -- Cloudflare Workers KV namespace binding
+
+  Policy helpers (resolveAuthContext, hasScope) live in ./policy.js.
+  HMAC helpers for Delegate tokens live in ./hmac.js.
 */
 import crypto from 'node:crypto';
+import {
+  resolveAuthContext,
+  hasScope,
+  intersectScopes,
+  meetsRequiredAuth
+} from './policy.js';
+import {
+  parseSharedSecrets,
+  base64urlEncode,
+  base64urlDecode,
+  signPayload,
+  verifySignedPayload,
+  splitSignedToken
+} from './hmac.js';
 
+export {
+  resolveAuthContext,
+  hasScope,
+  intersectScopes,
+  meetsRequiredAuth
+};
+export {
+  parseSharedSecrets,
+  base64urlEncode,
+  base64urlDecode,
+  signPayload,
+  verifySignedPayload,
+  splitSignedToken
+};
 export const API_KEY_PREFIX = 'e9k_';
 
 export function generateApiKey() {
@@ -36,7 +68,13 @@ export function extractApiKey(request) {
     return request.headers?.[name.toLowerCase()];
   };
   const auth = getHeader('Authorization') || getHeader('authorization');
-  if (auth && auth.indexOf('Bearer ') === 0) return auth.slice('Bearer '.length).trim();
+  if (auth && auth.indexOf('Bearer ') === 0) {
+    const token = auth.slice('Bearer '.length).trim();
+    // Only treat as API key when it has the e9k_ prefix — other Bearers
+    // (session tokens, Firebase) are left for layer 3 handlers.
+    if (token.indexOf(API_KEY_PREFIX) === 0) return token;
+    return null;
+  }
   const headerKey = getHeader('X-API-Key');
   if (headerKey) return headerKey.trim();
   return null;
@@ -52,6 +90,8 @@ export const API_KEY_SCHEMA = {
         key_hash: 'hash',
         // JSON array of scope strings, e.g. ["people:write","tables:write","data:read"]
         scopes: 'json',
+        // Default role_id (segment UUID) when no role is specified on the request/session
+        default_role_id: { type: 'id_uuid', nullable: true },
         active: { type: 'boolean', nullable: false, default_value: true },
         expires_at: 'datetime',
         created_at: 'created_at',
@@ -75,7 +115,11 @@ function normalizeRecord(record) {
       scopes = [];
     }
   }
-  return { ...record, scopes: scopes || [] };
+  return {
+    ...record,
+    scopes: scopes || [],
+    default_role_id: record.default_role_id || null
+  };
 }
 
 function checkUsable(record) {
@@ -86,6 +130,16 @@ function checkUsable(record) {
     return { valid: false, reason: 'expired_key' };
   }
   return { valid: true, key: record };
+}
+
+function createResult(key, record) {
+  return {
+    key,
+    id: record.id,
+    name: record.name,
+    scopes: typeof record.scopes === 'string' ? JSON.parse(record.scopes) : record.scopes || [],
+    default_role_id: record.default_role_id || null
+  };
 }
 
 /* SQL-backed store.  `worker` is any client SQLWorker/SchemaWorker. */
@@ -101,29 +155,54 @@ export class SqlApiKeyStore {
     }
     return this.worker.deploy({ schema: API_KEY_SCHEMA });
   }
-  async create({ name = '', scopes = [], expiresAt = null } = {}) {
+  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null } = {}) {
     const key = generateApiKey();
     const record = {
       id: crypto.randomUUID(),
       name,
       key_hash: hashApiKey(key),
       scopes: JSON.stringify(scopes),
+      default_role_id: defaultRoleId,
       active: true,
       expires_at: expiresAt
     };
     await this.worker.insertArray({ table: 'api_key', array: [record] });
     // the plaintext key is only available here -- it is never stored
-    return { key, id: record.id, name, scopes };
+    return createResult(key, record);
   }
   async lookup(key) {
     const { data } = await this.worker.query({
-      sql: 'select id,name,key_hash,scopes,active,expires_at from api_key where key_hash=?',
+      sql: 'select id,name,key_hash,scopes,default_role_id,active,expires_at from api_key where key_hash=?',
       values: [hashApiKey(key)]
+    });
+    return normalizeRecord(data[0]);
+  }
+  async lookupById(id) {
+    const { data } = await this.worker.query({
+      sql: 'select id,name,key_hash,scopes,default_role_id,active,expires_at from api_key where id=?',
+      values: [id]
     });
     return normalizeRecord(data[0]);
   }
   async revoke({ id }) {
     return this.worker.query({ sql: 'update api_key set active=0 where id=?', values: [id] });
+  }
+  /**
+   * Cycle a key: create a new key (copying metadata from the old when omitted),
+   * then revoke the old one. Returns the new plaintext key once.
+   */
+  async rotate({ id, name, scopes, defaultRoleId, expiresAt } = {}) {
+    if (!id) throw new Error('SqlApiKeyStore.rotate requires id of the key to revoke');
+    const old = await this.lookupById(id);
+    if (!old) throw new Error(`SqlApiKeyStore.rotate: unknown key id ${id}`);
+    const created = await this.create({
+      name: name !== undefined ? name : old.name,
+      scopes: scopes !== undefined ? scopes : old.scopes,
+      defaultRoleId: defaultRoleId !== undefined ? defaultRoleId : old.default_role_id,
+      expiresAt: expiresAt !== undefined ? expiresAt : old.expires_at || null
+    });
+    await this.revoke({ id });
+    return { ...created, revokedId: id };
   }
   async verify(requestOrKey) {
     const key = extractApiKey(requestOrKey);
@@ -139,12 +218,19 @@ export class KVApiKeyStore {
     if (!kv) throw new Error('KVApiKeyStore requires a kv namespace binding');
     this.kv = kv;
   }
-  async create({ name = '', scopes = [], expiresAt = null } = {}) {
+  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null } = {}) {
     const key = generateApiKey();
     const id = crypto.randomUUID();
-    const record = { id, name, scopes, active: true, expires_at: expiresAt };
+    const record = {
+      id,
+      name,
+      scopes,
+      default_role_id: defaultRoleId,
+      active: true,
+      expires_at: expiresAt
+    };
     await this.kv.put(`apikey:${hashApiKey(key)}`, JSON.stringify(record));
-    return { key, id, name, scopes };
+    return createResult(key, record);
   }
   async lookup(key) {
     const raw = await this.kv.get(`apikey:${hashApiKey(key)}`);
@@ -158,6 +244,23 @@ export class KVApiKeyStore {
     record.active = false;
     await this.kv.put(`apikey:${keyHash}`, JSON.stringify(record));
     return record;
+  }
+  /**
+   * Cycle a key: create a new key, then revoke the old by keyHash.
+   * Pass prior metadata explicitly, or they default to empty.
+   */
+  async rotate({ keyHash, name, scopes, defaultRoleId, expiresAt } = {}) {
+    if (!keyHash) throw new Error('KVApiKeyStore.rotate requires keyHash of the key to revoke');
+    const raw = await this.kv.get(`apikey:${keyHash}`);
+    const old = raw ? normalizeRecord(JSON.parse(raw)) : null;
+    const created = await this.create({
+      name: name !== undefined ? name : old?.name || '',
+      scopes: scopes !== undefined ? scopes : old?.scopes || [],
+      defaultRoleId: defaultRoleId !== undefined ? defaultRoleId : old?.default_role_id || null,
+      expiresAt: expiresAt !== undefined ? expiresAt : old?.expires_at || null
+    });
+    await this.revoke({ keyHash });
+    return { ...created, revokedKeyHash: keyHash };
   }
   async verify(requestOrKey) {
     const key = extractApiKey(requestOrKey);
@@ -173,5 +276,12 @@ export default {
   hashApiKey,
   extractApiKey,
   SqlApiKeyStore,
-  KVApiKeyStore
+  KVApiKeyStore,
+  resolveAuthContext,
+  hasScope,
+  intersectScopes,
+  meetsRequiredAuth,
+  parseSharedSecrets,
+  signPayload,
+  verifySignedPayload
 };

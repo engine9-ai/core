@@ -25,12 +25,25 @@ export interface DelegateUser {
   createdAt?: string;
 }
 
-/** Credential level carried inside a local session. */
+/** Credential level carried inside a local session (auth layer 3). */
 export interface CredentialLevel {
   signInProvider?: string;
   twoFactor?: boolean;
   signInSecondFactor?: string;
   authTime?: number;
+}
+
+/** Required Delegate credential constraints on a role (auth layer 2). */
+export interface RequiredAuth {
+  twoFactor?: boolean;
+}
+
+/** Role registry entry. Keys of the registry are role_id === segment_id UUIDs. */
+export interface RoleDefinition {
+  /** Public display name */
+  name: string;
+  scopes?: string[];
+  requiredAuth?: RequiredAuth;
 }
 
 /** Whether a delegate login failure is a site misconfiguration or a user retry. */
@@ -57,14 +70,14 @@ export function normalizeDelegateLoginFailure(
   options?: { detail?: string }
 ): DelegateLoginFailure;
 
-/** Local session payload minted after a delegate login. */
-export interface DelegateSession<Role extends string = string> {
+/**
+ * Local session payload minted after a delegate login.
+ * `roles` holds role_ids (segment UUIDs), not display names.
+ */
+export interface DelegateSession {
   personId: number;
-  /**
-   * Site-defined role names only. Core and Delegate define no role vocabulary;
-   * strings come from the implementing site's `roleSegments` / grantRole policy.
-   */
-  roles: Role[];
+  /** role_id values — each equals a segment_id UUID from the site role registry. */
+  roles: string[];
   unid: string;
   email?: string;
   auth: CredentialLevel;
@@ -116,24 +129,35 @@ export function verifySessionToken(
   options: { secret: string }
 ): Record<string, unknown> | null;
 
-/** True when the session holds any of the given site-defined roles. */
+/** True when the session holds any of the given role_ids (segment UUIDs). */
 export function sessionHasRole(
   session: { roles?: readonly string[] } | null | undefined,
-  ...roles: string[]
+  ...roleIds: string[]
 ): boolean;
 
-/** First role from the site's roleOrder present on the session, or null. */
-export function sessionPrimaryRole<Role extends string>(
+/** First role_id from the site's roleOrder present on the session, or null. */
+export function sessionPrimaryRole(
   session: { roles?: readonly string[] } | null | undefined,
-  roleOrder?: readonly Role[]
-): Role | null;
+  roleOrder?: readonly string[]
+): string | null;
 
 /** Logged in, but the site has not assigned any roles on this session yet. */
 export function sessionNeedsRole(
   session: { roles?: readonly unknown[] } | null | undefined
 ): boolean;
 
-export interface DelegateAuth<Role extends string = string> {
+export function normalizeRoleRegistry(options?: {
+  roles?: Record<string, RoleDefinition | string>;
+  /** @deprecated Prefer `roles` keyed by segment UUID. */
+  roleSegments?: Record<string, string>;
+}): Record<string, RoleDefinition>;
+
+export function resolveRoleId(
+  registry: Record<string, RoleDefinition>,
+  roleIdOrName: string
+): string | null;
+
+export interface DelegateAuth {
   /** Browser URL that starts a delegate login for this site. */
   loginUrl(options: { returnTo: string; prompt?: string }): string;
   /** Browser URL that finishes a blocked local code exchange via Delegate. */
@@ -147,29 +171,41 @@ export interface DelegateAuth<Role extends string = string> {
     codeOrBridge: string,
     options?: { person?: Record<string, unknown>; returnTo?: string }
   ): Promise<{
-    session: DelegateSession<Role>;
+    session: DelegateSession;
     token: string;
     delegateUser: DelegateUser;
   }>;
   /** Verify a session token; null when invalid or expired. */
-  verify(token: string | null | undefined): DelegateSession<Role> | null;
+  verify(token: string | null | undefined): DelegateSession | null;
   /** Re-sign an updated session payload. */
-  issueToken(session: DelegateSession<Role>): string;
-  /** Roles from person_segment membership for the site-configured roleSegments. */
-  rolesForPerson(personId: number): Promise<Role[]>;
+  issueToken(session: DelegateSession): string;
+  /** role_ids from person_segment membership for configured roles. */
+  rolesForPerson(personId: number): Promise<string[]>;
   /**
-   * Upsert the person_segment row for a site-defined role; returns refreshed roles.
-   * Pass exclusive: true to remove other configured roleSegments first.
-   * Role names must appear in this auth instance's roleSegments — core has none built in.
+   * Upsert the person_segment row for a role_id (segment UUID); returns refreshed roles.
+   * Pass exclusive: true to remove other configured role segments first.
+   * Display names are accepted for compat and resolved via the registry.
    */
   grantRole(
     personId: number,
-    role: Role,
+    roleId: string,
     options?: { exclusive?: boolean }
-  ): Promise<Role[]>;
+  ): Promise<string[]>;
+  /**
+   * Grant a role and re-sign a session token.
+   * Preferred entry point for change-role HTTP handlers.
+   */
+  changeRole(options: {
+    personId: number;
+    roleId: string;
+    exclusive?: boolean;
+    session?: DelegateSession | null;
+  }): Promise<{ roles: string[]; session: DelegateSession; token: string }>;
+  /** Normalized UUID-keyed role registry. */
+  roleRegistry: Record<string, RoleDefinition>;
 }
 
-export function createDelegateAuth<Role extends string = string>(config: {
+export function createDelegateAuth(config: {
   worker: unknown;
   delegateUrl: string;
   /** DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange / bridge HMAC. */
@@ -180,18 +216,21 @@ export function createDelegateAuth<Role extends string = string>(config: {
   remoteInputId?: string;
   inputType?: string;
   /**
-   * Site-owned role map only. Core and Delegate define no roles (no vip/admin builtins).
-   * Keys are opaque role names chosen by the implementing site; values are that
-   * deployment's segment ids. Omit or pass {} when the site does not use roles.
+   * Preferred role registry. Keys are role_id === segment_id UUIDs.
    */
-  roleSegments?: Record<Role, string>;
+  roles?: Record<string, RoleDefinition>;
+  /**
+   * @deprecated Prefer `roles` keyed by segment UUID.
+   * Legacy map of display name -> segment id; normalized into `roleRegistry`.
+   */
+  roleSegments?: Record<string, string>;
   /**
    * When false, login() always returns session.roles = [] so the site can
    * re-prompt role selection every login. Default true.
    */
   loadRolesOnLogin?: boolean;
   fetchImpl?: typeof fetch;
-}): DelegateAuth<Role>;
+}): DelegateAuth;
 
 declare const _default: {
   createDelegateLoginFailure: typeof createDelegateLoginFailure;
@@ -206,6 +245,8 @@ declare const _default: {
   sessionHasRole: typeof sessionHasRole;
   sessionPrimaryRole: typeof sessionPrimaryRole;
   sessionNeedsRole: typeof sessionNeedsRole;
+  normalizeRoleRegistry: typeof normalizeRoleRegistry;
+  resolveRoleId: typeof resolveRoleId;
   createDelegateAuth: typeof createDelegateAuth;
 };
 export default _default;

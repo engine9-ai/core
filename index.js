@@ -48,7 +48,14 @@ export {
   generateApiKey,
   hashApiKey,
   extractApiKey,
-  API_KEY_SCHEMA
+  API_KEY_SCHEMA,
+  resolveAuthContext,
+  hasScope,
+  intersectScopes,
+  meetsRequiredAuth,
+  parseSharedSecrets,
+  signPayload,
+  verifySignedPayload
 } from './auth/index.js';
 export {
   createDelegateLoginFailure,
@@ -61,6 +68,8 @@ export {
   sessionHasRole,
   sessionPrimaryRole,
   sessionNeedsRole,
+  normalizeRoleRegistry,
+  resolveRoleId,
   createDelegateAuth
 } from './auth/delegate.js';
 export { JsonlFileLogger, BatchLogger, NullLogger, r2Sink } from './logging/index.js';

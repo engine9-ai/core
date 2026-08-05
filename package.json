@@ -22,6 +22,8 @@
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
     "./batchStallWatcher": "./lib/batchStallWatcher.js",
     "./auth": "./auth/index.js",
+    "./auth/hmac": "./auth/hmac.js",
+    "./auth/policy": "./auth/policy.js",
     "./auth/delegate": {
       "types": "./auth/delegate.d.ts",
       "workerd": "./auth/delegate.js",

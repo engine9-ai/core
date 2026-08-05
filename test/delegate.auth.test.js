@@ -255,7 +255,10 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
-      roleSegments: { admin: adminSegmentId, vip: vipSegmentId },
+      roles: {
+        [adminSegmentId]: { name: 'Admin', scopes: ['*'] },
+        [vipSegmentId]: { name: 'VIP', scopes: ['data:read'] }
+      },
       fetchImpl
     });
 
@@ -278,26 +281,26 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.deepEqual(verified.roles, []);
     assert.equal(auth.verify('tampered'), null);
 
-    // Grant a role (segment membership) and confirm helpers see it
-    const roles = await auth.grantRole(session.personId, 'vip');
-    assert.deepEqual(roles, ['vip']);
+    // Grant a role by segment UUID and confirm helpers see it
+    const roles = await auth.grantRole(session.personId, vipSegmentId);
+    assert.deepEqual(roles, [vipSegmentId]);
     const { data: memberships } = await worker.query('select segment_id, person_id from person_segment');
     assert.deepEqual(memberships, [{ segment_id: vipSegmentId, person_id: session.personId }]);
 
     const updated = { ...session, roles };
-    assert.equal(sessionHasRole(updated, 'vip', 'admin'), true);
-    assert.equal(sessionHasRole(updated, 'admin'), false);
-    assert.equal(sessionPrimaryRole(updated, ['admin', 'vip']), 'vip');
+    assert.equal(sessionHasRole(updated, vipSegmentId, adminSegmentId), true);
+    assert.equal(sessionHasRole(updated, adminSegmentId), false);
+    assert.equal(sessionPrimaryRole(updated, [adminSegmentId, vipSegmentId]), vipSegmentId);
     assert.equal(sessionNeedsRole(updated), false);
 
     // Second login with the same unid: same person, roles picked up from segments
     const again = await auth.login('another-code');
     assert.equal(again.session.personId, session.personId, 'delegate id dedupes to the same person');
-    assert.deepEqual(again.session.roles, ['vip']);
+    assert.deepEqual(again.session.roles, [vipSegmentId]);
 
     // Exclusive grant replaces other configured role segments
-    const exclusive = await auth.grantRole(session.personId, 'admin', { exclusive: true });
-    assert.deepEqual(exclusive, ['admin']);
+    const exclusive = await auth.grantRole(session.personId, adminSegmentId, { exclusive: true });
+    assert.deepEqual(exclusive, [adminSegmentId]);
     const { data: afterExclusive } = await worker.query({
       sql: 'select segment_id from person_segment where person_id=?',
       values: [session.personId]
@@ -307,7 +310,64 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       [adminSegmentId]
     );
 
+    // changeRole re-signs session
+    const changed = await auth.changeRole({
+      personId: session.personId,
+      roleId: vipSegmentId,
+      exclusive: true,
+      session: { ...session, roles: exclusive }
+    });
+    assert.deepEqual(changed.roles, [vipSegmentId]);
+    assert.equal(auth.verify(changed.token).roles[0], vipSegmentId);
+
+    // Legacy display name still resolves
+    await auth.grantRole(session.personId, 'Admin', { exclusive: true });
+    assert.deepEqual(await auth.rolesForPerson(session.personId), [adminSegmentId]);
+
     await assert.rejects(auth.grantRole(session.personId, 'superuser'), /Unknown role/);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on session', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installStandard();
+    const pluginId = getPluginUUID('engine9.test', 'test-delegate-legacy-roles');
+    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
+
+    const vipSegmentId = getVersionedUUID();
+    await worker.insertArray({
+      table: 'segment',
+      array: [{ id: vipSegmentId, plugin_id: pluginId, name: 'VIP', build_type: 'list' }]
+    });
+
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          unid: UNID_A,
+          firebaseUid: 'fb-1',
+          email: 'alice@example.com',
+          auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
+          returnTo: 'https://site.example.com/auth/delegate'
+        }),
+        { status: 200 }
+      );
+
+    const auth = createDelegateAuth({
+      worker,
+      delegateUrl: 'https://delegate.engine9.ai',
+      handoffSecret: 'shared-secret',
+      sessionSecret: 'session-secret',
+      pluginId,
+      roleSegments: { vip: vipSegmentId },
+      fetchImpl
+    });
+
+    const { session } = await auth.login('code-1');
+    const roles = await auth.grantRole(session.personId, 'vip');
+    assert.deepEqual(roles, [vipSegmentId], 'legacy name grant returns UUID role_ids');
   } finally {
     await worker.destroy();
   }
@@ -349,18 +409,21 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
-      roleSegments: { admin: adminSegmentId, vip: vipSegmentId },
+      roles: {
+        [adminSegmentId]: { name: 'Admin' },
+        [vipSegmentId]: { name: 'VIP' }
+      },
       loadRolesOnLogin: false,
       fetchImpl
     });
 
     const first = await auth.login('code-1');
-    await auth.grantRole(first.session.personId, 'vip');
+    await auth.grantRole(first.session.personId, vipSegmentId);
     const again = await auth.login('code-2');
     assert.equal(again.session.personId, first.session.personId);
     assert.deepEqual(again.session.roles, [], 'session roles stay empty when loadRolesOnLogin is false');
     assert.equal(sessionNeedsRole(again.session), true);
-    assert.deepEqual(await auth.rolesForPerson(first.session.personId), ['vip']);
+    assert.deepEqual(await auth.rolesForPerson(first.session.personId), [vipSegmentId]);
   } finally {
     await worker.destroy();
   }

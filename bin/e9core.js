@@ -6,11 +6,12 @@
         Create/update the Engine9 database from scratch: all standard
         interface schemas plus the api_key table.
 
-    e9core create-api-key --db sqlite://./engine9.db --name "website" [--scopes people:write,data:read]
+    e9core create-api-key --db sqlite://./engine9.db --name "website" [--scopes people:write,data:read,tasks:read,tasks:schedule] [--default-role-id <segment-uuid>]
         Create an API key.  The plaintext key is printed once and only the
-        hash is stored.
+        hash is stored. Optional --default-role-id sets the default role
+        (segment UUID) when no role is specified on the request.
 
-    e9core create-api-key --print-sql --name "website" [--scopes ...]
+    e9core create-api-key --print-sql --name "website" [--scopes ...] [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
@@ -73,24 +74,29 @@ async function main() {
       break;
     }
     case 'create-api-key': {
+      const scopes = args.scopes ? String(args.scopes).split(',').map((s) => s.trim()) : [];
+      const defaultRoleId = args['default-role-id'] || null;
       if (args['print-sql']) {
-        const scopes = args.scopes ? String(args.scopes).split(',').map((s) => s.trim()) : [];
         const key = generateApiKey();
         const id = crypto.randomUUID();
         console.error('API key created (store this now -- it cannot be recovered):');
-        console.error(JSON.stringify({ id, name: args.name || '', scopes, key }, null, 2));
+        console.error(JSON.stringify({ id, name: args.name || '', scopes, default_role_id: defaultRoleId, key }, null, 2));
         const esc = (s) => String(s).replaceAll("'", "''");
-        console.log(`INSERT INTO api_key (id, name, key_hash, scopes, active) VALUES ('${id}', '${esc(args.name || '')}', '${hashApiKey(key)}', '${esc(JSON.stringify(scopes))}', 1);`);
+        const roleSql = defaultRoleId ? `'${esc(defaultRoleId)}'` : 'NULL';
+        console.log(`INSERT INTO api_key (id, name, key_hash, scopes, default_role_id, active) VALUES ('${id}', '${esc(args.name || '')}', '${hashApiKey(key)}', '${esc(JSON.stringify(scopes))}', ${roleSql}, 1);`);
         break;
       }
       const worker = getWorker(args);
       try {
         const store = new SqlApiKeyStore({ worker });
         await store.deploy();
-        const scopes = args.scopes ? String(args.scopes).split(',').map((s) => s.trim()) : [];
-        const { key, id, name } = await store.create({ name: args.name || '', scopes });
+        const created = await store.create({
+          name: args.name || '',
+          scopes,
+          defaultRoleId
+        });
         console.log('API key created (store this now -- it cannot be recovered):');
-        console.log(JSON.stringify({ id, name, scopes, key }, null, 2));
+        console.log(JSON.stringify(created, null, 2));
       } finally {
         await worker.destroy();
       }

@@ -4,6 +4,102 @@ Slim Engine9 deployment for websites: a JavaScript library plus API endpoints
 that run alongside an existing site, using the same core code as the full
 Engine9 server (which depends on this package).
 
+## Engine9 auth map (three layers)
+
+Validation for client/site APIs and the server **Task API** lives in
+`@engine9/core` (layer 1 API keys). MCP on `@engine9/server` uses Firebase /
+session / `localdev` instead — do not mix those credentials with Task routes.
+
+```
+Request
+  → 1. API key          (required on core APIs except GET /ok; required on Task API)
+  → 2. Role             (role_id === segment_id UUID; core site APIs)
+  → 3. Delegate level   (credential level on the signed session; core site APIs)
+  → handler
+```
+
+### Layer 1 — API key
+
+- Every core API request (except `GET /ok`) and every Task API request needs a
+  valid key: `Authorization: Bearer e9k_…` or `X-API-Key: e9k_…`.
+- Keys are SHA-256 hashed at rest (`SqlApiKeyStore` / `KVApiKeyStore`).
+- Fields: `scopes` (optional ceiling), `default_role_id` (segment UUID used
+  when no role is specified), `active`, `expires_at`.
+- **Cycle:** `store.rotate({ id })` (SQL) or `store.rotate({ keyHash })` (KV)
+  creates a new key and revokes the old one.
+- **Rate / volume:** not built in — hook on `apiKey.id` after `verify()`
+  (extension point for callers).
+- **Task API:** key is verified in the account DB selected by
+  `X-ENGINE9-ACCOUNT-ID` (see server Task admin auth docs / skills
+  `e9-tasks-api/authentication.md`).
+
+### Authentication and scopes
+
+| Scope | Surface | Allows |
+| --- | --- | --- |
+| `people:write` | Core `POST /people` | Inbound people pipeline |
+| `tables:write` | Core `POST /upsert/:table` | Allowlisted table upserts |
+| `data:read` | Core `GET /read/:name` | Configured reads |
+| `tasks:read` | Server Task API | List/read flows; check run status |
+| `tasks:schedule` | Server Task API | Schedule via `scheduleTasks` |
+| `*` | Any | All scopes |
+
+Empty `scopes` on a key = full access. Constants: `SCOPES` from `@engine9/core`
+(`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`, `TASKS_READ`, `TASKS_SCHEDULE`).
+
+Example Task partner key:
+
+```bash
+npx e9core create-api-key --db sqlite://./engine9.db \
+  --name partner-tasks --scopes tasks:read,tasks:schedule
+```
+
+### Layer 2 — Role (`role_id` = `segment_id`)
+
+- Roles are segments. Session and APIs use the **segment UUID** as `role_id`.
+- Site config (preferred):
+
+```js
+roles: {
+  '<segment-uuid>': {
+    name: 'Admin',          // public display name
+    scopes: ['*'],          // people:write | tables:write | data:read | tasks:* | *
+    requiredAuth: {         // optional Delegate gate (stub-enforced)
+      twoFactor: false
+    }
+  }
+}
+```
+
+- Legacy `roleSegments: { admin: '<uuid>' }` is still accepted and normalized
+  into the UUID-keyed registry (deprecated).
+- **Scope resolution:** effective scopes =
+  `intersection(apiKey.scopes, role.scopes)` when both are non-empty;
+  otherwise the non-empty side; empty both = full access.
+- **Change role:** `auth.changeRole({ personId, roleId, exclusive?, session? })`
+  and HTTP `POST /auth/role` on `createApi` (requires `delegateAuth`).
+- Task API routes enforce **key scopes only** today (no role intersection).
+
+### Layer 3 — Delegate credential level
+
+- After core handoff login, the session carries `auth: { signInProvider,
+  twoFactor, signInSecondFactor, authTime }` from Delegate.
+- Roles may declare `requiredAuth`; `resolveAuthContext` exposes
+  `authSatisfied` (enforced cheaply on API routes when a role is active).
+- **Two Delegate mechanisms** (same `DELEGATE_SHARED_SECRET`, do not mix):
+
+| Mechanism | Caller | Result |
+| --- | --- | --- |
+| **Core handoff** (`/handoff/*`) | Sites on `@engine9/core` | Identity → local `person_id` session |
+| **Session bridge** (`/oauth/session-bridge`) | Engine9 API hosts (`@engine9/server`) | Firebase credentials → `engine9_session` |
+
+Shared HMAC helpers: `@engine9/core/auth/hmac` (`parseSharedSecrets`,
+`signPayload`, `verifySignedPayload`). Server session-bridge keeps its own
+copy of the same `encoded.sig` pattern; do not unify identity models.
+
+Policy helper: `resolveAuthContext` from `@engine9/core/auth` (or
+`@engine9/core/auth/policy`).
+
 ## Responsibilities
 
 The client is the minimum needed for a functioning website:
@@ -14,7 +110,7 @@ The client is the minimum needed for a functioning website:
   SQLite, Cloudflare D1, or MySQL (`SchemaWorker`, `e9core install`).
 - **Install plugins** -- plugin rows and their schemas (`SchemaWorker.install`).
 - **Authenticate with API keys** -- pluggable key stores (SQL table or
-  Cloudflare KV), SHA-256 hashed at rest, scoped, revocable
+  Cloudflare KV), SHA-256 hashed at rest, scoped, revocable, rotatable
   (`@engine9/core/auth`, `e9core create-api-key`). The auth layer is
   isolated from the API handlers for easy upgrades.
 - **Authenticate end users via delegate** -- the shared cross-organization
@@ -22,9 +118,10 @@ The client is the minimum needed for a functioning website:
   codes server-to-server under `DELEGATE_SHARED_SECRET`, maps the delegate
   unid into a `person_id` through the normal identifier pipeline (id_type
   `delegate` → `person_id_delegate` on SQLite/D1), derives roles from
-  `person_segment` membership, and signs local sessions carrying the reported
-  credential level (`@engine9/core/auth/delegate`). See [Delegate
-  authentication](#delegate-authentication) below.
+  `person_segment` membership (role_id = segment UUID), and signs local
+  sessions carrying the reported credential level
+  (`@engine9/core/auth/delegate`). See [Delegate authentication](#delegate-authentication)
+  below.
 - **Create/update single people in real time** -- the exact `loadPeople`
   inbound pipeline (normalize, extract identifiers, resolve input, assign
   person ids with deduplication, resolve source codes, upsert person/email/
@@ -91,9 +188,14 @@ app.use('/api', express.json(), api.expressHandler());
 | `POST /people` | run `{ people: [...] }` through the inbound person pipeline and upsert | `people:write` |
 | `POST /upsert/:table` | upsert `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
 | `GET /read/:name` | read a configured table, optionally gated by `person_segment` (`?person_id=`) | `data:read` |
+| `POST /auth/role` | change role (`{ role_id, person_id?, exclusive?, session_token? }`); requires `delegateAuth` | API key |
+
+Server Task API (same keys; see `@engine9/server` Task docs): `tasks:read`,
+`tasks:schedule`.
 
 Keys are passed as `Authorization: Bearer e9k_...` or `X-API-Key: e9k_...`.
-Keys with no scopes recorded have full access.
+Effective scopes come from the active role and API key (see auth map above).
+Keys/roles with no scopes recorded have full access.
 
 ## Delegate authentication
 
@@ -112,7 +214,8 @@ never talk to the identity provider directly — they use **core handoff**:
    so you can prompt the developer to open `/handoff/browser-exchange` in
    the browser and finish with `?delegate_bridge=`.
 4. Core maps the returned `unid` into a `person_id` (id_type `delegate`),
-   snapshots roles from `person_segment`, and signs a local session cookie.
+   snapshots roles from `person_segment` as segment UUIDs, and signs a local
+   session cookie.
 
 ```js
 import { createDelegateAuth } from '@engine9/core/auth/delegate';
@@ -124,7 +227,10 @@ const auth = createDelegateAuth({
   sessionSecret: process.env.SESSION_SECRET, // signs this site's cookie only
   pluginId: '<website plugin uuid>',
   remoteInputId: 'delegate-login',
-  roleSegments: { admin: '<segment uuid>', vip: '<segment uuid>' }
+  roles: {
+    '<admin-segment-uuid>': { name: 'Admin', scopes: ['*'] },
+    '<vip-segment-uuid>': { name: 'VIP', scopes: ['data:read'] }
+  }
 });
 
 // Start login
@@ -132,6 +238,14 @@ res.redirect(auth.loginUrl({ returnTo: 'https://yoursite.example/auth/delegate' 
 
 // Callback: code or bridge → person + roles + signed token
 const { session, token } = await auth.login(codeOrBridge, { returnTo: callbackUrl });
+
+// Change role (role_id = segment UUID)
+const { token: next } = await auth.changeRole({
+  personId: session.personId,
+  roleId: '<vip-segment-uuid>',
+  exclusive: true,
+  session
+});
 ```
 
 `DELEGATE_SHARED_SECRET` must match the value configured on the delegate
@@ -161,9 +275,9 @@ Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
 - `lib/SQLWorker.js` -- query/upsert/DDL over D1, better-sqlite3, or mysql2
 - `lib/SchemaWorker.js` -- standardize/diff/deploy schemas, install plugins
 - `lib/PersonWorker.js` -- the inbound person pipeline (`processPeople`)
-- `auth/` -- API key creation/verification, SQL + KV stores
+- `auth/` -- API key creation/verification, SQL + KV stores, policy + HMAC helpers
 - `auth/delegate.js` -- delegate login via core handoff: code exchange, person
-  resolution via id_type `delegate`, roles-as-segments, signed sessions
+  resolution via id_type `delegate`, roles-as-segment-UUIDs, signed sessions
   (ships `delegate.d.ts` for TypeScript consumers)
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)

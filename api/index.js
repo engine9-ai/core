@@ -12,51 +12,65 @@
                                    body: { rows: [...] }
     GET  /read/:name            -- read a configured table; optionally gated
                                    by person_segment membership
+    POST /auth/role             -- change role (requires delegateAuth); body:
+                                   { role_id, person_id?, exclusive?, session_token? }
 
-  Every modification is saved to the database, then written to the
-  modification log.  Authentication uses the pluggable API key layer in
-  ../auth (SQL or Cloudflare KV store).
+  Auth layers (see package README):
+    1. API key (required on all routes except /ok)
+    2. Role (role_id = segment UUID; scopes from role registry ∩ key scopes)
+    3. Delegate credential level (session.auth; requiredAuth on roles)
 
   Usage:
     const api = createApi({
       worker,           // client PersonWorker
       keyStore,         // SqlApiKeyStore | KVApiKeyStore
       logger,           // JsonlFileLogger | BatchLogger | NullLogger
+      delegateAuth,     // optional createDelegateAuth() — enables POST /auth/role
       config: {
-        pluginId,                       // plugin id used for people writes
+        pluginId,
         defaultRemoteInputId: 'website',
         upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
+        roles: { '<segment-uuid>': { name: 'VIP', scopes: ['data:read'] } },
         reads: {
-          // name -> read definition; segmentId gates rows by person_segment
           content: { table: 'content', segmentId: null, columns: ['*'] }
         }
       }
     });
-    // Cloudflare: export default { fetch: (req, env, ctx) => api.handleFetch(req, { ctx }) }
-    // Express:    app.use('/api', api.expressHandler());
 */
 import debug$0 from 'debug';
 import { NullLogger } from '../logging/index.js';
+import { resolveAuthContext, hasScope as scopesAllow } from '../auth/policy.js';
+import { normalizeRoleRegistry } from '../auth/delegate.js';
 
 const debug = debug$0('client:api');
 
 const SCOPES = {
   PEOPLE_WRITE: 'people:write',
   TABLES_WRITE: 'tables:write',
-  DATA_READ: 'data:read'
+  DATA_READ: 'data:read',
+  /** List/read flows, flow runs, and task run status (Task API) */
+  TASKS_READ: 'tasks:read',
+  /** Schedule tasks / create flow runs (Task API → scheduleTasks) */
+  TASKS_SCHEDULE: 'tasks:schedule'
 };
-
-function hasScope(key, scope) {
-  const scopes = key?.scopes || [];
-  if (scopes.length === 0) return true; // no scopes recorded = full access
-  return scopes.indexOf(scope) >= 0 || scopes.indexOf('*') >= 0;
-}
 
 function json(status, body) {
   return { status, body };
 }
 
-export function createApi({ worker, keyStore, logger = new NullLogger(), config = {} }) {
+function getHeader(headers, name) {
+  if (!headers) return null;
+  if (typeof headers.get === 'function') return headers.get(name);
+  return headers[name.toLowerCase()] || headers[name] || null;
+}
+
+export function createApi({
+  worker,
+  keyStore,
+  logger = new NullLogger(),
+  delegateAuth = null,
+  config = {}
+}) {
   if (!worker) throw new Error('createApi requires a worker (client PersonWorker)');
   if (!keyStore) throw new Error('createApi requires a keyStore (see @engine9/core/auth)');
   const {
@@ -66,8 +80,39 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
     upsertTables = ['person_email', 'person_phone', 'person_address', 'person_segment'],
     reads = {},
     maxBatchSize = 500,
-    maxReadLimit = 1000
+    maxReadLimit = 1000,
+    roles: configRoles,
+    roleSegments: configRoleSegments
   } = config;
+
+  const rolesRegistry =
+    delegateAuth?.roleRegistry ||
+    normalizeRoleRegistry({ roles: configRoles, roleSegments: configRoleSegments });
+
+  function authContextFor({ apiKey, query, body, session }) {
+    const roleId =
+      body?.role_id ||
+      body?.roleId ||
+      query?.role_id ||
+      query?.roleId ||
+      null;
+    return resolveAuthContext({
+      apiKey,
+      roleId,
+      session,
+      rolesRegistry
+    });
+  }
+
+  function requireScope(ctx, scope) {
+    if (!ctx.authSatisfied) {
+      return json(403, { error: 'delegate credential level does not meet role requiredAuth' });
+    }
+    if (!scopesAllow(ctx.scopes, scope)) {
+      return json(403, { error: `missing scope ${scope}` });
+    }
+    return null;
+  }
 
   async function logModification(entry) {
     try {
@@ -79,8 +124,10 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
     }
   }
 
-  async function postPeople({ body, apiKey }) {
-    if (!hasScope(apiKey, SCOPES.PEOPLE_WRITE)) return json(403, { error: 'missing scope people:write' });
+  async function postPeople({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const denied = requireScope(ctx, SCOPES.PEOPLE_WRITE);
+    if (denied) return denied;
     const people = body?.people || body?.batch;
     if (!Array.isArray(people) || people.length === 0) {
       return json(400, { error: 'body.people must be a non-empty array' });
@@ -109,6 +156,7 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
         records: summary.records,
         personIds: summary.personIds,
         apiKeyId: apiKey?.id,
+        roleId: ctx.roleId,
         meta: { remoteInputId: options.remoteInputId || defaultRemoteInputId }
       });
     }
@@ -119,8 +167,10 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
     });
   }
 
-  async function postUpsert({ table, body, apiKey }) {
-    if (!hasScope(apiKey, SCOPES.TABLES_WRITE)) return json(403, { error: 'missing scope tables:write' });
+  async function postUpsert({ table, body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const denied = requireScope(ctx, SCOPES.TABLES_WRITE);
+    if (denied) return denied;
     if (!table || upsertTables.indexOf(table) < 0) {
       return json(403, { error: `table '${table}' is not in the configured upsert allowlist` });
     }
@@ -137,13 +187,16 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
       action: 'table.upsert',
       table,
       records: rows.length,
-      apiKeyId: apiKey?.id
+      apiKeyId: apiKey?.id,
+      roleId: ctx.roleId
     });
     return json(200, { table, records: rows.length });
   }
 
-  async function getRead({ name, query, apiKey }) {
-    if (!hasScope(apiKey, SCOPES.DATA_READ)) return json(403, { error: 'missing scope data:read' });
+  async function getRead({ name, query, apiKey, session }) {
+    const ctx = authContextFor({ apiKey, query, body: null, session });
+    const denied = requireScope(ctx, SCOPES.DATA_READ);
+    if (denied) return denied;
     const read = reads[name];
     if (!read) return json(404, { error: `no configured read named '${name}'` });
     const personId = query.person_id ? parseInt(query.person_id, 10) : null;
@@ -180,6 +233,54 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
     }
   }
 
+  async function postAuthRole({ body, apiKey, headers }) {
+    if (!delegateAuth) {
+      return json(501, { error: 'change-role requires delegateAuth on createApi' });
+    }
+    const roleId = body?.role_id || body?.roleId;
+    if (!roleId) return json(400, { error: 'body.role_id is required' });
+
+    let session = null;
+    const sessionToken =
+      body?.session_token ||
+      body?.sessionToken ||
+      getHeader(headers, 'X-Engine9-Session') ||
+      getHeader(headers, 'x-engine9-session');
+    if (sessionToken) {
+      session = delegateAuth.verify(sessionToken);
+      if (!session) return json(401, { error: 'invalid session' });
+    }
+
+    const personId = body?.person_id || body?.personId || session?.personId;
+    if (!personId) return json(400, { error: 'person_id or session_token is required' });
+
+    const exclusive = body?.exclusive !== undefined ? Boolean(body.exclusive) : true;
+    try {
+      const result = await delegateAuth.changeRole({
+        personId,
+        roleId,
+        exclusive,
+        session
+      });
+      await logModification({
+        action: 'auth.change_role',
+        personIds: [personId],
+        apiKeyId: apiKey?.id,
+        roleId: result.roles[0] || roleId
+      });
+      return json(200, {
+        roles: result.roles,
+        token: result.token,
+        session: result.session
+      });
+    } catch (e) {
+      debug('postAuthRole error:', e);
+      const msg = String(e.message || e);
+      if (msg.indexOf('Unknown role') === 0) return json(400, { error: msg });
+      return json(422, { error: msg });
+    }
+  }
+
   /* Core dispatch on a normalized request:
      { method, path, query, body, headers } -- path relative to the api root */
   async function handle(req) {
@@ -193,18 +294,37 @@ export function createApi({ worker, keyStore, logger = new NullLogger(), config 
         return json(503, { ok: false, error: String(e.message || e) });
       }
     }
-    // Everything else requires a valid API key
+    // Everything else requires a valid API key (layer 1)
     const verification = await keyStore.verify(req.original || req);
     if (!verification.valid) return json(401, { error: `unauthorized: ${verification.reason}` });
     const apiKey = verification.key;
+
+    let session = null;
+    if (delegateAuth) {
+      const sessionToken =
+        req.body?.session_token ||
+        getHeader(req.headers, 'X-Engine9-Session') ||
+        getHeader(req.headers, 'x-engine9-session');
+      if (sessionToken) session = delegateAuth.verify(sessionToken);
+    }
+
+    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'role') {
+      return postAuthRole({ body: req.body, apiKey, headers: req.headers });
+    }
     if (method === 'POST' && parts[0] === 'people') {
-      return postPeople({ body: req.body, apiKey });
+      return postPeople({ body: req.body, apiKey, query: req.query || {}, session });
     }
     if (method === 'POST' && parts[0] === 'upsert') {
-      return postUpsert({ table: parts[1], body: req.body, apiKey });
+      return postUpsert({
+        table: parts[1],
+        body: req.body,
+        apiKey,
+        query: req.query || {},
+        session
+      });
     }
     if (method === 'GET' && parts[0] === 'read') {
-      return getRead({ name: parts[1], query: req.query || {}, apiKey });
+      return getRead({ name: parts[1], query: req.query || {}, apiKey, session });
     }
     return json(404, { error: `no route for ${method} /${parts.join('/')}` });
   }
