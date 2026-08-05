@@ -21,10 +21,12 @@ Request
 ### Layer 1 — API key
 
 - Every core API request (except `GET /ok`) and every Task API request needs a
-  valid key: `Authorization: Bearer e9k_…` or `X-API-Key: e9k_…`.
+  valid key: `Authorization: Bearer e9key_…` or `X-API-Key: e9key_…`.
 - Keys are SHA-256 hashed at rest (`SqlApiKeyStore` / `KVApiKeyStore`).
-- Fields: `scopes` (optional ceiling), `default_role_id` (segment UUID used
+- Fields: `scopes` (required, non-empty), `default_role_id` (segment UUID used
   when no role is specified), `active`, `expires_at`.
+- **Store:** prefer `SqlApiKeyStore` (account DB). `KVApiKeyStore` is optional
+  Cloudflare-only; **not required** for Node/SQLite/MySQL or self-hosted sites.
 - **Cycle:** `store.rotate({ id })` (SQL) or `store.rotate({ keyHash })` (KV)
   creates a new key and revokes the old one.
 - **Rate / volume:** not built in — hook on `apiKey.id` after `verify()`
@@ -42,16 +44,26 @@ Request
 | `data:read` | Core `GET /read/:name` | Configured reads |
 | `tasks:read` | Server Task API | List/read flows; check run status |
 | `tasks:schedule` | Server Task API | Schedule via `scheduleTasks` |
-| `*` | Any | All scopes |
+| `admin` | Any | All scopes (replaces the old `*` wildcard) |
+| `public` | Inbound / forms | Public ingest; keys use `e9publickey_` prefix |
 
-Empty `scopes` on a key = full access. Constants: `SCOPES` from `@engine9/core`
-(`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`, `TASKS_READ`, `TASKS_SCHEDULE`).
+Keys **must** list scopes at creation (`e9core create-api-key --scopes …`). Empty
+scopes deny every check. Prefix follows scope: `public` → `e9publickey_…`, otherwise
+`e9key_…`. Constants: `SCOPES` from `@engine9/core`
+(`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`, `TASKS_READ`, `TASKS_SCHEDULE`, `ADMIN`, `PUBLIC`).
 
 Example Task partner key:
 
 ```bash
 npx e9core create-api-key --db sqlite://./engine9.db \
   --name partner-tasks --scopes tasks:read,tasks:schedule
+```
+
+Full-access key (site admin / bootstrap):
+
+```bash
+npx e9core create-api-key --db sqlite://./engine9.db \
+  --name site-admin --scopes admin
 ```
 
 ### Layer 2 — Role (`role_id` = `segment_id`)
@@ -63,7 +75,7 @@ npx e9core create-api-key --db sqlite://./engine9.db \
 roles: {
   '<segment-uuid>': {
     name: 'Admin',          // public display name
-    scopes: ['*'],          // people:write | tables:write | data:read | tasks:* | *
+    scopes: ['admin'],      // or a concrete list: people:write, data:read, …
     requiredAuth: {         // optional Delegate gate (stub-enforced)
       twoFactor: false
     }
@@ -73,9 +85,10 @@ roles: {
 
 - Legacy `roleSegments: { admin: '<uuid>' }` is still accepted and normalized
   into the UUID-keyed registry (deprecated).
-- **Scope resolution:** effective scopes =
-  `intersection(apiKey.scopes, role.scopes)` when both are non-empty;
-  otherwise the non-empty side; empty both = full access.
+- **Scope resolution** (key is always the ceiling):
+  - No key scopes → deny
+  - No role (or role with empty scopes) → key scopes only
+  - Both set → intersection; `admin` on one side means that side does not constrain
 - **Change role:** `auth.changeRole({ personId, roleId, exclusive?, session? })`
   and HTTP `POST /auth/role` on `createApi` (requires `delegateAuth`).
 - Task API routes enforce **key scopes only** today (no role intersection).
@@ -148,14 +161,17 @@ this package.
 - **Generic Node** -- Express or any HTTP framework, with SQLite
   (better-sqlite3) or MySQL via optional knex peer dependencies
 
-## Quick start (Node + SQLite)
+## Quick start (Node + SQLite — no Cloudflare)
+
+Self-hosted / `host=self` sites store and verify keys in the account database.
+Cloudflare KV/D1 is not required for API key auth.
 
 ```bash
 npm install @engine9/core better-sqlite3 knex
 
-# create the database and an API key
 npx e9core install --db sqlite://./engine9.db
-npx e9core create-api-key --db sqlite://./engine9.db --name website
+npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes admin
+npx e9core create-api-key --db sqlite://./engine9.db --name public --scopes public
 ```
 
 ```js
@@ -163,8 +179,9 @@ import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from '@engin
 
 const worker = new PersonWorker({
   accountId: 'my-account',
-  auth: { database_connection: 'sqlite://./engine9.db' }
+  auth: { database_connection: 'sqlite://./engine9.db' } // mysql://… also works
 });
+// SqlApiKeyStore.verify() → SELECT by key_hash on api_key — no Cloudflare
 const api = createApi({
   worker,
   keyStore: new SqlApiKeyStore({ worker }),
@@ -178,6 +195,8 @@ const api = createApi({
 
 // Express
 app.use('/api', express.json(), api.expressHandler());
+
+// Rotate: const { key } = await new SqlApiKeyStore({ worker }).rotate({ id });
 ```
 
 ## Endpoints
@@ -193,7 +212,7 @@ app.use('/api', express.json(), api.expressHandler());
 Server Task API (same keys; see `@engine9/server` Task docs): `tasks:read`,
 `tasks:schedule`.
 
-Keys are passed as `Authorization: Bearer e9k_...` or `X-API-Key: e9k_...`.
+Keys are passed as `Authorization: Bearer e9key_...` or `X-API-Key: e9key_...`.
 Effective scopes come from the active role and API key (see auth map above).
 Keys/roles with no scopes recorded have full access.
 
@@ -228,7 +247,7 @@ const auth = createDelegateAuth({
   pluginId: '<website plugin uuid>',
   remoteInputId: 'delegate-login',
   roles: {
-    '<admin-segment-uuid>': { name: 'Admin', scopes: ['*'] },
+    '<admin-segment-uuid>': { name: 'Admin', scopes: ['admin'] },
     '<vip-segment-uuid>': { name: 'VIP', scopes: ['data:read'] }
   }
 });

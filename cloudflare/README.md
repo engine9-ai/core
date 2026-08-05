@@ -66,7 +66,7 @@ Worker.
    npx e9core create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
    ```
 
-   The plaintext key (`e9k_...`) is printed once; only its SHA-256 hash is
+   The plaintext key (`e9key_...`) is printed once; only its SHA-256 hash is
    stored.
 
 5. **Configure wrangler**
@@ -97,17 +97,17 @@ curl https://your-worker.example.workers.dev/api/ok
 
 # create/update a person (same pipeline as the server's loadPeople)
 curl -X POST https://your-worker.example.workers.dev/api/people \
-  -H "Authorization: Bearer e9k_..." -H "Content-Type: application/json" \
+  -H "Authorization: Bearer e9key_..." -H "Content-Type: application/json" \
   -d '{"people":[{"email":"alice@example.com","given_name":"Alice","source_code":"WEB_SIGNUP"}]}'
 
 # person-related upsert (event attendance, segment membership, ...)
 curl -X POST https://your-worker.example.workers.dev/api/upsert/person_segment \
-  -H "Authorization: Bearer e9k_..." -H "Content-Type: application/json" \
+  -H "Authorization: Bearer e9key_..." -H "Content-Type: application/json" \
   -d '{"rows":[{"segment_id":"<uuid>","person_id":123}]}'
 
 # segment-gated read; person_id supplied by the caller (e.g. via delegate)
 curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
-  -H "Authorization: Bearer e9k_..."
+  -H "Authorization: Bearer e9key_..."
 ```
 
 ## KV caches (Cloudflare only)

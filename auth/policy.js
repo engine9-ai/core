@@ -5,30 +5,66 @@
   Layer 2 — Role (role_id === segment_id UUID; scopes + requiredAuth)
   Layer 3 — Delegate credential level on the session
 
+  Scope rules (same for keys and roles):
+    - Empty list denies access (keys must be created with an explicit list).
+    - `admin` grants every scope (replaces the old `*` wildcard).
+    - With a role active: effective scopes = key ∩ role (see intersectScopes).
+
   resolveAuthContext consolidates role + scope selection for createApi and
   any future server callers that import @engine9/core/auth.
 */
 
+/** Full-access scope for keys and roles. Prefer this over listing every scope. */
+export const ADMIN_SCOPE = 'admin';
+
 /**
- * Intersect two scope lists. `*` in either list means that side is unrestricted
- * for intersection purposes (the other list wins). Empty list means unrestricted.
+ * Inbound / public-form access. Keys with this scope use the `e9publickey_`
+ * prefix; other keys use `e9key_`. Same `api_key` table — scope is the
+ * distinguisher, not a separate key system.
+ */
+export const PUBLIC_SCOPE = 'public';
+
+/**
+ * Combine key and role scope lists into the effective set.
+ *
+ * | Key scopes | Role scopes | Result |
+ * | --- | --- | --- |
+ * | empty | anything | `[]` (no access) |
+ * | some | empty / no role | key scopes (role does not constrain) |
+ * | has `admin` | some | role scopes |
+ * | some | has `admin` | key scopes |
+ * | both concrete | both concrete | intersection |
  */
 export function intersectScopes(keyScopes = [], roleScopes = []) {
   const key = Array.isArray(keyScopes) ? keyScopes : [];
   const role = Array.isArray(roleScopes) ? roleScopes : [];
-  if (key.length === 0 && role.length === 0) return [];
-  if (key.length === 0) return [...role];
+  if (key.length === 0) return [];
   if (role.length === 0) return [...key];
-  if (key.includes('*')) return [...role];
-  if (role.includes('*')) return [...key];
+  if (key.includes(ADMIN_SCOPE)) return [...role];
+  if (role.includes(ADMIN_SCOPE)) return [...key];
   return key.filter((s) => role.includes(s));
 }
 
-/** True when scopes allow `scope`. Empty scopes = full access. */
+/** Whether `scopes` authorize a specific `scope` (or include `admin`). */
 export function hasScope(scopes, scope) {
   const list = Array.isArray(scopes) ? scopes : [];
-  if (list.length === 0) return true;
-  return list.includes(scope) || list.includes('*');
+  if (list.length === 0) return false;
+  return list.includes(scope) || list.includes(ADMIN_SCOPE);
+}
+
+/**
+ * Validate scopes for API key creation / CLI.
+ * Requires a non-empty array; rejects legacy `*` (use `admin`).
+ */
+export function assertValidKeyScopes(scopes) {
+  const list = Array.isArray(scopes) ? scopes.map((s) => String(s).trim()).filter(Boolean) : [];
+  if (list.length === 0) {
+    throw new Error('API key scopes are required (e.g. --scopes tasks:read,tasks:schedule or --scopes admin)');
+  }
+  if (list.includes('*')) {
+    throw new Error('Invalid scope "*": use "admin" for full access');
+  }
+  return list;
 }
 
 /**
@@ -87,8 +123,11 @@ export function resolveAuthContext({
 }
 
 export default {
+  ADMIN_SCOPE,
+  PUBLIC_SCOPE,
   intersectScopes,
   hasScope,
+  assertValidKeyScopes,
   meetsRequiredAuth,
   resolveAuthContext
 };

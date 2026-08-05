@@ -256,7 +256,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       pluginId,
       remoteInputId: 'delegate-login',
       roles: {
-        [adminSegmentId]: { name: 'Admin', scopes: ['*'] },
+        [adminSegmentId]: { name: 'Admin', scopes: ['admin'] },
         [vipSegmentId]: { name: 'VIP', scopes: ['data:read'] }
       },
       fetchImpl

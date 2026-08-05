@@ -6,12 +6,13 @@
         Create/update the Engine9 database from scratch: all standard
         interface schemas plus the api_key table.
 
-    e9core create-api-key --db sqlite://./engine9.db --name "website" [--scopes people:write,data:read,tasks:read,tasks:schedule] [--default-role-id <segment-uuid>]
+    e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
         Create an API key.  The plaintext key is printed once and only the
-        hash is stored. Optional --default-role-id sets the default role
+        hash is stored. --scopes is required (comma-separated). Use scope
+        "admin" for full access. Optional --default-role-id sets the default role
         (segment UUID) when no role is specified on the request.
 
-    e9core create-api-key --print-sql --name "website" [--scopes ...] [--default-role-id <uuid>]
+    e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
@@ -28,6 +29,7 @@ import SchemaWorker from '../lib/SchemaWorker.js';
 import { STANDARD_INSTALL_SCHEMAS, SCHEMAS } from '../lib/schemas.js';
 import {
   SqlApiKeyStore, API_KEY_SCHEMA, generateApiKey, hashApiKey,
+  assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
@@ -74,10 +76,22 @@ async function main() {
       break;
     }
     case 'create-api-key': {
-      const scopes = args.scopes ? String(args.scopes).split(',').map((s) => s.trim()) : [];
+      if (!args.scopes || args.scopes === true) {
+        console.error('create-api-key requires --scopes <list>');
+        console.error('  Examples: --scopes tasks:read,tasks:schedule');
+        console.error('            --scopes admin');
+        process.exit(1);
+      }
+      let scopes;
+      try {
+        scopes = assertValidKeyScopes(String(args.scopes).split(','));
+      } catch (e) {
+        console.error(e.message);
+        process.exit(1);
+      }
       const defaultRoleId = args['default-role-id'] || null;
       if (args['print-sql']) {
-        const key = generateApiKey();
+        const key = generateApiKey({ scopes });
         const id = crypto.randomUUID();
         console.error('API key created (store this now -- it cannot be recovered):');
         console.error(JSON.stringify({ id, name: args.name || '', scopes, default_role_id: defaultRoleId, key }, null, 2));

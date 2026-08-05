@@ -2,18 +2,22 @@
   Engine9 client API key authentication (auth layer 1).
 
   Every core API request requires a valid API key. Keys enable/disable access,
-  carry optional scopes (ceiling), and may set default_role_id (layer 2).
+  must carry a non-empty scopes list (ceiling), and may set default_role_id
+  (layer 2). Use scope `admin` for full access, `public` for inbound/forms.
   Rate limiting / volume checks are extension points keyed by apiKey.id —
   not implemented here; callers can wrap verify() or createApi handle().
 
-  Keys look like: e9k_<40 hex chars>. Only the SHA-256 hash of the key is
-  stored -- a leaked key store does not reveal usable keys.
+  One key system, two prefixes chosen from scopes:
+    e9key_<40 hex>        — normal keys (tasks, people, admin, …)
+    e9publickey_<40 hex>  — keys with the `public` scope (inbound cache)
+  Only the SHA-256 hash is stored in api_key — a leaked store does not reveal
+  usable keys.
 
   Two stores are provided:
     SqlApiKeyStore -- api_key table managed by the client's SchemaWorker
     KVApiKeyStore  -- Cloudflare Workers KV namespace binding
 
-  Policy helpers (resolveAuthContext, hasScope) live in ./policy.js.
+  Policy helpers (resolveAuthContext, hasScope, ADMIN_SCOPE) live in ./policy.js.
   HMAC helpers for Delegate tokens live in ./hmac.js.
 */
 import crypto from 'node:crypto';
@@ -21,7 +25,10 @@ import {
   resolveAuthContext,
   hasScope,
   intersectScopes,
-  meetsRequiredAuth
+  meetsRequiredAuth,
+  assertValidKeyScopes,
+  ADMIN_SCOPE,
+  PUBLIC_SCOPE
 } from './policy.js';
 import {
   parseSharedSecrets,
@@ -36,7 +43,10 @@ export {
   resolveAuthContext,
   hasScope,
   intersectScopes,
-  meetsRequiredAuth
+  meetsRequiredAuth,
+  assertValidKeyScopes,
+  ADMIN_SCOPE,
+  PUBLIC_SCOPE
 };
 export {
   parseSharedSecrets,
@@ -46,10 +56,25 @@ export {
   verifySignedPayload,
   splitSignedToken
 };
-export const API_KEY_PREFIX = 'e9k_';
 
-export function generateApiKey() {
-  return `${API_KEY_PREFIX}${crypto.randomBytes(20).toString('hex')}`;
+/** Standard API keys (non-public scopes). */
+export const API_KEY_PREFIX = 'e9key_';
+/** Inbound / public-form keys (`public` scope). Same api_key table. */
+export const PUBLIC_API_KEY_PREFIX = 'e9publickey_';
+
+export function isEngine9ApiKeyToken(token) {
+  const t = String(token || '');
+  return t.indexOf(API_KEY_PREFIX) === 0 || t.indexOf(PUBLIC_API_KEY_PREFIX) === 0;
+}
+
+/**
+ * Generate a plaintext API key. Prefix follows scopes: `public` → e9publickey_,
+ * otherwise e9key_.
+ */
+export function generateApiKey({ scopes = [] } = {}) {
+  const list = Array.isArray(scopes) ? scopes : [];
+  const prefix = list.includes(PUBLIC_SCOPE) ? PUBLIC_API_KEY_PREFIX : API_KEY_PREFIX;
+  return `${prefix}${crypto.randomBytes(20).toString('hex')}`;
 }
 
 export function hashApiKey(key) {
@@ -58,7 +83,7 @@ export function hashApiKey(key) {
 
 /* Extract a key from an incoming request-like object (Fetch API Request,
    Express req, or a plain string). Accepts either
-   `Authorization: Bearer e9k_...` or `X-API-Key: e9k_...` */
+   `Authorization: Bearer e9key_…|e9publickey_…` or `X-API-Key`. */
 export function extractApiKey(request) {
   if (!request) return null;
   if (typeof request === 'string') return request;
@@ -70,9 +95,9 @@ export function extractApiKey(request) {
   const auth = getHeader('Authorization') || getHeader('authorization');
   if (auth && auth.indexOf('Bearer ') === 0) {
     const token = auth.slice('Bearer '.length).trim();
-    // Only treat as API key when it has the e9k_ prefix — other Bearers
+    // Only treat as API key for Engine9 prefixes — other Bearers
     // (session tokens, Firebase) are left for layer 3 handlers.
-    if (token.indexOf(API_KEY_PREFIX) === 0) return token;
+    if (isEngine9ApiKeyToken(token)) return token;
     return null;
   }
   const headerKey = getHeader('X-API-Key');
@@ -88,7 +113,7 @@ export const API_KEY_SCHEMA = {
         id: 'id_uuid',
         name: { type: 'string', nullable: false, default_value: '' },
         key_hash: 'hash',
-        // JSON array of scope strings, e.g. ["people:write","tables:write","data:read"]
+        // JSON array of scope strings (required, non-empty), e.g. ["people:write"] or ["admin"]
         scopes: 'json',
         // Default role_id (segment UUID) when no role is specified on the request/session
         default_role_id: { type: 'id_uuid', nullable: true },
@@ -155,13 +180,17 @@ export class SqlApiKeyStore {
     }
     return this.worker.deploy({ schema: API_KEY_SCHEMA });
   }
-  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null } = {}) {
-    const key = generateApiKey();
+  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null, key: existingKey = null } = {}) {
+    const normalizedScopes = assertValidKeyScopes(scopes);
+    const key = existingKey || generateApiKey({ scopes: normalizedScopes });
+    if (existingKey && !isEngine9ApiKeyToken(existingKey)) {
+      throw new Error(`API key must start with ${API_KEY_PREFIX} or ${PUBLIC_API_KEY_PREFIX}`);
+    }
     const record = {
       id: crypto.randomUUID(),
       name,
       key_hash: hashApiKey(key),
-      scopes: JSON.stringify(scopes),
+      scopes: JSON.stringify(normalizedScopes),
       default_role_id: defaultRoleId,
       active: true,
       expires_at: expiresAt
@@ -218,13 +247,17 @@ export class KVApiKeyStore {
     if (!kv) throw new Error('KVApiKeyStore requires a kv namespace binding');
     this.kv = kv;
   }
-  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null } = {}) {
-    const key = generateApiKey();
+  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null, key: existingKey = null } = {}) {
+    const normalizedScopes = assertValidKeyScopes(scopes);
+    const key = existingKey || generateApiKey({ scopes: normalizedScopes });
+    if (existingKey && !isEngine9ApiKeyToken(existingKey)) {
+      throw new Error(`API key must start with ${API_KEY_PREFIX} or ${PUBLIC_API_KEY_PREFIX}`);
+    }
     const id = crypto.randomUUID();
     const record = {
       id,
       name,
-      scopes,
+      scopes: normalizedScopes,
       default_role_id: defaultRoleId,
       active: true,
       expires_at: expiresAt
@@ -271,16 +304,20 @@ export class KVApiKeyStore {
 
 export default {
   API_KEY_PREFIX,
+  PUBLIC_API_KEY_PREFIX,
   API_KEY_SCHEMA,
   generateApiKey,
   hashApiKey,
   extractApiKey,
+  isEngine9ApiKeyToken,
   SqlApiKeyStore,
   KVApiKeyStore,
   resolveAuthContext,
   hasScope,
   intersectScopes,
   meetsRequiredAuth,
+  ADMIN_SCOPE,
+  PUBLIC_SCOPE,
   parseSharedSecrets,
   signPayload,
   verifySignedPayload

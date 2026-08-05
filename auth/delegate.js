@@ -494,7 +494,7 @@ export function sessionNeedsRole(session) {
       remoteInputId: 'delegate',   // input the delegate logins record under
       // Preferred — role_id === segment UUID:
       roles: {
-        '<segment-uuid>': { name: 'Admin', scopes: ['*'], requiredAuth: {} }
+        '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: {} }
       },
       // Legacy (deprecated): roleSegments: { admin: '<segment uuid>' },
       sessionTtlSeconds: 86400

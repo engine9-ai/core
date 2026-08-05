@@ -27,6 +27,7 @@ export default {
       d1: env.DB,
       personIds: env.PERSON_IDS
     });
+    // Prefer SQL api_key table; API_KEYS KV is optional (not required for auth).
     const keyStore = env.API_KEYS ? new KVApiKeyStore({ kv: env.API_KEYS }) : new SqlApiKeyStore({ worker });
     const logger = env.LOG_BUCKET ? new BatchLogger({ sink: r2Sink(env.LOG_BUCKET) }) : new NullLogger();
     const api = createApi({

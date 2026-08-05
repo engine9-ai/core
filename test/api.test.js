@@ -16,8 +16,11 @@ test('client API: auth, people POST, table upsert, segment-gated reads, modifica
     // auth store
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
-    const { key, id: keyId } = await keyStore.create({ name: 'site', scopes: [] });
-    assert.ok(key.indexOf('e9k_') === 0);
+    const { key, id: keyId } = await keyStore.create({
+      name: 'site',
+      scopes: ['people:write', 'tables:write', 'data:read']
+    });
+    assert.ok(key.indexOf('e9key_') === 0);
     const { data: stored } = await worker.query('select key_hash from api_key');
     assert.equal(stored[0].key_hash, hashApiKey(key), 'only the hash is stored');
 
@@ -158,7 +161,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
       pluginId,
       roles: {
         [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
-        [adminRoleId]: { name: 'Admin', scopes: ['*'] }
+        [adminRoleId]: { name: 'Admin', scopes: ['admin'] }
       },
       fetchImpl: async () =>
         new Response(
@@ -188,7 +191,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
         pluginId,
         roles: {
           [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
-          [adminRoleId]: { name: 'Admin', scopes: ['*'] }
+          [adminRoleId]: { name: 'Admin', scopes: ['admin'] }
         },
         upsertTables: ['person_segment'],
         reads: { open: { table: 'segment', columns: ['id', 'name'] } }

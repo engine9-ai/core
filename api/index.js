@@ -39,7 +39,12 @@
 */
 import debug$0 from 'debug';
 import { NullLogger } from '../logging/index.js';
-import { resolveAuthContext, hasScope as scopesAllow } from '../auth/policy.js';
+import {
+  resolveAuthContext,
+  hasScope as scopesAllow,
+  ADMIN_SCOPE,
+  PUBLIC_SCOPE
+} from '../auth/policy.js';
 import { normalizeRoleRegistry } from '../auth/delegate.js';
 
 const debug = debug$0('client:api');
@@ -51,7 +56,11 @@ const SCOPES = {
   /** List/read flows, flow runs, and task run status (Task API) */
   TASKS_READ: 'tasks:read',
   /** Schedule tasks / create flow runs (Task API → scheduleTasks) */
-  TASKS_SCHEDULE: 'tasks:schedule'
+  TASKS_SCHEDULE: 'tasks:schedule',
+  /** Full access — same string as ADMIN_SCOPE in auth/policy.js */
+  ADMIN: ADMIN_SCOPE,
+  /** Inbound / public forms — same string as PUBLIC_SCOPE; keys use e9publickey_ prefix */
+  PUBLIC: PUBLIC_SCOPE
 };
 
 function json(status, body) {

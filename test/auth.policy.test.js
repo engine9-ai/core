@@ -4,9 +4,17 @@ import {
   resolveAuthContext,
   hasScope,
   intersectScopes,
-  meetsRequiredAuth
+  meetsRequiredAuth,
+  assertValidKeyScopes
 } from '../auth/policy.js';
-import { SqlApiKeyStore, hashApiKey } from '../auth/index.js';
+import {
+  SqlApiKeyStore,
+  hashApiKey,
+  generateApiKey,
+  PUBLIC_API_KEY_PREFIX,
+  API_KEY_PREFIX
+} from '../auth/index.js';
+import { PUBLIC_SCOPE, ADMIN_SCOPE } from '../auth/policy.js';
 import { parseSharedSecrets, signPayload, verifySignedPayload } from '../auth/hmac.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getVersionedUUID } from '../lib/utilities.js';
@@ -14,14 +22,20 @@ import { getVersionedUUID } from '../lib/utilities.js';
 test('intersectScopes and hasScope', () => {
   assert.deepEqual(intersectScopes([], []), []);
   assert.deepEqual(intersectScopes(['people:write'], []), ['people:write']);
-  assert.deepEqual(intersectScopes([], ['data:read']), ['data:read']);
+  assert.deepEqual(intersectScopes([], ['data:read']), []);
   assert.deepEqual(intersectScopes(['people:write', 'data:read'], ['data:read']), ['data:read']);
-  assert.deepEqual(intersectScopes(['*'], ['data:read']), ['data:read']);
-  assert.deepEqual(intersectScopes(['people:write'], ['*']), ['people:write']);
+  assert.deepEqual(intersectScopes(['admin'], ['data:read']), ['data:read']);
+  assert.deepEqual(intersectScopes(['people:write'], ['admin']), ['people:write']);
 
-  assert.equal(hasScope([], 'people:write'), true);
-  assert.equal(hasScope(['*'], 'people:write'), true);
+  assert.equal(hasScope([], 'people:write'), false);
+  assert.equal(hasScope(['admin'], 'people:write'), true);
   assert.equal(hasScope(['data:read'], 'people:write'), false);
+
+  assert.throws(() => assertValidKeyScopes([]), /required/);
+  assert.throws(() => assertValidKeyScopes(['*']), /admin/);
+  assert.deepEqual(assertValidKeyScopes([' tasks:read ', '']), ['tasks:read']);
+  assert.ok(generateApiKey({ scopes: [ADMIN_SCOPE] }).startsWith(API_KEY_PREFIX));
+  assert.ok(generateApiKey({ scopes: [PUBLIC_SCOPE] }).startsWith(PUBLIC_API_KEY_PREFIX));
 });
 
 test('meetsRequiredAuth and resolveAuthContext', () => {
@@ -48,7 +62,7 @@ test('meetsRequiredAuth and resolveAuthContext', () => {
   assert.equal(ctx.authSatisfied, false);
 
   const ok = resolveAuthContext({
-    apiKey: { scopes: [] },
+    apiKey: { scopes: ['admin'] },
     roleId,
     rolesRegistry: registry,
     session: { roles: [roleId], auth: { twoFactor: true } }
@@ -74,7 +88,7 @@ test('SqlApiKeyStore default_role_id and rotate', async () => {
     assert.equal(looked.default_role_id, roleId);
 
     const rotated = await store.rotate({ id: created.id });
-    assert.ok(rotated.key.indexOf('e9k_') === 0);
+    assert.ok(rotated.key.indexOf('e9key_') === 0);
     assert.notEqual(rotated.key, created.key);
     assert.equal(rotated.revokedId, created.id);
     assert.equal(rotated.default_role_id, roleId);
