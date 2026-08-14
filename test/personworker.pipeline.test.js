@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { createHash } from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
 
@@ -75,6 +76,60 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
     assert.equal(readOnly.personIds[1], null, 'unknown person not created with doNotUpsert');
     const { data: people3 } = await worker.query('select id from person');
     assert.equal(people3.length, 2, 'doNotUpsert added no people');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('person_hash is opt-in via extraTransforms slots after explicit install', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installStandard();
+    const { tables: before } = await worker.tables();
+    assert.ok(!before.includes('person_hash_email'), 'person_hash must not be in installStandard');
+
+    const first = await worker.install({ path: '@engine9/interfaces/person_hash' });
+    const second = await worker.install({ path: '@engine9/interfaces/person_hash' });
+    assert.equal(second.id, first.id, 'person_hash installs uniquely by path');
+    const { data: pluginRows } = await worker.query(
+      "select id from plugin where path='@engine9/interfaces/person_hash'"
+    );
+    assert.equal(pluginRows.length, 1);
+
+    const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');
+    await worker.install({ type: 'local', id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
+    const prefix = '@engine9/interfaces';
+    const summary = await worker.processPeople({
+      pluginId,
+      remoteInputId: 'hash-signup',
+      inputType: 'api',
+      extraTransforms: {
+        beforeIdentity: [{ path: `${prefix}/person_hash:transforms:id` }],
+        beforeUpsert: [{ path: `${prefix}/person_hash:transforms:upsert` }]
+      },
+      batch: [
+        { email: 'Hash@Example.com', phone: '202-555-0143' },
+        { email_hash_v1: createHash('sha256').update('only-hash@example.com').digest('hex') }
+      ]
+    });
+    assert.equal(summary.records, 2);
+    const [plainId, hashOnlyId] = summary.personIds;
+    const { data: emailHashes } = await worker.query(
+      'select person_id, email_hash_v1, email_hash_md5 from person_hash_email order by person_id'
+    );
+    assert.equal(emailHashes.length, 2);
+    const plainHash = emailHashes.find((r) => r.person_id === plainId);
+    assert.equal(plainHash.email_hash_v1.length, 64);
+    assert.equal(plainHash.email_hash_md5.length, 32);
+    const hashOnly = emailHashes.find((r) => r.person_id === hashOnlyId);
+    assert.equal(hashOnly.email_hash_v1.length, 64);
+    const { data: hashOnlyEmails } = await worker.query(
+      `select email from person_email where person_id=${hashOnlyId}`
+    );
+    assert.equal(hashOnlyEmails.length, 0, 'hash-only import must not write person_email');
+    const { data: phoneHashes } = await worker.query('select person_id from person_hash_phone');
+    assert.equal(phoneHashes.length, 1);
+    assert.equal(phoneHashes[0].person_id, plainId);
   } finally {
     await worker.destroy();
   }

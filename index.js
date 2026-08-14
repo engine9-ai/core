@@ -8,6 +8,7 @@ export { default as SchemaWorker, STANDARD_INSTALL_SCHEMAS } from './lib/SchemaW
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export {
   buildInboundTransforms,
+  EXTRA_TRANSFORM_SLOTS,
   runPeopleTransformStep,
   runPeopleBatchPipeline,
   runLoadPeopleStream
