@@ -18,6 +18,7 @@ import { PUBLIC_SCOPE, ADMIN_SCOPE } from '../auth/policy.js';
 import { parseSharedSecrets, signPayload, verifySignedPayload } from '../auth/hmac.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getVersionedUUID } from '../lib/utilities.js';
+import { applyStandardStack } from './helpers/applySchemas.js';
 
 test('intersectScopes and hasScope', () => {
   assert.deepEqual(intersectScopes([], []), []);
@@ -74,7 +75,7 @@ test('meetsRequiredAuth and resolveAuthContext', () => {
 test('SqlApiKeyStore default_role_id and rotate', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const store = new SqlApiKeyStore({ worker });
     await store.deploy();
     const roleId = getVersionedUUID();

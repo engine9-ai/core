@@ -3,13 +3,14 @@ import assert from 'node:assert';
 import { createHash } from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
+import { applyStandardStack, applyInterface, ensurePluginRow } from './helpers/applySchemas.js';
 
 test('client PersonWorker: processPeople runs the inbound pipeline end to end', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-web-plugin');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-web-plugin', name: 'Test Web Plugin' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-web-plugin', name: 'Test Web Plugin' });
 
     const summary = await worker.processPeople({
       pluginId,
@@ -84,20 +85,20 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
 test('person_hash is opt-in via extraTransforms slots after explicit install', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const { tables: before } = await worker.tables();
-    assert.ok(!before.includes('person_hash_email'), 'person_hash must not be in installStandard');
+    assert.ok(!before.includes('person_hash_email'), 'person_hash must not be in the standard stack');
 
-    const first = await worker.install({ path: '@engine9/interfaces/person_hash' });
-    const second = await worker.install({ path: '@engine9/interfaces/person_hash' });
-    assert.equal(second.id, first.id, 'person_hash installs uniquely by path');
+    const first = await applyInterface(worker, '@engine9/interfaces/person_hash');
+    const second = await applyInterface(worker, '@engine9/interfaces/person_hash');
+    assert.equal(second.id, first.id, 'person_hash plugin row is unique by path');
     const { data: pluginRows } = await worker.query(
       "select id from plugin where path='@engine9/interfaces/person_hash'"
     );
     assert.equal(pluginRows.length, 1);
 
     const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
     const prefix = '@engine9/interfaces';
     const summary = await worker.processPeople({
       pluginId,

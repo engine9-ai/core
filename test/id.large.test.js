@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import PersonWorker from '../lib/PersonWorker.js';
+import { applyStandardStack } from './helpers/applySchemas.js';
 import {
   assignPersonIds,
   createCompactSqlIdentifierStore,
@@ -72,7 +73,7 @@ describeLarge('large SQLite compact id store', { timeout: 60 * 60 * 1000 }, () =
 
     try {
       const tAll = Date.now();
-      await worker.installStandard();
+      await applyStandardStack(worker);
       await worker.query('PRAGMA journal_mode = WAL');
       await worker.query('PRAGMA synchronous = NORMAL');
       await worker.query('PRAGMA temp_store = MEMORY');

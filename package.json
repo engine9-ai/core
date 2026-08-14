@@ -2,7 +2,7 @@
   "name": "@engine9/core",
   "version": "1.0.2",
   "type": "module",
-  "description": "Engine9 core: people pipeline, table upserts, segment-gated reads, schema deployment, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported)",
+  "description": "Engine9 core: people pipeline, table upserts, segment-gated reads, and API-key authenticated endpoints for embedding alongside existing websites (Cloudflare Workers/D1 tier-1, generic Node deployments supported). Schema deploy and plugin install live on @engine9/server.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -17,7 +17,8 @@
     "./sql/dialects/MySQLBinaryTypes": "./lib/sql/dialects/MySQLBinaryTypes.js",
     "./sql/dialects/SQLite": "./lib/sql/dialects/SQLite.js",
     "./SQLWorker": "./lib/SQLWorker.js",
-    "./SchemaWorker": "./lib/SchemaWorker.js",
+    "./pluginPaths": "./lib/pluginPaths.js",
+    "./stackMetadata": "./lib/stackMetadata.js",
     "./PersonWorker": "./lib/PersonWorker.js",
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
     "./batchStallWatcher": "./lib/batchStallWatcher.js",
@@ -43,7 +44,7 @@
     "e9core": "./bin/e9core.js"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
     "test:id-large": "E9_LARGE_ID_TEST=1 node --test --test-concurrency=1 test/id.large.test.js"
   },
   "engines": {

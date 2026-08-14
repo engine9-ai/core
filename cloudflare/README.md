@@ -1,9 +1,10 @@
 # Engine9 Client on Cloudflare
 
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
-The D1 database *is* the engine9 database: the client creates the schema,
-installs the standard interfaces, and serves the people/upsert/read API from a
-Worker.
+The D1 database *is* the engine9 database: generate interface SQL with
+`e9core sqlite-ddl`, apply it as a wrangler migration, then serve the
+people/upsert/read API from a Worker. Core does not install plugins or
+run live schema deploy inside the Worker.
 
 ## What runs where
 
@@ -47,19 +48,14 @@ Worker.
    wrangler d1 migrations apply engine9 --remote
    ```
 
-   Alternatively, deploy directly from a Worker or script with a D1 binding:
-
-   ```js
-   import SchemaWorker from '@engine9/core/SchemaWorker';
-   const schema = new SchemaWorker({ accountId: 'my-account', d1: env.DB });
-   await schema.installStandard();
-   ```
+   Live plugin install and schema diff/deploy are `@engine9/server`
+   (`PluginWorker.install` / `SchemaWorker.deploy`), not the Worker runtime.
 
 4. **Create the plugin row and an API key**
 
-   Every people write is attributed to a plugin (your website). Insert a
-   plugin row once (`installStandard` already created interface plugin rows;
-   add one for the site) and create an API key:
+   Every people write is attributed to a plugin (your website). `sqlite-ddl`
+   creates the `plugin` table; insert a site plugin row (and interface rows if
+   you did not apply the full stack SQL), then create an API key:
 
    ```bash
    # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)

@@ -4,8 +4,13 @@
   See README.md for the client/server responsibility split.
 */
 export { default as SQLWorker } from './lib/SQLWorker.js';
-export { default as SchemaWorker, STANDARD_INSTALL_SCHEMAS } from './lib/SchemaWorker.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
+export {
+  loadPluginMetadata,
+  DEFAULT_STACK_PATH,
+  DEFAULT_GITHUB_INTERFACES_BASE,
+  githubStackJsonUrl
+} from './lib/stackMetadata.js';
 export {
   buildInboundTransforms,
   EXTRA_TRANSFORM_SLOTS,

@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
+import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 import {
   createSessionToken,
   verifySessionToken,
@@ -26,9 +27,9 @@ const UNID_B = '55555555-6666-8001-8777-888888888888';
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
 
     // First delegate login: creates a person and a person_id_delegate mapping
     const personId = await resolveDelegatePersonId({
@@ -220,9 +221,9 @@ test('exchangeDelegateCode posts the shared secret and returns the payload', asy
 test('createDelegateAuth: login -> person -> roles-as-segments -> signed session', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
     // Roles are segments
     const vipSegmentId = getVersionedUUID();
@@ -333,9 +334,9 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
 test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on session', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-legacy-roles');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
     const vipSegmentId = getVersionedUUID();
     await worker.insertArray({
@@ -376,9 +377,9 @@ test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on sess
 test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site-session-roles');
-    await worker.install({ type: 'local', id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
     const vipSegmentId = getVersionedUUID();
     const adminSegmentId = getVersionedUUID();

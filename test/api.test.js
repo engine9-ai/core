@@ -5,13 +5,14 @@ import { SqlApiKeyStore, API_KEY_SCHEMA, hashApiKey } from '../auth/index.js';
 import { BatchLogger } from '../logging/index.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
+import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 
 test('client API: auth, people POST, table upsert, segment-gated reads, modification log', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'website');
-    await worker.install({ type: 'local', id: pluginId, path: 'website', name: 'Website' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
     // auth store
     const keyStore = new SqlApiKeyStore({ worker });
@@ -138,9 +139,9 @@ test('client API: auth, people POST, table upsert, segment-gated reads, modifica
 test('client API: role scopes, default_role_id, and POST /auth/role', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installStandard();
+    await applyStandardStack(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-roles');
-    await worker.install({ type: 'local', id: pluginId, path: 'website', name: 'Website' });
+    await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
     const vipRoleId = getVersionedUUID();
     const adminRoleId = getVersionedUUID();

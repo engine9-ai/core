@@ -2,10 +2,6 @@
 /*
   e9core -- Engine9 core command line.
 
-    e9core install --db sqlite://./engine9.db
-        Create/update the Engine9 database from scratch: all standard
-        interface schemas plus the api_key table.
-
     e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
         Create an API key.  The plaintext key is printed once and only the
         hash is stored. --scopes is required (comma-separated). Use scope
@@ -16,19 +12,20 @@
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9core diff --db sqlite://./engine9.db [--schema @engine9/interfaces/person]
-        Show schema differences without applying them.
+    e9core sqlite-ddl [--schema @engine9/interfaces/person] [--stack ...]
+        Print the SQLite/D1 create statements for a schema (default stack
+        includes when omitted) -- useful for D1 migration files.
 
-    e9core sqlite-ddl [--schema @engine9/interfaces/person]
-        Print the SQLite/D1 create statements for a schema (all standard
-        schemas when omitted) -- useful for D1 migration files.
+  Schema deploy, plugin install, and live diff live on @engine9/server
+  (PluginWorker / SchemaWorker). This CLI does not mutate interface tables.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */
-import SchemaWorker from '../lib/SchemaWorker.js';
-import { STANDARD_INSTALL_SCHEMAS, SCHEMAS } from '../lib/schemas.js';
+import SQLWorker from '../lib/SQLWorker.js';
+import { SCHEMAS } from '../lib/schemas.js';
+import { loadPluginMetadata, DEFAULT_STACK_PATH } from '../lib/stackMetadata.js';
 import {
-  SqlApiKeyStore, API_KEY_SCHEMA, generateApiKey, hashApiKey,
+  SqlApiKeyStore, generateApiKey, hashApiKey,
   assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
@@ -57,24 +54,19 @@ function getWorker(args) {
     console.error('Provide --db <connection> or set ENGINE9_DATABASE_CONNECTION');
     process.exit(1);
   }
-  return new SchemaWorker({ accountId: args.account || 'client', auth: { database_connection: db } });
+  return new SQLWorker({ accountId: args.account || 'client', auth: { database_connection: db } });
+}
+
+async function standardPluginPaths(args) {
+  if (args.schema) return [args.schema];
+  const metadata = await loadPluginMetadata(args.stack || DEFAULT_STACK_PATH);
+  return metadata.include;
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const [command] = args._;
   switch (command) {
-    case 'install': {
-      const worker = getWorker(args);
-      try {
-        const r = await worker.installStandard();
-        await worker.deploy({ schema: API_KEY_SCHEMA });
-        console.log(JSON.stringify(r, null, 2));
-      } finally {
-        await worker.destroy();
-      }
-      break;
-    }
     case 'create-api-key': {
       if (!args.scopes || args.scopes === true) {
         console.error('create-api-key requires --scopes <list>');
@@ -116,23 +108,9 @@ async function main() {
       }
       break;
     }
-    case 'diff': {
-      const worker = getWorker(args);
-      try {
-        const schemas = args.schema ? [args.schema] : STANDARD_INSTALL_SCHEMAS;
-        for (const schema of schemas) {
-          const d = await worker.diff({ schema });
-          if (d.tables.length > 0) console.log(schema, JSON.stringify(d, null, 2));
-          else console.log(schema, 'no differences');
-        }
-      } finally {
-        await worker.destroy();
-      }
-      break;
-    }
     case 'sqlite-ddl': {
       // No database required: print DDL from the static schema registry
-      const names = args.schema ? [args.schema] : STANDARD_INSTALL_SCHEMAS;
+      const names = await standardPluginPaths(args);
       const defaultStandardColumn = { name: '', type: '', length: null, nullable: true, auto_increment: false };
       for (const name of names) {
         const schema = typeof name === 'object' ? name : SCHEMAS[name];
@@ -155,7 +133,7 @@ async function main() {
       break;
     }
     default:
-      console.log('Usage: e9core <install|create-api-key|diff|sqlite-ddl> [--db <connection>] [options]');
+      console.log('Usage: e9core <create-api-key|sqlite-ddl> [--db <connection>] [options]');
       process.exit(command ? 1 : 0);
   }
 }

@@ -14,7 +14,7 @@
   usable keys.
 
   Two stores are provided:
-    SqlApiKeyStore -- api_key table managed by the client's SchemaWorker
+    SqlApiKeyStore -- api_key table (created via SQLWorker.createTable or migrations)
     KVApiKeyStore  -- Cloudflare Workers KV namespace binding
 
   Policy helpers (resolveAuthContext, hasScope, ADMIN_SCOPE) live in ./policy.js.
@@ -167,18 +167,29 @@ function createResult(key, record) {
   };
 }
 
-/* SQL-backed store.  `worker` is any client SQLWorker/SchemaWorker. */
+/* SQL-backed store.  `worker` is any client SQLWorker. */
 export class SqlApiKeyStore {
   constructor({ worker }) {
     if (!worker) throw new Error('SqlApiKeyStore requires a worker');
     this.worker = worker;
   }
-  /* Creates the api_key table if needed (client SchemaWorker required) */
+  /* Creates the api_key table if needed (SQLWorker.createTable). */
   async deploy() {
-    if (typeof this.worker.deploy !== 'function') {
-      throw new Error('deploy() requires a SchemaWorker instance');
+    if (typeof this.worker.createTable !== 'function') {
+      throw new Error('deploy() requires a SQLWorker instance');
     }
-    return this.worker.deploy({ schema: API_KEY_SCHEMA });
+    try {
+      await this.worker.describe({ table: 'api_key' });
+      return { no_changes: true };
+    } catch (e) {
+      if (e?.code !== 'DOES_NOT_EXIST') throw e;
+    }
+    const table = API_KEY_SCHEMA.tables[0];
+    const columns = Object.entries(table.columns).map(([name, c]) => {
+      const col = typeof c === 'string' ? { type: c } : { ...c };
+      return { ...col, name };
+    });
+    return this.worker.createTable({ table: table.name, columns, indexes: table.indexes });
   }
   async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null, key: existingKey = null } = {}) {
     const normalizedScopes = assertValidKeyScopes(scopes);

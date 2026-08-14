@@ -8,9 +8,9 @@
 
   Vars:
     E9_ACCOUNT_ID  -- account identifier used in logs
-    E9_PLUGIN_ID   -- plugin id (UUID) used for people writes; create it once
-                      with `e9core install` + a plugin row, or set any
-                      stable UUID from getPluginUUID()
+    E9_PLUGIN_ID   -- plugin id (UUID) used for people writes; insert a
+                      plugin row after applying sqlite-ddl migrations, or set
+                      any stable UUID from getPluginUUID()
 */
 import PersonWorker from '@engine9/core/PersonWorker';
 import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';

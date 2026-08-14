@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
+import { applyStandardStack } from './helpers/applySchemas.js';
 import {
   assignPersonIds,
   bulkConvertPersonIdentifiers,
@@ -172,7 +173,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('creates per-type tables with hashed value + person_id', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       const store = createCompactSqlIdentifierStore(worker);
       await store.insertIdentifiers([
         { id_type: 'email_hash_v1', id_value: 'same', person_id: 1 },
@@ -217,7 +218,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('bulkConvert into compact SQL + assignPersonIds dedupes', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       await worker.insertArray({ table: 'person', array: [{ id: 1 }, { id: 2 }] });
       const { data: people } = await worker.query('select id from person order by id');
       const p1 = people[0].id;
@@ -254,7 +255,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('assignPersonIds on SQLite defaults to compact tables', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       const inputId = '00000000-0000-0000-0000-000000000013';
       const batch = await assignPersonIds({
         worker,
@@ -279,7 +280,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('person_identifier store still writes the full table', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       const store = createPersonIdentifierSqlStore(worker);
       const inputId = '00000000-0000-0000-0000-000000000012';
       await assignPersonIds({
@@ -306,7 +307,7 @@ describe('bulkConvertPersonIdentifiers + assignPersonIds with injectable store',
   test('bulk converts SQL person_identifier into a memory store', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       await worker.insertArray({
         table: 'person',
         array: [{ id: 1 }, { id: 2 }]
@@ -343,7 +344,7 @@ describe('bulkConvertPersonIdentifiers + assignPersonIds with injectable store',
   test('assignPersonIds uses injectable store for lookup and insert', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await worker.installStandard();
+      await applyStandardStack(worker);
       const store = createMemoryIdentifierStore();
       const inputId = '00000000-0000-0000-0000-000000000010';
 
