@@ -16,19 +16,20 @@
         Print the SQLite/D1 create statements for a schema (default stack
         includes when omitted) -- useful for D1 migration files.
 
-  Schema deploy, plugin install, and live diff live on @engine9/server
-  (PluginWorker / SchemaWorker). This CLI does not mutate interface tables.
+    e9core install-standard --db sqlite://./engine9.db [--stack ...]
+        Live-install a stack (default @engine9/interfaces/stacks/standard)
+        into the database: plugin rows + create/alter tables.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */
-import SQLWorker from '../lib/SQLWorker.js';
-import { SCHEMAS } from '../lib/schemas.js';
-import { loadPluginMetadata, DEFAULT_STACK_PATH } from '../lib/stackMetadata.js';
+import PluginWorker from '../lib/PluginWorker.js';
+import { loadStackMetadata, DEFAULT_STACK_PATH } from '../lib/stackMetadata.js';
 import {
   SqlApiKeyStore, generateApiKey, hashApiKey,
   assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
+import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
 
 function parseArgs(argv) {
@@ -48,18 +49,28 @@ function parseArgs(argv) {
   return args;
 }
 
-function getWorker(args) {
+function getPluginWorker(args) {
   const db = args.db || process.env.ENGINE9_DATABASE_CONNECTION;
   if (!db) {
     console.error('Provide --db <connection> or set ENGINE9_DATABASE_CONNECTION');
     process.exit(1);
   }
-  return new SQLWorker({ accountId: args.account || 'client', auth: { database_connection: db } });
+  return new PluginWorker({
+    accountId: args.account || 'client',
+    auth: { database_connection: db },
+    defaultStackPath: args.stack || undefined
+  });
+}
+
+async function loadSchemaModule(name) {
+  if (typeof name === 'object') return name;
+  const schemaMod = await import(`${name}/schema.js`);
+  return schemaMod.default;
 }
 
 async function standardPluginPaths(args) {
   if (args.schema) return [args.schema];
-  const metadata = await loadPluginMetadata(args.stack || DEFAULT_STACK_PATH);
+  const metadata = await loadStackMetadata(args.stack || DEFAULT_STACK_PATH);
   return metadata.include;
 }
 
@@ -92,7 +103,7 @@ async function main() {
         console.log(`INSERT INTO api_key (id, name, key_hash, scopes, default_role_id, active) VALUES ('${id}', '${esc(args.name || '')}', '${hashApiKey(key)}', '${esc(JSON.stringify(scopes))}', ${roleSql}, 1);`);
         break;
       }
-      const worker = getWorker(args);
+      const worker = getPluginWorker(args);
       try {
         const store = new SqlApiKeyStore({ worker });
         await store.deploy();
@@ -109,31 +120,39 @@ async function main() {
       break;
     }
     case 'sqlite-ddl': {
-      // No database required: print DDL from the static schema registry
       const names = await standardPluginPaths(args);
-      const defaultStandardColumn = { name: '', type: '', length: null, nullable: true, auto_increment: false };
       for (const name of names) {
-        const schema = typeof name === 'object' ? name : SCHEMAS[name];
+        const schema = await loadSchemaModule(name);
         if (!schema) {
           console.error(`Unknown schema ${name}`);
           process.exit(1);
         }
+        const standard = standardizeSchema(schema, sqliteDialect);
         console.log(`-- ${name}`);
-        for (const table of schema.tables || []) {
+        for (const table of standard.tables || []) {
           if (table.type === 'view') continue;
-          const columns = Object.entries(table.columns || {}).map(([key, c]) => {
-            const col = typeof c === 'string' ? { type: c } : c;
-            const typeDetails = sqliteDialect.getType(col.type) || {};
-            return { ...defaultStandardColumn, ...typeDetails, ...col, name: key };
+          const { statements } = buildCreateTable({
+            table: table.name,
+            columns: table.columns,
+            indexes: table.indexes || []
           });
-          const { statements } = buildCreateTable({ table: table.name, columns, indexes: table.indexes || [] });
           statements.forEach((s) => console.log(`${s};`));
         }
       }
       break;
     }
+    case 'install-standard': {
+      const worker = getPluginWorker(args);
+      try {
+        const result = await worker.installStandard({ path: args.stack || args.path });
+        console.log(JSON.stringify(result, null, 2));
+      } finally {
+        await worker.destroy();
+      }
+      break;
+    }
     default:
-      console.log('Usage: e9core <create-api-key|sqlite-ddl> [--db <connection>] [options]');
+      console.log('Usage: e9core <create-api-key|sqlite-ddl|install-standard> [--db <connection>] [options]');
       process.exit(command ? 1 : 0);
   }
 }

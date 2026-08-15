@@ -115,25 +115,29 @@ Policy helper: `resolveAuthContext` from `@engine9/core/auth` (or
 
 ## Responsibilities
 
-Core **uses** an Engine9 database and plugins; it does not install plugins or
-migrate live schemas. Those jobs live on `@engine9/server`
-(`SchemaWorker` = table DDL, `PluginWorker` = plugin lifecycle).
+Core **deploys** plugins and schemas against D1/SQLite (and MySQL via knex). Live
+`standardize` / `diff` / `deploy` / `install` / `installStandard` live on
+`SchemaWorker` and `PluginWorker` in this package. `@engine9/server` adds
+MySQL account config, FileWorker streams, EQL, ClickHouse, and native plugin
+compile via hooks (`registerCorePluginHooks`). Plugin shorthand (`e9email`,
+`transaction/profile`) needs a host-provided catalog — server supplies one from
+the filesystem; Cloudflare/D1 installs always pass full `@engine9/...` paths.
 
 The client is the minimum needed for a functioning website:
 
-- **Apply checked-in schema (migrations)** -- `e9core sqlite-ddl` prints CREATE
-  statements from the static interface registry (`SCHEMAS`) and an optional
-  `--stack`. Apply that SQL with wrangler / sqlite3 / mysql. Live
-  standardize/diff/deploy is server `SchemaWorker`.
-- **Use plugins at runtime** -- `PersonWorker` runs the inbound people pipeline
-  against already-deployed tables, resolving interface transforms from a static
-  registry (not `compilePlugin`). It reads `plugin` / `input` rows; it does not
-  insert them except in tests.
+- **Install standard packages** -- `PersonWorker.installStandard()` or
+  `e9core install-standard --db …` looks up stack include/exclude remotely
+  (local `@engine9/interfaces` package or GitHub `stack.json`) and deploys
+  plugin rows + tables. Pass `{ path }` for a different stack.
+- **Use plugins at runtime** -- `PersonWorker` runs the inbound people pipeline,
+  resolving interface transforms from a static registry (bundler friendly).
+  `installStandard()` creates plugin rows and tables.
 - **Authenticate with API keys** -- pluggable key stores (SQL table or
   Cloudflare KV), SHA-256 hashed at rest, scoped, revocable, rotatable
   (`@engine9/core/auth`, `e9core create-api-key`). `SqlApiKeyStore.deploy()`
-  will create the `api_key` table via `SQLWorker.createTable` if it is missing;
-  interface tables still come from migrations or the server.
+  will create the `api_key` table via `SQLWorker.createTable` if it is missing.
+  Interface tables come from `installStandard()` (or `e9core sqlite-ddl`
+  migrations).
 - **Authenticate end users via delegate** -- the shared cross-organization
   auth service. `createDelegateAuth` exchanges delegate's one-time handoff
   codes server-to-server under `DELEGATE_SHARED_SECRET`, maps the delegate
@@ -170,13 +174,11 @@ normalized by stripping `local$`. This module matches those forms for reads
 and migrations (include/exclude membership, dependency checks).
 
 It lives in core because it has no filesystem, compile, or database dependency.
-Server `PluginWorker` (install, stacks, semver deps) and core (`sqlite-ddl
---stack`, reading `plugin.path`) both need the same rules. Schema deploy and
-plugin install themselves stay on the server.
+`PluginWorker.install` and `sqlite-ddl --stack` both need the same rules.
 
 Everything else -- person exports, file processing (FileWorker), messaging,
-reports, EQL search, scheduled jobs, remote plugin execution, live schema
-deploy, and plugin install -- stays in the server (`@engine9/server`).
+reports, EQL search, scheduled jobs, remote plugin execution, ClickHouse --
+stays in the server (`@engine9/server`).
 
 ## Deployment targets
 
@@ -192,15 +194,13 @@ Cloudflare KV/D1 is not required for API key auth.
 ```bash
 npm install @engine9/core better-sqlite3 knex
 
-npx e9core sqlite-ddl > engine9.sql
-sqlite3 engine9.db < engine9.sql
+npx e9core install-standard --db sqlite://./engine9.db
 npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes admin
 npx e9core create-api-key --db sqlite://./engine9.db --name public --scopes public
 ```
 
-(`sqlite-ddl` does not need `--db`; it prints SQL. Apply the file to the database
-yourself. Live plugin install is `e9 plugin install` / `e9 plugin bootstrapAccount`
-on `@engine9/server`.)
+(`install-standard` creates tables and plugin rows in the database. `sqlite-ddl`
+prints SQL instead if you prefer wrangler migrations.)
 
 ```js
 import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from '@engine9/core';
@@ -315,15 +315,18 @@ Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
 ## Package layout
 
 - `lib/utilities.js` -- shared environment-agnostic utilities (canonical copy; the server re-exports these)
-- `lib/ids.js` -- portable UUID/timeline id helpers (same algorithms as `@engine9/input-tools`)
 - `lib/sql/shared.js` -- the canonical table upsert logic shared with the server
 - `lib/sql/dialects/` -- MySQL and SQLite dialects (SQLite serves D1)
 - `lib/sql/sqliteDDL.js` -- native SQLite/D1 DDL generation (no knex needed)
+- `lib/sql/standardizeSchema.js` -- dialect-aware column standardization used by SchemaWorker and `e9core sqlite-ddl`
 - `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2
+- `lib/SchemaWorker.js` -- standardize / diff / deploy interface schemas
+- `lib/PluginWorker.js` -- plugin rows, stack install, installStandard, bootstrapAccount
 - `lib/pluginPaths.js` -- shared plugin-path matcher (package identity; legacy `local$` alias)
-- `lib/stackMetadata.js` -- read stack include/exclude (local package or GitHub)
-- `lib/schemas.js` -- static interface schemas the pipeline knows how to use
-- `lib/PersonWorker.js` -- the inbound person pipeline (`processPeople`)
+- `lib/stackMetadata.js` -- `loadStackMetadata`: stack include/exclude (local package or GitHub)
+- `lib/PersonWorker.js` -- inbound person pipeline (`processPeople`) plus installStandard
+- `lib/peoplePipeline/` -- shared inbound transform chain used by processPeople and server loadPeople
+- `lib/id/` -- person identifier stores (compact SQLite, legacy MySQL, Durable Objects)
 - `auth/` -- API key creation/verification, SQL + KV stores, policy + HMAC helpers
 - `auth/delegate.js` -- delegate login via core handoff: code exchange, person
   resolution via id_type `delegate`, roles-as-segment-UUIDs, signed sessions
@@ -331,7 +334,7 @@ Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide
-- `bin/e9core.js` -- `create-api-key`, `sqlite-ddl`
+- `bin/e9core.js` -- `create-api-key`, `sqlite-ddl`, `install-standard`
 
 ## Tests
 

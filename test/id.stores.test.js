@@ -54,18 +54,26 @@ function createMemoryIdentifierStore() {
 describe('createDefaultIdentifierStore', () => {
   test('SQLite worker → compact SQL store', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
-    const store = await createDefaultIdentifierStore(worker);
-    assert.equal(store.kind, 'person_id_compact');
+    try {
+      const store = await createDefaultIdentifierStore(worker);
+      assert.equal(store.kind, 'person_id_compact');
+    } finally {
+      await worker.destroy();
+    }
   });
 
   test('Durable Object binding → DO store (over SQLite)', async () => {
     const worker = new PersonWorker({ accountId: 'acct-1', auth: { database_connection: 'sqlite://:memory:' } });
     worker.personIds = { idFromName: () => ({}), get: () => ({}) };
-    const store = await createDefaultIdentifierStore(worker);
-    assert.equal(typeof store.findByIdentifiers, 'function');
-    assert.equal(typeof store.insertIdentifiers, 'function');
-    assert.notEqual(store.kind, 'person_id_compact');
-    assert.notEqual(store.kind, 'person_identifier');
+    try {
+      const store = await createDefaultIdentifierStore(worker);
+      assert.equal(typeof store.findByIdentifiers, 'function');
+      assert.equal(typeof store.insertIdentifiers, 'function');
+      assert.notEqual(store.kind, 'person_id_compact');
+      assert.notEqual(store.kind, 'person_identifier');
+    } finally {
+      await worker.destroy();
+    }
   });
 
   test('MySQL-shaped worker → person_identifier store', async () => {
@@ -91,8 +99,12 @@ describe('createDefaultIdentifierStore', () => {
       auth: { database_connection: 'sqlite://:memory:' },
       identifier_store_kind: IDENTIFIER_STORE_KIND_LEGACY
     });
-    const store = await createDefaultIdentifierStore(worker);
-    assert.equal(store.kind, 'person_identifier');
+    try {
+      const store = await createDefaultIdentifierStore(worker);
+      assert.equal(store.kind, 'person_identifier');
+    } finally {
+      await worker.destroy();
+    }
   });
 
   test('createIdentifierStoreForKind consolidates dialect defaults', () => {

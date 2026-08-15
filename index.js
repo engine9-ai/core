@@ -4,9 +4,11 @@
   See README.md for the client/server responsibility split.
 */
 export { default as SQLWorker } from './lib/SQLWorker.js';
+export { default as SchemaWorker } from './lib/SchemaWorker.js';
+export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/PluginWorker.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export {
-  loadPluginMetadata,
+  loadStackMetadata,
   DEFAULT_STACK_PATH,
   DEFAULT_GITHUB_INTERFACES_BASE,
   githubStackJsonUrl
@@ -14,6 +16,7 @@ export {
 export {
   buildInboundTransforms,
   EXTRA_TRANSFORM_SLOTS,
+  extendWithPersonCustomUpserts,
   runPeopleTransformStep,
   runPeopleBatchPipeline,
   runLoadPeopleStream
@@ -23,7 +26,6 @@ export {
   createBatchStallWatcher,
   resolveBatchStallTimeoutMs
 } from './lib/batchStallWatcher.js';
-export { SCHEMAS } from './lib/schemas.js';
 export * as utilities from './lib/utilities.js';
 export {
   assignPersonIds,
@@ -48,6 +50,7 @@ export {
 } from './lib/id/index.js';
 export * as sqlShared from './lib/sql/shared.js';
 export { buildCreateTable, buildAlterTable } from './lib/sql/sqliteDDL.js';
+export { standardizeSchema, defaultStandardColumn } from './lib/sql/standardizeSchema.js';
 export {
   SqlApiKeyStore,
   KVApiKeyStore,

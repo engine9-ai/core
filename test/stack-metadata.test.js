@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  loadPluginMetadata,
+  loadStackMetadata,
   githubStackJsonUrl,
   DEFAULT_STACK_PATH,
   DEFAULT_GITHUB_INTERFACES_BASE
 } from '../lib/stackMetadata.js';
 import { include as standardInclude } from '@engine9/interfaces/stacks/standard/index.js';
 
-test('loadPluginMetadata uses local interfaces package when present', async () => {
-  const metadata = await loadPluginMetadata(DEFAULT_STACK_PATH, {
+test('loadStackMetadata uses local interfaces package when present', async () => {
+  const metadata = await loadStackMetadata(DEFAULT_STACK_PATH, {
     fetch: async () => {
       throw new Error('offline');
     }
@@ -20,10 +20,10 @@ test('loadPluginMetadata uses local interfaces package when present', async () =
   assert.deepEqual(metadata.exclude, []);
 });
 
-test('loadPluginMetadata uses GitHub JSON when the local package is missing', async () => {
+test('loadStackMetadata uses GitHub JSON when the local package is missing', async () => {
   const include = ['@engine9/interfaces/plugin', '@engine9/interfaces/person'];
   const pluginPath = '@engine9/interfaces/stacks/not-a-real-stack';
-  const metadata = await loadPluginMetadata(pluginPath, {
+  const metadata = await loadStackMetadata(pluginPath, {
     githubInterfacesBase: DEFAULT_GITHUB_INTERFACES_BASE,
     fetch: async (url) => {
       assert.equal(url, githubStackJsonUrl(pluginPath));

@@ -1,10 +1,10 @@
 # Engine9 Client on Cloudflare
 
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
-The D1 database *is* the engine9 database: generate interface SQL with
-`e9core sqlite-ddl`, apply it as a wrangler migration, then serve the
-people/upsert/read API from a Worker. Core does not install plugins or
-run live schema deploy inside the Worker.
+The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
+(or `e9core install-standard`) to deploy plugin rows and tables, or generate
+SQL with `e9core sqlite-ddl` and apply it as a wrangler migration. Then serve
+the people/upsert/read API from a Worker.
 
 ## What runs where
 
@@ -48,8 +48,8 @@ run live schema deploy inside the Worker.
    wrangler d1 migrations apply engine9 --remote
    ```
 
-   Live plugin install and schema diff/deploy are `@engine9/server`
-   (`PluginWorker.install` / `SchemaWorker.deploy`), not the Worker runtime.
+   Live plugin install: `PersonWorker.installStandard()` / `PluginWorker.install`
+   against D1, or apply `e9core sqlite-ddl` as a wrangler migration.
 
 4. **Create the plugin row and an API key**
 

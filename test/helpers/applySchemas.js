@@ -1,33 +1,13 @@
 /*
-  Test-only: create interface tables from the static SCHEMAS registry and
-  insert plugin rows. Live install/diff/deploy is @engine9/server PluginWorker.
+  Test helper: live-install interface schemas via PluginWorker.
+  Stack include/exclude is loaded at install time, not a static list.
 */
-import { SCHEMAS } from '../../lib/schemas.js';
-import { include as standardInclude } from '@engine9/interfaces/stacks/standard/index.js';
+import PluginWorker from '../../lib/PluginWorker.js';
 import { getVersionedUUID } from '../../lib/utilities.js';
 
-function columnsFromTable(table) {
-  const columns = table.columns || {};
-  return Object.keys(columns).map((key) => {
-    const col = columns[key];
-    const def = typeof col === 'string' ? { type: col } : { ...col };
-    return { ...def, name: Array.isArray(columns) ? def.name : key };
-  });
-}
-
-export async function createTablesFromSchema(worker, schema) {
-  if (!schema?.tables) throw new Error('schema.tables is required');
-  await worker.connect();
-  for (const table of schema.tables) {
-    if (table.type === 'view') continue;
-    const columns = columnsFromTable(table);
-    if (!columns.length) continue;
-    await worker.createTable({
-      table: table.name,
-      columns,
-      indexes: table.indexes || []
-    });
-  }
+function asPluginWorker(worker) {
+  if (typeof worker.installStandard === 'function' && typeof worker.install === 'function') return worker;
+  return new PluginWorker(worker);
 }
 
 export async function ensurePluginRow(worker, { id, path, name, tablePrefix = '' } = {}) {
@@ -53,19 +33,11 @@ export async function ensurePluginRow(worker, { id, path, name, tablePrefix = ''
 }
 
 export async function applyInterface(worker, pluginPath) {
-  const schema = SCHEMAS[pluginPath];
-  if (!schema) throw new Error(`Unknown schema ${pluginPath} -- not in the client schema registry`);
-  await createTablesFromSchema(worker, schema);
-  return ensurePluginRow(worker, { path: pluginPath });
+  const plugins = asPluginWorker(worker);
+  return plugins.install({ path: pluginPath, unique: true });
 }
 
 export async function applyStandardStack(worker) {
-  for (const pluginPath of standardInclude) {
-    await applyInterface(worker, pluginPath);
-  }
-  await ensurePluginRow(worker, {
-    path: '@engine9/interfaces/stacks/standard',
-    name: 'standard'
-  });
-  return { complete: true };
+  const plugins = asPluginWorker(worker);
+  return plugins.installStandard();
 }
