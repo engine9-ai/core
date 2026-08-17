@@ -3,8 +3,8 @@
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
 The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
 (or `e9core install-standard`) to deploy plugin rows and tables, or generate
-SQL with `e9core sqlite-ddl` and apply it as a wrangler migration. Then serve
-the people/upsert/read API from a Worker.
+SQL for one interface with `e9core sqlite-ddl --schema …` and apply it as a
+wrangler migration. Then serve the people/upsert/read API from a Worker.
 
 ## What runs where
 
@@ -39,23 +39,24 @@ the people/upsert/read API from a Worker.
 
 3. **Generate the schema migration**
 
-   The client generates native SQLite DDL from the standard Engine9 interface
-   schemas (person, person_email, person_phone, person_address, segment,
-   timeline, source_code, transaction, plugin):
+   Live plugin install deploys plugin rows and tables:
 
    ```bash
-   npx e9core sqlite-ddl > migrations/0001_engine9.sql
+   npx e9core install-standard --db sqlite://./engine9.db
+   ```
+
+   Or print SQLite DDL for one interface and apply it as a wrangler migration:
+
+   ```bash
+   npx e9core sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
    wrangler d1 migrations apply engine9 --remote
    ```
 
-   Live plugin install: `PersonWorker.installStandard()` / `PluginWorker.install`
-   against D1, or apply `e9core sqlite-ddl` as a wrangler migration.
-
 4. **Create the plugin row and an API key**
 
-   Every people write is attributed to a plugin (your website). `sqlite-ddl`
-   creates the `plugin` table; insert a site plugin row (and interface rows if
-   you did not apply the full stack SQL), then create an API key:
+   Every people write is attributed to a plugin (your website). Insert a site
+   plugin row after `install-standard` (or after applying plugin-table DDL),
+   then create an API key:
 
    ```bash
    # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)

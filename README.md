@@ -174,7 +174,7 @@ normalized by stripping `local$`. This module matches those forms for reads
 and migrations (include/exclude membership, dependency checks).
 
 It lives in core because it has no filesystem, compile, or database dependency.
-`PluginWorker.install` and `sqlite-ddl --stack` both need the same rules.
+`PluginWorker.install` needs the same rules.
 
 Everything else -- person exports, file processing (FileWorker), messaging,
 reports, EQL search, scheduled jobs, remote plugin execution, ClickHouse --
@@ -199,8 +199,9 @@ npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes adm
 npx e9core create-api-key --db sqlite://./engine9.db --name public --scopes public
 ```
 
-(`install-standard` creates tables and plugin rows in the database. `sqlite-ddl`
-prints SQL instead if you prefer wrangler migrations.)
+(`install-standard` creates tables and plugin rows in the database.
+`e9core sqlite-ddl --schema @engine9/interfaces/person` prints one schema's
+SQL if you prefer wrangler migrations.)
 
 ```js
 import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from '@engine9/core';

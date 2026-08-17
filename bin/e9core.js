@@ -12,9 +12,9 @@
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9core sqlite-ddl [--schema @engine9/interfaces/person] [--stack ...]
-        Print the SQLite/D1 create statements for a schema (default stack
-        includes when omitted) -- useful for D1 migration files.
+    e9core sqlite-ddl --schema @engine9/interfaces/person
+        Print the SQLite/D1 create statements for a schema -- useful for D1
+        migration files.
 
     e9core install-standard --db sqlite://./engine9.db [--stack ...]
         Live-install a stack (default @engine9/interfaces/stacks/standard)
@@ -23,7 +23,6 @@
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */
 import PluginWorker from '../lib/PluginWorker.js';
-import { loadStackMetadata, DEFAULT_STACK_PATH } from '../lib/stackMetadata.js';
 import {
   SqlApiKeyStore, generateApiKey, hashApiKey,
   assertValidKeyScopes,
@@ -66,12 +65,6 @@ async function loadSchemaModule(name) {
   if (typeof name === 'object') return name;
   const schemaMod = await import(`${name}/schema.js`);
   return schemaMod.default;
-}
-
-async function standardPluginPaths(args) {
-  if (args.schema) return [args.schema];
-  const metadata = await loadStackMetadata(args.stack || DEFAULT_STACK_PATH);
-  return metadata.include;
 }
 
 async function main() {
@@ -120,24 +113,31 @@ async function main() {
       break;
     }
     case 'sqlite-ddl': {
-      const names = await standardPluginPaths(args);
-      for (const name of names) {
-        const schema = await loadSchemaModule(name);
-        if (!schema) {
-          console.error(`Unknown schema ${name}`);
-          process.exit(1);
-        }
-        const standard = standardizeSchema(schema, sqliteDialect);
-        console.log(`-- ${name}`);
-        for (const table of standard.tables || []) {
-          if (table.type === 'view') continue;
-          const { statements } = buildCreateTable({
-            table: table.name,
-            columns: table.columns,
-            indexes: table.indexes || []
-          });
-          statements.forEach((s) => console.log(`${s};`));
-        }
+      if (args.stack) {
+        console.error('sqlite-ddl does not accept --stack; pass --schema <package>');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        process.exit(1);
+      }
+      if (!args.schema || args.schema === true) {
+        console.error('sqlite-ddl requires --schema <package>');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        process.exit(1);
+      }
+      const schema = await loadSchemaModule(args.schema);
+      if (!schema) {
+        console.error(`Unknown schema ${args.schema}`);
+        process.exit(1);
+      }
+      const standard = standardizeSchema(schema, sqliteDialect);
+      console.log(`-- ${args.schema}`);
+      for (const table of standard.tables || []) {
+        if (table.type === 'view') continue;
+        const { statements } = buildCreateTable({
+          table: table.name,
+          columns: table.columns,
+          indexes: table.indexes || []
+        });
+        statements.forEach((s) => console.log(`${s};`));
       }
       break;
     }
