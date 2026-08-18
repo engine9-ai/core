@@ -61,3 +61,27 @@ test('client SQLWorker: SQLite create/upsert/describe round trip', async () => {
     await sql.destroy();
   }
 });
+
+test('SQLWorker.createApiKey deploys api_key and returns plaintext once', async () => {
+  const sql = new SQLWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await assert.rejects(() => sql.createApiKey({ name: 'x' }), /scopes are required/);
+    const created = await sql.createApiKey({
+      name: 'partner-tasks',
+      scopes: 'tasks:read,tasks:schedule'
+    });
+    assert.ok(created.key.indexOf('e9key_') === 0);
+    assert.equal(created.name, 'partner-tasks');
+    assert.deepEqual(created.scopes, ['tasks:read', 'tasks:schedule']);
+    const { data } = await sql.query('select name, key_hash, scopes from api_key');
+    assert.equal(data.length, 1);
+    assert.equal(data[0].name, 'partner-tasks');
+    assert.notEqual(data[0].key_hash, created.key);
+    const again = await sql.createApiKey({ name: 'second', scopes: ['admin'] });
+    assert.ok(again.key.indexOf('e9key_') === 0);
+    const { data: rows } = await sql.query('select name from api_key order by name');
+    assert.equal(rows.length, 2);
+  } finally {
+    await sql.destroy();
+  }
+});

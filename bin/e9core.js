@@ -3,10 +3,12 @@
   e9core -- Engine9 core command line.
 
     e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
-        Create an API key.  The plaintext key is printed once and only the
-        hash is stored. --scopes is required (comma-separated). Use scope
-        "admin" for full access. Optional --default-role-id sets the default role
-        (segment UUID) when no role is specified on the request.
+        Core-only wrapper around SQLWorker.createApiKey (no accounts.d).
+        The plaintext key is printed once and only the hash is stored.
+        --scopes is required (comma-separated). Use scope "admin" for full
+        access. Optional --default-role-id sets the default role (segment UUID).
+        On an Engine9 server account use:
+          e9 sqlworker createApiKey -a <account_id> --name … --scopes …
 
     e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
@@ -24,7 +26,7 @@
 */
 import PluginWorker from '../lib/PluginWorker.js';
 import {
-  SqlApiKeyStore, generateApiKey, hashApiKey,
+  generateApiKey, hashApiKey,
   assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
@@ -98,9 +100,7 @@ async function main() {
       }
       const worker = getPluginWorker(args);
       try {
-        const store = new SqlApiKeyStore({ worker });
-        await store.deploy();
-        const created = await store.create({
+        const created = await worker.createApiKey({
           name: args.name || '',
           scopes,
           defaultRoleId

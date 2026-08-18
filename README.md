@@ -47,12 +47,23 @@ Request
 | `admin` | Any | All scopes (replaces the old `*` wildcard) |
 | `public` | Inbound / forms | Public ingest; keys use `e9publickey_` prefix |
 
-Keys **must** list scopes at creation (`e9core create-api-key --scopes …`). Empty
-scopes deny every check. Prefix follows scope: `public` → `e9publickey_…`, otherwise
-`e9key_…`. Constants: `SCOPES` from `@engine9/core`
-(`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`, `TASKS_READ`, `TASKS_SCHEDULE`, `ADMIN`, `PUBLIC`).
+Keys **must** list scopes at creation. Empty scopes deny every check. Prefix
+follows scope: `public` → `e9publickey_…`, otherwise `e9key_…`. Constants:
+`SCOPES` from `@engine9/core` (`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`,
+`TASKS_READ`, `TASKS_SCHEDULE`, `ADMIN`, `PUBLIC`).
 
-Example Task partner key:
+`SQLWorker.createApiKey` deploys the `api_key` table if needed
+(`SqlApiKeyStore.deploy`) then creates the hashed key. The plaintext value is
+returned once.
+
+On an Engine9 server account (`e9` + `accounts.d`):
+
+```bash
+e9 sqlworker createApiKey -a <account_id> \
+  --name partner-tasks --scopes tasks:read,tasks:schedule
+```
+
+On a core-only site (no `e9` / accounts.d):
 
 ```bash
 npx e9core create-api-key --db sqlite://./engine9.db \
@@ -65,6 +76,9 @@ Full-access key (site admin / bootstrap):
 npx e9core create-api-key --db sqlite://./engine9.db \
   --name site-admin --scopes admin
 ```
+
+Do not schedule `createApiKey` via MCP `task` — the plaintext key must not be
+stored in task run output.
 
 ### Layer 2 — Role (`role_id` = `segment_id`)
 
@@ -134,8 +148,9 @@ The client is the minimum needed for a functioning website:
   `installStandard()` creates plugin rows and tables.
 - **Authenticate with API keys** -- pluggable key stores (SQL table or
   Cloudflare KV), SHA-256 hashed at rest, scoped, revocable, rotatable
-  (`@engine9/core/auth`, `e9core create-api-key`). `SqlApiKeyStore.deploy()`
-  will create the `api_key` table via `SQLWorker.createTable` if it is missing.
+  (`@engine9/core/auth`, `SQLWorker.createApiKey` / `e9core create-api-key`).
+  `SqlApiKeyStore.deploy()` will create the `api_key` table via
+  `SQLWorker.createTable` if it is missing.
   Interface tables come from `installStandard()` (or `e9core sqlite-ddl`
   migrations).
 - **Authenticate end users via delegate** -- the shared cross-organization
@@ -320,7 +335,7 @@ Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
 - `lib/sql/dialects/` -- MySQL and SQLite dialects (SQLite serves D1)
 - `lib/sql/sqliteDDL.js` -- native SQLite/D1 DDL generation (no knex needed)
 - `lib/sql/standardizeSchema.js` -- dialect-aware column standardization used by SchemaWorker and `e9core sqlite-ddl`
-- `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2
+- `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2; `createApiKey` wraps `SqlApiKeyStore`
 - `lib/SchemaWorker.js` -- standardize / diff / deploy interface schemas
 - `lib/PluginWorker.js` -- plugin rows, stack install, installStandard, bootstrapAccount
 - `lib/pluginPaths.js` -- shared plugin-path matcher (package identity; legacy `local$` alias)
