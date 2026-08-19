@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { applyStandardStack } from './helpers/applySchemas.js';
+import { insertPersons } from '../lib/id/sqlStore.js';
+import { contiguousInsertIds } from '../lib/id/sqlHelpers.js';
 import {
   assignPersonIds,
   bulkConvertPersonIdentifiers,
@@ -116,6 +118,52 @@ describe('createDefaultIdentifierStore', () => {
       createIdentifierStoreForKind({ auth: { database_connection: 'mysql://u:p@h/db' } }, null).kind,
       'person_identifier'
     );
+  });
+});
+
+describe('insertPersons id assignment', () => {
+  test('contiguousInsertIds: SQLite last id vs MySQL first id', () => {
+    assert.deepEqual(contiguousInsertIds(103, 3, { returnedIdIsLast: true }), [101, 102, 103]);
+    assert.deepEqual(contiguousInsertIds(100, 3, { returnedIdIsLast: false }), [100, 101, 102]);
+  });
+
+  test('knex MySQL worker uses first insertId (not lastInsertRowid math)', async () => {
+    let inserted = null;
+    const worker = {
+      auth: { database_connection: 'mysql://user:pass@localhost/db' },
+      insertArray: async () => {
+        throw new Error('insertPersons should use knex when connect() returns knex');
+      },
+      query: async () => ({ data: [], records: 3 }),
+      connect: async () => ({
+        table: () => ({
+          insert: async (rows) => {
+            inserted = rows;
+            return [100];
+          }
+        }),
+        select: () => {}
+      })
+    };
+    const ids = await insertPersons(worker, [{}, {}, {}]);
+    assert.equal(inserted.length, 3);
+    assert.deepEqual(ids, [100, 101, 102]);
+  });
+
+  test('SQLite assigns contiguous person ids 1..n', async () => {
+    const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+    try {
+      await applyStandardStack(worker);
+      const ids = await insertPersons(worker, [{}, {}, {}]);
+      assert.deepEqual(ids, [1, 2, 3]);
+      const { data } = await worker.query('select id from person order by id');
+      assert.deepEqual(
+        data.map((r) => r.id),
+        [1, 2, 3]
+      );
+    } finally {
+      await worker.destroy();
+    }
   });
 });
 
