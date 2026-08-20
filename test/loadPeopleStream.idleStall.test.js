@@ -107,5 +107,73 @@ describe('runLoadPeopleStream idle stall', () => {
       liveMessages.some((m) => /sql batches [1-9]/.test(m)),
       `expected progress to report formed sql batches, got: ${JSON.stringify(liveMessages)}`
     );
+    assert.ok(
+      liveMessages.every((m) => !m.includes('stage: pipeline-configured')),
+      `expected no pipeline-configured zeros snapshot, got: ${JSON.stringify(liveMessages)}`
+    );
+  });
+
+  it('includes records_offset in progress so idFiles batches do not reset to zero', async () => {
+    const progressMessages = [];
+    let releaseTransform;
+    const transformStarted = new Promise((resolve) => {
+      releaseTransform = resolve;
+    });
+    let holdTransform;
+    const transformGate = new Promise((resolve) => {
+      holdTransform = resolve;
+    });
+
+    const sourceStream = Readable.from(
+      Array.from({ length: 200 }, (_, i) => ({ id: i })),
+      { objectMode: true }
+    );
+
+    const worker = {
+      resolveTransform: async (transformConfig) => ({
+        path: transformConfig.path || transformConfig,
+        bindings: {},
+        options: {},
+        transform: async ({ batch }) => {
+          releaseTransform();
+          await transformGate;
+          return { batch };
+        }
+      }),
+      resolveBindings: async () => ({ boundItems: {} })
+    };
+
+    const run = runLoadPeopleStream({
+      worker,
+      sourceStream,
+      transformConfigArray: [{ path: 'sql.tables.upsert' }],
+      pluginId: 'test-plugin',
+      opts: {
+        batchSize: 200,
+        batch_stall_timeout_ms: 0,
+        progress_heartbeat_ms: 30,
+        records_offset: 300
+      },
+      hooks: {
+        progress: (message) => progressMessages.push(message)
+      }
+    });
+
+    await transformStarted;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    holdTransform();
+    await run;
+
+    const liveMessages = progressMessages.filter((m) => !String(m).includes('(complete)'));
+    assert.ok(
+      liveMessages.some((m) => m.includes('300 records completed') && m.includes('500 sourced')),
+      `expected offset progress (300 completed / 500 sourced) during upsert, got: ${JSON.stringify(liveMessages)}`
+    );
+    assert.ok(
+      liveMessages.every((m) => !/^loadPeople: 0 records completed/.test(m)),
+      `expected no reset to zero records completed, got: ${JSON.stringify(liveMessages)}`
+    );
+    const complete = progressMessages.find((m) => String(m).includes('(complete)'));
+    assert.match(String(complete), /500 records completed/);
   });
 });
