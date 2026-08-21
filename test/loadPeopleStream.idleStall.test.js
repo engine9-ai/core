@@ -152,7 +152,8 @@ describe('runLoadPeopleStream idle stall', () => {
         batchSize: 200,
         batch_stall_timeout_ms: 0,
         progress_heartbeat_ms: 30,
-        records_offset: 300
+        records_offset: 300,
+        progress_started_at: Date.now() - 1000
       },
       hooks: {
         progress: (message) => progressMessages.push(message)
@@ -173,7 +174,87 @@ describe('runLoadPeopleStream idle stall', () => {
       liveMessages.every((m) => !/^loadPeople: 0 records completed/.test(m)),
       `expected no reset to zero records completed, got: ${JSON.stringify(liveMessages)}`
     );
+    assert.ok(
+      liveMessages.some((m) => {
+        const match = String(m).match(/300 records completed \(([0-9.]+)\/s\)/);
+        return match && Number(match[1]) > 0;
+      }),
+      `expected a non-zero completed rate across parquet batches, got: ${JSON.stringify(liveMessages)}`
+    );
     const complete = progressMessages.find((m) => String(m).includes('(complete)'));
     assert.match(String(complete), /500 records completed/);
+  });
+
+  it('keeps job-level records/s at a new parquet batch instead of 0/s and 100000/s', async () => {
+    const progressMessages = [];
+    let pushed = 0;
+    const sourceStream = new Readable({
+      objectMode: true,
+      read() {
+        while (pushed < 100) {
+          const ok = this.push({ id: pushed });
+          pushed += 1;
+          if (!ok) return;
+        }
+      }
+    });
+
+    const worker = {
+      resolveTransform: async (transformConfig) => ({
+        path: transformConfig.path || transformConfig,
+        bindings: {},
+        options: {},
+        transform: ({ batch }) => ({ batch })
+      }),
+      resolveBindings: async () => ({ boundItems: {} })
+    };
+
+    const jobStartedAt = Date.now() - 60_000;
+    const run = runLoadPeopleStream({
+      worker,
+      sourceStream,
+      transformConfigArray: [{ path: 'test.identity' }],
+      pluginId: 'test-plugin',
+      opts: {
+        batchSize: 300,
+        batch_stall_timeout_ms: 0,
+        progress_heartbeat_ms: 30,
+        records_offset: 6_066_000,
+        progress_started_at: jobStartedAt
+      },
+      hooks: {
+        progress: (message) => progressMessages.push(message)
+      }
+    });
+
+    try {
+      const deadline = Date.now() + 500;
+      let snapshot;
+      while (Date.now() < deadline) {
+        snapshot = progressMessages.find(
+          (m) => String(m).includes('6066000 records completed') && !String(m).includes('(complete)')
+        );
+        if (snapshot) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(snapshot, `expected offset completed count, got: ${JSON.stringify(progressMessages)}`);
+      assert.match(String(snapshot), /100 pending/);
+      assert.match(String(snapshot), /6066100 sourced/);
+      assert.match(String(snapshot), /stage: source-(record|batch-buffer)/);
+
+      const completedRate = Number(String(snapshot).match(/6066000 records completed \(([0-9.]+)\/s\)/)?.[1]);
+      const sourceRate = Number(String(snapshot).match(/6066100 sourced \(([0-9.]+)\/s\)/)?.[1]);
+      assert.ok(
+        completedRate > 1000 && completedRate < 500_000,
+        `expected job-level completed rate, got ${completedRate} from ${snapshot}`
+      );
+      assert.ok(
+        sourceRate > 1000 && sourceRate < 500_000 && sourceRate !== 100000,
+        `expected job-level source rate (not 0 or 100000.0 from a 1ms clamp), got ${sourceRate} from ${snapshot}`
+      );
+    } finally {
+      sourceStream.push(null);
+      await run;
+    }
   });
 });
