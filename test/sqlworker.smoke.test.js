@@ -62,6 +62,22 @@ test('client SQLWorker: SQLite create/upsert/describe round trip', async () => {
   }
 });
 
+test('SQLWorker describe maps compact person_id_* value column to id_u128', async () => {
+  const sql = new SQLWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await sql.query(
+      'create table if not exists person_id_email_hash_v1 (value blob not null primary key, person_id bigint not null)'
+    );
+    const desc = await sql.describe({ table: 'person_id_email_hash_v1' });
+    const value = desc.columns.find((c) => c.name === 'value');
+    assert.equal(value.type, 'id_u128');
+    assert.equal(value.column_type, 'blob');
+    assert.equal(value.nullable, false);
+  } finally {
+    await sql.destroy();
+  }
+});
+
 test('SQLWorker.createApiKey deploys api_key and returns plaintext once', async () => {
   const sql = new SQLWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
