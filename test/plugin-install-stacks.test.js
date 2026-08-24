@@ -14,10 +14,16 @@ test('limited-pii stack excludes person_email; standard stack is blocked after',
     const { tables } = await plugins.tables();
     assert.ok(tables.includes('person_hash_email'));
     assert.ok(!tables.includes('person_email'));
+    assert.ok(!tables.includes('person_phone'));
+    assert.ok(!tables.includes('person_address'));
 
     await assert.rejects(() => plugins.installStandard(), /excluded by/);
     await assert.rejects(
       () => plugins.install({ path: '@engine9/interfaces/person_email' }),
+      /excluded by @engine9\/interfaces\/stacks\/limited-pii/
+    );
+    await assert.rejects(
+      () => plugins.install({ path: '@engine9/interfaces/person_address' }),
       /excluded by @engine9\/interfaces\/stacks\/limited-pii/
     );
   } finally {
