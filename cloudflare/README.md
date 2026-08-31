@@ -1,4 +1,4 @@
-# Engine9 Client on Cloudflare
+# engine9 Client on Cloudflare
 
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
 The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
@@ -10,7 +10,7 @@ wrangler migration. Then serve the people/upsert/read API from a Worker.
 
 | Piece | Cloudflare service |
 | --- | --- |
-| Engine9 database | D1 (SQLite dialect) |
+| engine9 database | D1 (SQLite dialect) |
 | API endpoints | Worker (`api.handleFetch`) |
 | API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
 | Delegate id cache | KV `PERSON_ID_DELEGATE_KV` — edge cache of `person_id_delegate` (`@engine9/core/cloudflare/kv`) |
@@ -131,4 +131,4 @@ edge cache path. Always treat D1 as authoritative.
 Every successful write is committed to D1 first, then appended to the
 modification log. With the R2 sink, each request's batch is written as a
 timestamped `.jsonl` object under `modifications/` for long-term storage and
-downstream processing (e.g. periodic sync into the full Engine9 server).
+downstream processing (e.g. periodic sync into the full engine9 server).

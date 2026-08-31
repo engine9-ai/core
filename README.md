@@ -1,10 +1,10 @@
 # @engine9/core
 
-Slim Engine9 deployment for websites: a JavaScript library plus API endpoints
+Slim engine9 deployment for websites: a JavaScript library plus API endpoints
 that run alongside an existing site, using the same core code as the full
-Engine9 server (which depends on this package).
+engine9 server (which depends on this package).
 
-## Engine9 auth map (three layers)
+## engine9 auth map (three layers)
 
 Validation for client/site APIs and the server **Task API** lives in
 `@engine9/core` (layer 1 API keys). MCP on `@engine9/server` uses Firebase /
@@ -56,7 +56,7 @@ follows scope: `public` → `e9publickey_…`, otherwise `e9key_…`. Constants:
 (`SqlApiKeyStore.deploy`) then creates the hashed key. The plaintext value is
 returned once.
 
-On an Engine9 server account (`e9` + `accounts.d`):
+On an engine9 server account (`e9` + `accounts.d`):
 
 ```bash
 e9 sqlworker createApiKey -a <account_id> \
@@ -118,7 +118,7 @@ roles: {
 | Mechanism | Caller | Result |
 | --- | --- | --- |
 | **Core handoff** (`/handoff/*`) | Sites on `@engine9/core` | Identity → local `person_id` session |
-| **Session bridge** (`/oauth/session-bridge`) | Engine9 API hosts (`@engine9/server`) | Firebase credentials → `engine9_session` |
+| **Session bridge** (`/oauth/session-bridge`) | engine9 API hosts (`@engine9/server`) | Firebase credentials → `engine9_session` |
 
 Shared HMAC helpers: `@engine9/core/auth/hmac` (`parseSharedSecrets`,
 `signPayload`, `verifySignedPayload`). Server session-bridge keeps its own
@@ -262,7 +262,7 @@ Keys/roles with no scopes recorded have full access.
 
 ## Delegate authentication
 
-Delegate is Engine9's shared identity service. Sites built on `@engine9/core`
+Delegate is engine9's shared identity service. Sites built on `@engine9/core`
 never talk to the identity provider directly — they use **core handoff**:
 
 1. Browser goes to `{delegateUrl}/handoff/authorize?return_to=<your callback>`.
@@ -323,9 +323,9 @@ Delegate exposes **two** authorization mechanisms that share one secret
 | Mechanism | Use when | What you get |
 | --- | --- | --- |
 | **Core handoff** (`/handoff/*`) | Your site runs `@engine9/core` and needs a local `person_id` session | One-time code → server exchange → identity (`unid`, email, credential level). You run the person pipeline yourself. |
-| **Session bridge** (`/oauth/session-bridge`) | Your host is an Engine9 API server that already speaks Firebase sessions | Short-lived HMAC token carrying Firebase credentials so the API host can mint its own `engine9_session` cookie. |
+| **Session bridge** (`/oauth/session-bridge`) | Your host is an engine9 API server that already speaks Firebase sessions | Short-lived HMAC token carrying Firebase credentials so the API host can mint its own `engine9_session` cookie. |
 
-Core sites always use handoff. Session bridge is for Engine9 API hosts (e.g.
+Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 `data.engine9.io`); see the delegate service README for that flow.
 
 ## Package layout
