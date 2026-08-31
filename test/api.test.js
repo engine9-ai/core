@@ -167,7 +167,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
       fetchImpl: async () =>
         new Response(
           JSON.stringify({
-            unid: '11111111-2222-8001-8333-444444444444',
+            unid: '11111111-2222-8e91-8333-444444444444',
             firebaseUid: 'fb-1',
             email: 'role@example.com',
             auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false }

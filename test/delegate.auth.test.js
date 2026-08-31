@@ -21,8 +21,8 @@ import {
 } from '../auth/delegate.js';
 import { getVersionedUUID } from '../lib/utilities.js';
 
-const UNID_A = '11111111-2222-8001-8333-444444444444';
-const UNID_B = '55555555-6666-8001-8777-888888888888';
+const UNID_A = '11111111-2222-8e91-8333-444444444444';
+const UNID_B = '55555555-6666-8e91-8777-888888888888';
 
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -70,7 +70,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const other = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { unid: 'aaaaaaaa-bbbb-8001-8ccc-dddddddddddd', email: 'bob@example.com' }
+      delegateUser: { unid: 'aaaaaaaa-bbbb-8e91-8ccc-dddddddddddd', email: 'bob@example.com' }
     });
     assert.notEqual(other, personId);
   } finally {
