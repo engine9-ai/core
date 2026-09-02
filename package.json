@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "Engine9 core: plugin deployment, people pipeline, table upserts, segment-gated reads, and API-key authenticated endpoints (Cloudflare Workers/D1 tier-1, generic Node deployments supported).",
   "main": "index.js",
@@ -55,7 +55,7 @@
   "license": "ISC",
   "dependencies": {
     "@engine9/input-tools": "^2.3.16",
-    "@engine9/interfaces": "^1.7.0",
+    "@engine9/interfaces": "^1.7.1",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
