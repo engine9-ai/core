@@ -19,7 +19,10 @@ export {
   extendWithPersonCustomUpserts,
   runPeopleTransformStep,
   runPeopleBatchPipeline,
-  runLoadPeopleStream
+  runLoadPeopleStream,
+  entryTypeKeyFromRecord,
+  formatEntryTypeCounts,
+  tallyEntryType
 } from './lib/peoplePipeline/index.js';
 export {
   batchStallKey,
