@@ -134,5 +134,6 @@ describe('runLoadPeopleStream batch info logging', () => {
     assert.match(typeLogs.at(-1), /EMAIL_UNSUBSCRIBE=1/);
     assert.match(typeLogs.at(-1), /\(none\)=1/);
     assert.ok(!progressMessages.some((m) => m.includes('entry_types')));
+    assert.ok(progressMessages.some((m) => m.includes('people.parquet')));
   });
 });
