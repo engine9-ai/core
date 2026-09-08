@@ -54,7 +54,10 @@ follows scope: `public` → `e9publickey_…`, otherwise `e9key_…`. Constants:
 
 `SQLWorker.createApiKey` deploys the `api_key` table if needed
 (`SqlApiKeyStore.deploy`) then creates the hashed key. The plaintext value is
-returned once.
+returned once. On an engine9 server, prefer MCP `apiKey` (`catalog` / `list` /
+`get` / `create` / `update` / `revoke` / `rotate`) — it wraps this store so a
+management UI can issue and edit keys without putting plaintext in task output.
+See skills `e9-api-key`.
 
 On an engine9 server account (`e9` + `accounts.d`):
 
@@ -78,7 +81,7 @@ npx e9core create-api-key --db sqlite://./engine9.db \
 ```
 
 Do not schedule `createApiKey` via MCP `task` — the plaintext key must not be
-stored in task run output.
+stored in task run output. Use MCP `apiKey` instead.
 
 ### Layer 2 — Role (`role_id` = `segment_id`)
 
@@ -335,7 +338,7 @@ Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 - `lib/sql/dialects/` -- MySQL and SQLite dialects (SQLite serves D1)
 - `lib/sql/sqliteDDL.js` -- native SQLite/D1 DDL generation (no knex needed)
 - `lib/sql/standardizeSchema.js` -- dialect-aware column standardization used by SchemaWorker and `e9core sqlite-ddl`
-- `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2; `createApiKey` wraps `SqlApiKeyStore`
+- `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2; `createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey` / `rotateApiKey` wrap `SqlApiKeyStore`
 - `lib/SchemaWorker.js` -- standardize / diff / deploy interface schemas
 - `lib/PluginWorker.js` -- plugin rows, stack install, installStandard, bootstrapAccount
 - `lib/pluginPaths.js` -- shared plugin-path matcher (package identity; legacy `local$` alias)

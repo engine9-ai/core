@@ -81,6 +81,108 @@ export function hashApiKey(key) {
   return crypto.createHash('sha256').update(String(key), 'utf8').digest('hex');
 }
 
+const API_KEY_PUBLIC_COLUMNS =
+  'id,name,scopes,default_role_id,active,expires_at,created_at,modified_at';
+const API_KEY_LOOKUP_COLUMNS = `${API_KEY_PUBLIC_COLUMNS},key_hash`;
+
+/**
+ * Known scopes for management UIs and MCP `apiKey` `command: catalog`.
+ * Prefix is chosen at create/rotate time from scopes (`public` → e9publickey_).
+ */
+export const API_KEY_SCOPE_CATALOG = [
+  {
+    id: 'people:write',
+    constant: 'PEOPLE_WRITE',
+    surface: 'core',
+    allows: 'Inbound people pipeline',
+    route: 'POST /people'
+  },
+  {
+    id: 'tables:write',
+    constant: 'TABLES_WRITE',
+    surface: 'core',
+    allows: 'Allowlisted table upserts',
+    route: 'POST /upsert/:table'
+  },
+  {
+    id: 'data:read',
+    constant: 'DATA_READ',
+    surface: 'core',
+    allows: 'Configured reads',
+    route: 'GET /read/:name'
+  },
+  {
+    id: 'tasks:read',
+    constant: 'TASKS_READ',
+    surface: 'task',
+    allows: 'List and read flows and run status',
+    route: 'GET /flows, POST /task_runs/filter, GET /task_runs/:id'
+  },
+  {
+    id: 'tasks:schedule',
+    constant: 'TASKS_SCHEDULE',
+    surface: 'task',
+    allows: 'Schedule and control work',
+    route: 'POST /tasks/schedule, POST /flow_runs/, retry/pause/resume/stop'
+  },
+  {
+    id: ADMIN_SCOPE,
+    constant: 'ADMIN',
+    surface: 'any',
+    allows: 'All scopes (full access)',
+    route: null
+  },
+  {
+    id: PUBLIC_SCOPE,
+    constant: 'PUBLIC',
+    surface: 'inbound',
+    allows: 'Public ingest / forms',
+    route: null
+  }
+];
+
+function prefixForScopes(scopes = []) {
+  const list = Array.isArray(scopes) ? scopes : [];
+  return list.includes(PUBLIC_SCOPE) ? PUBLIC_API_KEY_PREFIX : API_KEY_PREFIX;
+}
+
+/** Static catalog for key-management UIs. Does not read the database. */
+export function getApiKeyCatalog() {
+  return {
+    prefixes: {
+      standard: API_KEY_PREFIX,
+      public: PUBLIC_API_KEY_PREFIX
+    },
+    default_prefix: API_KEY_PREFIX,
+    scopes: API_KEY_SCOPE_CATALOG.map((scope) => ({
+      ...scope,
+      prefix: prefixForScopes([scope.id])
+    })),
+    fields: [
+      { name: 'id', type: 'id_uuid', create: false, update: false },
+      { name: 'name', type: 'string', create: true, update: true },
+      {
+        name: 'scopes',
+        type: 'string[]',
+        create: true,
+        update: true,
+        required_on_create: true
+      },
+      { name: 'default_role_id', type: 'id_uuid', create: true, update: true, nullable: true },
+      { name: 'expires_at', type: 'datetime', create: true, update: true, nullable: true },
+      { name: 'active', type: 'boolean', create: false, update: true },
+      { name: 'created_at', type: 'datetime', create: false, update: false },
+      { name: 'modified_at', type: 'datetime', create: false, update: false }
+    ],
+    plaintext: {
+      shown_on: ['create', 'rotate'],
+      stored: false,
+      note: 'The plaintext key is returned once and never stored. Only the SHA-256 hash is retained.'
+    },
+    commands: ['catalog', 'list', 'get', 'create', 'update', 'revoke', 'rotate']
+  };
+}
+
 /* Extract a key from an incoming request-like object (Fetch API Request,
    Express req, or a plain string). Accepts either
    `Authorization: Bearer e9key_…|e9publickey_…` or `X-API-Key`. */
@@ -130,6 +232,16 @@ export const API_KEY_SCHEMA = {
   ]
 };
 
+function isActiveFlag(value) {
+  return value === true || value === 1 || value === '1';
+}
+
+function toStoredActive(value) {
+  if (value === true || value === 1 || value === '1' || value === 'true') return 1;
+  if (value === false || value === 0 || value === '0' || value === 'false') return 0;
+  throw new Error('active must be a boolean');
+}
+
 function normalizeRecord(record) {
   if (!record) return null;
   let scopes = record.scopes;
@@ -143,13 +255,30 @@ function normalizeRecord(record) {
   return {
     ...record,
     scopes: scopes || [],
-    default_role_id: record.default_role_id || null
+    default_role_id: record.default_role_id || null,
+    active: isActiveFlag(record.active)
+  };
+}
+
+/** Management view — never includes plaintext or key_hash. */
+export function toPublicApiKeyRecord(record) {
+  const n = normalizeRecord(record);
+  if (!n) return null;
+  return {
+    id: n.id,
+    name: n.name || '',
+    scopes: n.scopes,
+    default_role_id: n.default_role_id,
+    active: n.active,
+    expires_at: n.expires_at || null,
+    created_at: n.created_at || null,
+    modified_at: n.modified_at || null
   };
 }
 
 function checkUsable(record) {
   if (!record) return { valid: false, reason: 'unknown_key' };
-  const active = record.active === true || record.active === 1 || record.active === '1';
+  const active = isActiveFlag(record.active);
   if (!active) return { valid: false, reason: 'inactive_key' };
   if (record.expires_at && new Date(record.expires_at) < new Date()) {
     return { valid: false, reason: 'expired_key' };
@@ -212,20 +341,77 @@ export class SqlApiKeyStore {
   }
   async lookup(key) {
     const { data } = await this.worker.query({
-      sql: 'select id,name,key_hash,scopes,default_role_id,active,expires_at from api_key where key_hash=?',
+      sql: `select ${API_KEY_LOOKUP_COLUMNS} from api_key where key_hash=?`,
       values: [hashApiKey(key)]
     });
     return normalizeRecord(data[0]);
   }
   async lookupById(id) {
     const { data } = await this.worker.query({
-      sql: 'select id,name,key_hash,scopes,default_role_id,active,expires_at from api_key where id=?',
+      sql: `select ${API_KEY_LOOKUP_COLUMNS} from api_key where id=?`,
       values: [id]
     });
     return normalizeRecord(data[0]);
   }
+  /**
+   * List keys for a management UI. Never returns plaintext or key_hash.
+   * @param {{ includeInactive?: boolean, name?: string, id?: string, active?: boolean }} [opts]
+   */
+  async list({ includeInactive = true, name = null, id = null, active } = {}) {
+    const where = [];
+    const values = [];
+    if (id) {
+      where.push('id=?');
+      values.push(id);
+    }
+    if (name) {
+      where.push('name=?');
+      values.push(name);
+    }
+    if (active !== undefined) {
+      where.push('active=?');
+      values.push(toStoredActive(active));
+    } else if (!includeInactive) {
+      where.push('active=?');
+      values.push(1);
+    }
+    const sql = `select ${API_KEY_PUBLIC_COLUMNS} from api_key${
+      where.length ? ` where ${where.join(' and ')}` : ''
+    } order by name, id`;
+    const { data } = await this.worker.query({ sql, values });
+    return (data || []).map((row) => toPublicApiKeyRecord(row));
+  }
+  async get({ id } = {}) {
+    if (!id) throw new Error('SqlApiKeyStore.get requires id');
+    const record = await this.lookupById(id);
+    if (!record) throw new Error(`SqlApiKeyStore.get: unknown key id ${id}`);
+    return toPublicApiKeyRecord(record);
+  }
+  /**
+   * Update metadata / permissions without rotating the secret.
+   * Changing scopes does not change an existing key's prefix.
+   */
+  async update({ id, name, scopes, defaultRoleId, expiresAt, active } = {}) {
+    if (!id) throw new Error('SqlApiKeyStore.update requires id');
+    const old = await this.lookupById(id);
+    if (!old) throw new Error(`SqlApiKeyStore.update: unknown key id ${id}`);
+    const nextName = name !== undefined ? name : old.name;
+    const nextScopes = scopes !== undefined ? assertValidKeyScopes(scopes) : old.scopes;
+    const nextRole = defaultRoleId !== undefined ? defaultRoleId || null : old.default_role_id;
+    const nextExpires = expiresAt !== undefined ? expiresAt || null : old.expires_at || null;
+    const nextActive = active !== undefined ? toStoredActive(active) : toStoredActive(old.active);
+    await this.worker.query({
+      sql: 'update api_key set name=?, scopes=?, default_role_id=?, expires_at=?, active=? where id=?',
+      values: [nextName, JSON.stringify(nextScopes), nextRole, nextExpires, nextActive, id]
+    });
+    return this.get({ id });
+  }
   async revoke({ id }) {
-    return this.worker.query({ sql: 'update api_key set active=0 where id=?', values: [id] });
+    if (!id) throw new Error('SqlApiKeyStore.revoke requires id');
+    const old = await this.lookupById(id);
+    if (!old) throw new Error(`SqlApiKeyStore.revoke: unknown key id ${id}`);
+    await this.worker.query({ sql: 'update api_key set active=0 where id=?', values: [id] });
+    return toPublicApiKeyRecord({ ...old, active: false });
   }
   /**
    * Cycle a key: create a new key (copying metadata from the old when omitted),
@@ -317,6 +503,9 @@ export default {
   API_KEY_PREFIX,
   PUBLIC_API_KEY_PREFIX,
   API_KEY_SCHEMA,
+  API_KEY_SCOPE_CATALOG,
+  getApiKeyCatalog,
+  toPublicApiKeyRecord,
   generateApiKey,
   hashApiKey,
   extractApiKey,

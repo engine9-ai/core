@@ -97,6 +97,13 @@ test('SQLWorker.createApiKey deploys api_key and returns plaintext once', async 
     assert.ok(again.key.indexOf('e9key_') === 0);
     const { data: rows } = await sql.query('select name from api_key order by name');
     assert.equal(rows.length, 2);
+    const listed = await sql.listApiKeys();
+    assert.equal(listed.length, 2);
+    assert.equal(listed.every((row) => !('key_hash' in row) && !('key' in row)), true);
+    const updated = await sql.updateApiKey({ id: created.id, scopes: ['tasks:read'] });
+    assert.deepEqual(updated.scopes, ['tasks:read']);
+    const revoked = await sql.revokeApiKey({ id: created.id });
+    assert.equal(revoked.active, false);
   } finally {
     await sql.destroy();
   }
