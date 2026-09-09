@@ -9,7 +9,7 @@
   Vars:
     E9_ACCOUNT_ID  -- account identifier used in logs
     E9_PLUGIN_ID   -- plugin id (UUID) used for people writes; insert a
-                      plugin row after install-standard (or plugin-table DDL),
+                      plugin row after installStandard (or plugin-table DDL),
                       or set any stable UUID from getPluginUUID()
 */
 import PersonWorker from '@engine9/core/PersonWorker';

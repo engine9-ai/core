@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 /*
-  e9core -- Engine9 core command line.
+  e9 -- Engine9 core command line (core-only / self-hosted / D1 setups).
 
-    e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
+  On an Engine9 server checkout, `e9` is usually the WorkerRunner
+  (`e9 personworker installStandard -a <account>`). This binary is what
+  `npx e9` resolves to when `@engine9/core` is the package root (no server).
+
+    e9 create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
         Core-only wrapper around SQLWorker.createApiKey (no accounts.d).
         The plaintext key is printed once and only the hash is stored.
         --scopes is required (comma-separated). Use scope "admin" for full
@@ -10,20 +14,21 @@
         On an Engine9 server account use:
           e9 sqlworker createApiKey -a <account_id> --name … --scopes …
 
-    e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
+    e9 create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9core sqlite-ddl --schema @engine9/interfaces/person
+    e9 sqlite-ddl --schema @engine9/interfaces/person
         Print the SQLite/D1 create statements for a schema -- useful for D1
         migration files.
 
-    e9core install-standard --db sqlite://./engine9.db [--stack ...]
+    e9 installStandard --db sqlite://./engine9.db [--stack ...]
         Live-install a stack (default @engine9/interfaces/stacks/standard)
         into the database: plugin rows + create/alter tables.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */
+import path from 'node:path';
 import PluginWorker from '../lib/PluginWorker.js';
 import {
   generateApiKey, hashApiKey,
@@ -32,6 +37,11 @@ import {
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
+
+const invoked = path.basename(process.argv[1] || '');
+if (invoked === 'e9core' || invoked.startsWith('e9core.')) {
+  console.error('Warning: e9core is deprecated; use e9 instead.');
+}
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -71,7 +81,11 @@ async function loadSchemaModule(name) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const [command] = args._;
+  let [command] = args._;
+  if (command === 'install-standard') {
+    console.error('Warning: install-standard is renamed to installStandard.');
+    command = 'installStandard';
+  }
   switch (command) {
     case 'create-api-key': {
       if (!args.scopes || args.scopes === true) {
@@ -115,12 +129,12 @@ async function main() {
     case 'sqlite-ddl': {
       if (args.stack) {
         console.error('sqlite-ddl does not accept --stack; pass --schema <package>');
-        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9 sqlite-ddl --schema @engine9/interfaces/person');
         process.exit(1);
       }
       if (!args.schema || args.schema === true) {
         console.error('sqlite-ddl requires --schema <package>');
-        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9 sqlite-ddl --schema @engine9/interfaces/person');
         process.exit(1);
       }
       const schema = await loadSchemaModule(args.schema);
@@ -141,7 +155,7 @@ async function main() {
       }
       break;
     }
-    case 'install-standard': {
+    case 'installStandard': {
       const worker = getPluginWorker(args);
       try {
         const result = await worker.installStandard({ path: args.stack || args.path });
@@ -152,7 +166,7 @@ async function main() {
       break;
     }
     default:
-      console.log('Usage: e9core <create-api-key|sqlite-ddl|install-standard> [--db <connection>] [options]');
+      console.log('Usage: e9 <create-api-key|sqlite-ddl|installStandard> [--db <connection>] [options]');
       process.exit(command ? 1 : 0);
   }
 }

@@ -69,14 +69,14 @@ e9 sqlworker createApiKey -a <account_id> \
 On a core-only site (no `e9` / accounts.d):
 
 ```bash
-npx e9core create-api-key --db sqlite://./engine9.db \
+npx e9 create-api-key --db sqlite://./engine9.db \
   --name partner-tasks --scopes tasks:read,tasks:schedule
 ```
 
 Full-access key (site admin / bootstrap):
 
 ```bash
-npx e9core create-api-key --db sqlite://./engine9.db \
+npx e9 create-api-key --db sqlite://./engine9.db \
   --name site-admin --scopes admin
 ```
 
@@ -143,7 +143,7 @@ the filesystem; Cloudflare/D1 installs always pass full `@engine9/...` paths.
 The client is the minimum needed for a functioning website:
 
 - **Install standard packages** -- `PersonWorker.installStandard()` or
-  `e9core install-standard --db …` looks up stack include/exclude remotely
+  `e9 installStandard --db …` looks up stack include/exclude remotely
   (local `@engine9/interfaces` package or GitHub `stack.json`) and deploys
   plugin rows + tables. Pass `{ path }` for a different stack.
 - **Use plugins at runtime** -- `PersonWorker` runs the inbound people pipeline,
@@ -151,10 +151,10 @@ The client is the minimum needed for a functioning website:
   `installStandard()` creates plugin rows and tables.
 - **Authenticate with API keys** -- pluggable key stores (SQL table or
   Cloudflare KV), SHA-256 hashed at rest, scoped, revocable, rotatable
-  (`@engine9/core/auth`, `SQLWorker.createApiKey` / `e9core create-api-key`).
+  (`@engine9/core/auth`, `SQLWorker.createApiKey` / `e9 create-api-key`).
   `SqlApiKeyStore.deploy()` will create the `api_key` table via
   `SQLWorker.createTable` if it is missing.
-  Interface tables come from `installStandard()` (or `e9core sqlite-ddl`
+  Interface tables come from `installStandard()` (or `e9 sqlite-ddl`
   migrations).
 - **Authenticate end users via delegate** -- the shared cross-organization
   auth service. `createDelegateAuth` exchanges delegate's one-time handoff
@@ -212,13 +212,13 @@ Cloudflare KV/D1 is not required for API key auth.
 ```bash
 npm install @engine9/core better-sqlite3 knex
 
-npx e9core install-standard --db sqlite://./engine9.db
-npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes admin
-npx e9core create-api-key --db sqlite://./engine9.db --name public --scopes public
+npx e9 installStandard --db sqlite://./engine9.db
+npx e9 create-api-key --db sqlite://./engine9.db --name website --scopes admin
+npx e9 create-api-key --db sqlite://./engine9.db --name public --scopes public
 ```
 
-(`install-standard` creates tables and plugin rows in the database.
-`e9core sqlite-ddl --schema @engine9/interfaces/person` prints one schema's
+(`installStandard` creates tables and plugin rows in the database.
+`e9 sqlite-ddl --schema @engine9/interfaces/person` prints one schema's
 SQL if you prefer wrangler migrations.)
 
 ```js
@@ -337,7 +337,7 @@ Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 - `lib/sql/shared.js` -- the canonical table upsert logic shared with the server
 - `lib/sql/dialects/` -- MySQL and SQLite dialects (SQLite serves D1)
 - `lib/sql/sqliteDDL.js` -- native SQLite/D1 DDL generation (no knex needed)
-- `lib/sql/standardizeSchema.js` -- dialect-aware column standardization used by SchemaWorker and `e9core sqlite-ddl`
+- `lib/sql/standardizeSchema.js` -- dialect-aware column standardization used by SchemaWorker and `e9 sqlite-ddl`
 - `lib/SQLWorker.js` -- query/upsert/DDL primitives over D1, better-sqlite3, or mysql2; `createApiKey` / `listApiKeys` / `updateApiKey` / `revokeApiKey` / `rotateApiKey` wrap `SqlApiKeyStore`
 - `lib/SchemaWorker.js` -- standardize / diff / deploy interface schemas
 - `lib/PluginWorker.js` -- plugin rows, stack install, installStandard, bootstrapAccount
@@ -353,7 +353,7 @@ Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide
-- `bin/e9core.js` -- `create-api-key`, `sqlite-ddl`, `install-standard`
+- `bin/e9.js` -- `create-api-key`, `sqlite-ddl`, `installStandard`
 
 ## Tests
 

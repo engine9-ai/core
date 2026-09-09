@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "type": "module",
   "description": "Engine9 core: plugin deployment, people pipeline, table upserts, segment-gated reads, and API-key authenticated endpoints (Cloudflare Workers/D1 tier-1, generic Node deployments supported).",
   "main": "index.js",
@@ -42,7 +42,8 @@
     "./cloudflare/kv": "./cloudflare/kv/index.js"
   },
   "bin": {
-    "e9core": "./bin/e9core.js"
+    "e9": "./bin/e9.js",
+    "e9core": "./bin/e9.js"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",

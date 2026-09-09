@@ -15,8 +15,12 @@ export {
 } from './lib/stackMetadata.js';
 export {
   buildInboundTransforms,
+  describeInboundTransforms,
+  loadInboundPlugins,
+  normalizeInboundSpec,
   EXTRA_TRANSFORM_SLOTS,
-  extendWithPersonCustomUpserts,
+  INBOUND_SLOTS,
+  PLUGIN_INBOUND_SLOTS,
   runPeopleTransformStep,
   runPeopleBatchPipeline,
   runLoadPeopleStream,

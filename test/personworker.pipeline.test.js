@@ -82,32 +82,51 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
   }
 });
 
-test('person_hash is opt-in via extraTransforms slots after explicit install', async () => {
+test('person_hash is woven in once it is installed -- no extraTransforms needed', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await applyStandardStack(worker);
     const { tables: before } = await worker.tables();
     assert.ok(!before.includes('person_hash_email'), 'person_hash must not be in the standard stack');
+    const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
+
+    const hashId = '@engine9/interfaces/person_hash:transforms:extractContactHashes';
+    const hashUpsert = '@engine9/interfaces/person_hash:transforms:upsertPersonHash';
+    const beforeInstall = await worker.getInboundTransforms({ pluginId });
+    assert.ok(!beforeInstall.some((t) => t.path === hashId), 'not woven before install');
 
     const first = await applyInterface(worker, '@engine9/interfaces/person_hash');
     const second = await applyInterface(worker, '@engine9/interfaces/person_hash');
     assert.equal(second.id, first.id, 'person_hash plugin row is unique by path');
     const { data: pluginRows } = await worker.query(
-      "select id from plugin where path='@engine9/interfaces/person_hash'"
+      "select id, transforms from plugin where path='@engine9/interfaces/person_hash'"
     );
     assert.equal(pluginRows.length, 1);
+    assert.deepEqual(JSON.parse(pluginRows[0].transforms), {
+      inbound: { id: ['extractContactHashes'], upsert: ['upsertPersonHash'] }
+    });
 
-    const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');
-    await ensurePluginRow(worker, { id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
-    const prefix = '@engine9/interfaces';
+    const afterInstall = await worker.getInboundTransforms({ pluginId });
+    const hashSteps = afterInstall.filter((t) => t.path.startsWith('@engine9/interfaces/person_hash:'));
+    assert.deepEqual(
+      hashSteps.map((t) => [t.slot, t.source]),
+      [['id', 'woven'], ['upsert', 'woven']],
+      'installed plugin lands in its declared slots'
+    );
+
+    // Legacy callers that still pass the hash transforms explicitly must not double-run them
+    const withExtras = await worker.getInboundTransforms({
+      pluginId,
+      extraTransforms: { id: [{ path: hashId }], upsert: hashUpsert }
+    });
+    assert.equal(withExtras.filter((t) => t.path === hashId).length, 1, 'extra duplicating a woven path is dropped');
+    assert.equal(withExtras.filter((t) => t.path === hashUpsert).length, 1);
+
     const summary = await worker.processPeople({
       pluginId,
       remoteInputId: 'hash-signup',
       inputType: 'api',
-      extraTransforms: {
-        beforeIdentity: [{ path: `${prefix}/person_hash:transforms:id` }],
-        beforeUpsert: [{ path: `${prefix}/person_hash:transforms:upsert` }]
-      },
       batch: [
         { email: 'Hash@Example.com', phone: '202-555-0143' },
         { email_hash_v1: createHash('sha256').update('only-hash@example.com').digest('hex') }

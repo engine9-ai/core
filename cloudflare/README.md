@@ -2,8 +2,8 @@
 
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
 The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
-(or `e9core install-standard`) to deploy plugin rows and tables, or generate
-SQL for one interface with `e9core sqlite-ddl --schema …` and apply it as a
+(or `e9 installStandard`) to deploy plugin rows and tables, or generate
+SQL for one interface with `e9 sqlite-ddl --schema …` and apply it as a
 wrangler migration. Then serve the people/upsert/read API from a Worker.
 
 ## What runs where
@@ -42,25 +42,31 @@ wrangler migration. Then serve the people/upsert/read API from a Worker.
    Live plugin install deploys plugin rows and tables:
 
    ```bash
-   npx e9core install-standard --db sqlite://./engine9.db
+   npx e9 installStandard --db sqlite://./engine9.db
    ```
 
    Or print SQLite DDL for one interface and apply it as a wrangler migration:
 
    ```bash
-   npx e9core sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
+   npx e9 sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
    wrangler d1 migrations apply engine9 --remote
    ```
+
+   > The people pipeline is woven from the `plugin` rows. DDL-only migrations
+   > create tables but no rows, so `installStandard` (which writes the rows and
+   > their `transforms.inbound` snapshot) is required before people writes.
+   > Re-run it after upgrading `@engine9/interfaces` to refresh the snapshots;
+   > the Worker cannot import interface packages at runtime to fill them in.
 
 4. **Create the plugin row and an API key**
 
    Every people write is attributed to a plugin (your website). Insert a site
-   plugin row after `install-standard` (or after applying plugin-table DDL),
+   plugin row after `installStandard` (or after applying plugin-table DDL),
    then create an API key:
 
    ```bash
    # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)
-   npx e9core create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
+   npx e9 create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
    ```
 
    The plaintext key (`e9key_...`) is printed once; only its SHA-256 hash is
