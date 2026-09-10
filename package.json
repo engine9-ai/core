@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Engine9 core: plugin deployment, people pipeline, table upserts, segment-gated reads, and API-key authenticated endpoints (Cloudflare Workers/D1 tier-1, generic Node deployments supported).",
   "main": "index.js",
