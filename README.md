@@ -130,6 +130,33 @@ copy of the same `encoded.sig` pattern; do not unify identity models.
 Policy helper: `resolveAuthContext` from `@engine9/core/auth` (or
 `@engine9/core/auth/policy`).
 
+## The `e9` CLI (two binaries)
+
+Both `@engine9/core` and `@engine9/server` publish npm `bin.e9`, but they are
+**different programs** that happen to share the command name:
+
+| Package | `bin.e9` file | Role |
+| --- | --- | --- |
+| `@engine9/core` | [`bin/e9.js`](bin/e9.js) | Core helpers against a DB URL (`--db` / `ENGINE9_DATABASE_CONNECTION`). No `accounts.d`. Commands: `installStandard`, `create-api-key`, `sqlite-ddl`. |
+| `@engine9/server` | [`bin/e9`](../server/bin/e9) | WorkerRunner for account-scoped workers: `e9 personworker installStandard -a <account_id>`. Needs a server checkout. |
+
+Which one runs when you type `e9` / `npx e9`:
+
+- **Core-only site** (depends on `@engine9/core`, not the server package) → core `bin/e9.js`.
+- **Server checkout** (`@engine9/server` is the package root, or `$ENGINE9_SERVER_DIR/bin` is on `PATH`) → server `bin/e9` (WorkerRunner). That shadows core's binary when both are present.
+
+Examples:
+
+```bash
+# Core / self-hosted / D1 local file — core bin/e9.js
+npx e9 installStandard --db sqlite://./engine9.db
+npx e9 create-api-key --db sqlite://./engine9.db --name website --scopes admin
+
+# Server account — server bin/e9 (WorkerRunner)
+e9 personworker installStandard -a <account_id>
+e9 sqlworker createApiKey -a <account_id> --name website --scopes admin
+```
+
 ## Responsibilities
 
 Core **deploys** plugins and schemas against D1/SQLite (and MySQL via knex). Live
@@ -353,7 +380,7 @@ Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide
-- `bin/e9.js` -- `create-api-key`, `sqlite-ddl`, `installStandard`
+- `bin/e9.js` -- core `bin.e9`: `create-api-key`, `sqlite-ddl`, `installStandard` (not the server WorkerRunner; see [The e9 CLI](#the-e9-cli-two-binaries))
 
 ## Tests
 

@@ -42,8 +42,7 @@
     "./cloudflare/kv": "./cloudflare/kv/index.js"
   },
   "bin": {
-    "e9": "./bin/e9.js",
-    "e9core": "./bin/e9.js"
+    "e9": "./bin/e9.js"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",
@@ -55,7 +54,7 @@
   "author": "Engine9",
   "license": "ISC",
   "dependencies": {
-    "@engine9/input-tools": "^2.4.1",
+    "@engine9/input-tools": "^2.4.2",
     "@engine9/interfaces": "^1.7.2",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",

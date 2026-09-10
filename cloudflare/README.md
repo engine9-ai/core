@@ -2,9 +2,13 @@
 
 Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
 The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
-(or `e9 installStandard`) to deploy plugin rows and tables, or generate
-SQL for one interface with `e9 sqlite-ddl --schema …` and apply it as a
-wrangler migration. Then serve the people/upsert/read API from a Worker.
+(or core `e9 installStandard` from [`bin/e9.js`](../bin/e9.js)) to deploy plugin
+rows and tables, or generate SQL for one interface with `e9 sqlite-ddl --schema …`
+and apply it as a wrangler migration. Then serve the people/upsert/read API from
+a Worker.
+
+> These `e9 …` commands are **core** `bin.e9` (`@engine9/core`), not the server
+> WorkerRunner. See [The e9 CLI (two binaries)](../README.md#the-e9-cli-two-binaries).
 
 ## What runs where
 

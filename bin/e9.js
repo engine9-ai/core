@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /*
-  e9 -- Engine9 core command line (core-only / self-hosted / D1 setups).
+  @engine9/core bin.e9 → bin/e9.js
 
-  On an Engine9 server checkout, `e9` is usually the WorkerRunner
-  (`e9 personworker installStandard -a <account>`). This binary is what
-  `npx e9` resolves to when `@engine9/core` is the package root (no server).
+  Core-only helpers against a database connection (--db / ENGINE9_DATABASE_CONNECTION).
+  No accounts.d, no WorkerRunner.
+
+  This is not the server CLI. @engine9/server also publishes bin.e9, but that
+  points at server/bin/e9 (WorkerRunner: `e9 personworker installStandard -a …`).
+  See core/README.md "The e9 CLI (two binaries)" and server/README.md.
 
     e9 create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
-        Core-only wrapper around SQLWorker.createApiKey (no accounts.d).
+        Core-only wrapper around SQLWorker.createApiKey.
         The plaintext key is printed once and only the hash is stored.
         --scopes is required (comma-separated). Use scope "admin" for full
         access. Optional --default-role-id sets the default role (segment UUID).
@@ -28,7 +31,6 @@
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */
-import path from 'node:path';
 import PluginWorker from '../lib/PluginWorker.js';
 import {
   generateApiKey, hashApiKey,
@@ -37,11 +39,6 @@ import {
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
-
-const invoked = path.basename(process.argv[1] || '');
-if (invoked === 'e9core' || invoked.startsWith('e9core.')) {
-  console.error('Warning: e9core is deprecated; use e9 instead.');
-}
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -81,11 +78,7 @@ async function loadSchemaModule(name) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  let [command] = args._;
-  if (command === 'install-standard') {
-    console.error('Warning: install-standard is renamed to installStandard.');
-    command = 'installStandard';
-  }
+  const [command] = args._;
   switch (command) {
     case 'create-api-key': {
       if (!args.scopes || args.scopes === true) {
