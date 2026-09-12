@@ -1,10 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isMariaDb, supportsColumnLevelCheckConstraints, dialectToStandard, getType } from '../lib/sql/dialects/MySQL.js';
+import {
+  isMariaDb,
+  supportsColumnLevelCheckConstraints,
+  dialectToStandard,
+  getType,
+  charset,
+  collation,
+  getTableCharacterSetSpecification,
+  applyTableCharacterSet
+} from '../lib/sql/dialects/MySQL.js';
 import {
   dialectToStandard as sqliteToStandard,
-  getType as sqliteGetType
+  getType as sqliteGetType,
+  applyTableCharacterSet as sqliteApplyTableCharacterSet,
+  getTableCharacterSetSpecification as sqliteGetTableCharacterSetSpecification
 } from '../lib/sql/dialects/SQLite.js';
+
+test('SQLite applyTableCharacterSet is a no-op', () => {
+  assert.equal(sqliteGetTableCharacterSetSpecification(), '');
+  sqliteApplyTableCharacterSet({
+    charset() {
+      throw new Error('SQLite must not set charset');
+    },
+    collate() {
+      throw new Error('SQLite must not set collation');
+    }
+  });
+});
 
 test('isMariaDb detects MariaDB version() strings only', () => {
   assert.equal(isMariaDb('10.11.8-MariaDB-1:10.11.8+maria~deb12'), true);
@@ -16,6 +39,33 @@ test('isMariaDb detects MariaDB version() strings only', () => {
   assert.equal(isMariaDb('8.0.42-33'), false); // Percona
   assert.equal(isMariaDb(undefined), false);
   assert.equal(isMariaDb(''), false);
+});
+
+test('warehouse charset is utf8mb4_general_ci for every MySQL-family variant', () => {
+  assert.equal(charset, 'utf8mb4');
+  assert.equal(collation, 'utf8mb4_general_ci');
+  assert.equal(getTableCharacterSetSpecification(), 'CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci');
+  const calls = [];
+  applyTableCharacterSet({
+    charset: (v) => calls.push(['charset', v]),
+    collate: (v) => calls.push(['collate', v])
+  });
+  assert.deepEqual(calls, [
+    ['charset', 'utf8mb4'],
+    ['collate', 'utf8mb4_general_ci']
+  ]);
+  const override = [];
+  applyTableCharacterSet(
+    {
+      charset: (v) => override.push(['charset', v]),
+      collate: (v) => override.push(['collate', v])
+    },
+    { charset: 'utf8mb4', collation: 'utf8mb4_bin' }
+  );
+  assert.deepEqual(override, [
+    ['charset', 'utf8mb4'],
+    ['collate', 'utf8mb4_bin']
+  ]);
 });
 
 test('supportsColumnLevelCheckConstraints is MariaDB-only (MySQL 8 has no LEVEL column)', () => {
