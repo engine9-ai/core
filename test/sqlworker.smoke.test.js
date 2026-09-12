@@ -78,6 +78,37 @@ test('SQLWorker describe maps compact person_id_* value column to id_u128', asyn
   }
 });
 
+test('SQLWorker createTable/alterTable keep index names within identifier limit', async () => {
+  const sql = new SQLWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  const table = 'model_authentic_origin_transaction_stats_by_date';
+  try {
+    await sql.createTable({
+      table,
+      columns: [
+        { name: 'source_code_id', type: 'bigint' },
+        { name: 'date', type: 'date' },
+        { name: 'revenue', type: 'currency' }
+      ],
+      indexes: [
+        { columns: ['date', 'source_code_id'], primary: true },
+        { columns: ['source_code_id'] }
+      ]
+    });
+    await sql.alterTable({
+      table,
+      indexes: [{ columns: ['date'] }]
+    });
+    const idx = await sql.indexes({ table });
+    for (const i of idx) {
+      assert.ok(i.index_name.length <= 64, i.index_name);
+    }
+    assert.ok(idx.find((i) => i.columns.join(',') === 'source_code_id'));
+    assert.ok(idx.find((i) => i.columns.join(',') === 'date'));
+  } finally {
+    await sql.destroy();
+  }
+});
+
 test('SQLWorker.createApiKey deploys api_key and returns plaintext once', async () => {
   const sql = new SQLWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {

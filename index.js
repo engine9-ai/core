@@ -57,6 +57,7 @@ export {
 } from './lib/id/index.js';
 export * as sqlShared from './lib/sql/shared.js';
 export { buildCreateTable, buildAlterTable } from './lib/sql/sqliteDDL.js';
+export { sqlIndexName, SQL_IDENTIFIER_MAX_LENGTH } from './lib/sql/sqlIndexName.js';
 export { standardizeSchema, defaultStandardColumn } from './lib/sql/standardizeSchema.js';
 export {
   SqlApiKeyStore,

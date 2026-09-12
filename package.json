@@ -11,6 +11,7 @@
     "./id/PersonIdentifierDO": "./lib/id/PersonIdentifierDO.js",
     "./sql/shared": "./lib/sql/shared.js",
     "./sql/sqliteDDL": "./lib/sql/sqliteDDL.js",
+    "./sql/sqlIndexName": "./lib/sql/sqlIndexName.js",
     "./sql/standardizeSchema": "./lib/sql/standardizeSchema.js",
     "./sql/dialects/MySQL": "./lib/sql/dialects/MySQL.js",
     "./sql/dialects/MySQLBinaryTypes": "./lib/sql/dialects/MySQLBinaryTypes.js",
