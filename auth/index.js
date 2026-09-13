@@ -220,7 +220,7 @@ export const API_KEY_SCHEMA = {
         // Default role_id (segment UUID) when no role is specified on the request/session
         default_role_id: { type: 'id_uuid', nullable: true },
         active: { type: 'boolean', nullable: false, default_value: true },
-        expires_at: 'datetime',
+        expires_at: { type: 'datetime', nullable: true },
         created_at: 'created_at',
         modified_at: 'modified_at'
       },
