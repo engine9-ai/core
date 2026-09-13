@@ -7,8 +7,10 @@ engine9 server (which depends on this package).
 ## engine9 auth map (three layers)
 
 Validation for client/site APIs and the server **Task API** lives in
-`@engine9/core` (layer 1 API keys). MCP on `@engine9/server` uses Firebase /
-session / `localdev` instead — do not mix those credentials with Task routes.
+`@engine9/core` (layer 1 API keys). Keys are the generic auth for **non-session**
+callers (signup/payment forms, inbound, tasks, and other HTTP APIs); **scopes**
+decide access. MCP on `@engine9/server` uses Firebase / session / `localdev`
+instead — do not mix those credentials with key-authenticated routes.
 
 ```
 Request
