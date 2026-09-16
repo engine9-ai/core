@@ -130,7 +130,7 @@ test('guards: no inbound plugins installed fails loudly', async () => {
   const worker = newWorker();
   try {
     await worker.deploy({ schema: `${I}/plugin` });
-    await ensurePluginRow(worker, { path: 'some-bot', name: 'Bot only' });
+    await ensurePluginRow(worker, { path: 'some-plugin', name: 'Plugin only' });
     await assert.rejects(worker.getInboundTransforms({ doNotUpsert: true }), /No inbound people plugins are installed/);
   } finally {
     await worker.destroy();
