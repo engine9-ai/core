@@ -6,6 +6,16 @@
 export { default as SQLWorker } from './lib/SQLWorker.js';
 export { default as SchemaWorker } from './lib/SchemaWorker.js';
 export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/PluginWorker.js';
+export {
+  attachCompiledPluginSettings,
+  listAccountPluginSettings,
+  normalizePluginSettings,
+  publicSettingDefinition,
+  settingDefaultValue,
+  settingFormFromDefs,
+  updateAccountPluginSetting,
+  validateSettingValue
+} from './lib/pluginSettings.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export {
   loadStackMetadata,

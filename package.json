@@ -19,6 +19,7 @@
     "./SQLWorker": "./lib/SQLWorker.js",
     "./SchemaWorker": "./lib/SchemaWorker.js",
     "./PluginWorker": "./lib/PluginWorker.js",
+    "./pluginSettings": "./lib/pluginSettings.js",
     "./pluginPaths": "./lib/pluginPaths.js",
     "./stackMetadata": "./lib/stackMetadata.js",
     "./PersonWorker": "./lib/PersonWorker.js",
