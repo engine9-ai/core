@@ -95,8 +95,9 @@ roles: {
   '<segment-uuid>': {
     name: 'Admin',          // public display name
     scopes: ['admin'],      // or a concrete list: people:write, data:read, …
-    requiredAuth: {         // optional Delegate gate (stub-enforced)
-      twoFactor: false
+    requiredAuth: {         // optional Delegate gate (enforced)
+      twoFactor: false,
+      minLevel: 2
     }
   }
 }
@@ -112,17 +113,20 @@ roles: {
   and HTTP `POST /auth/role` on `createApi` (requires `delegateAuth`).
 - Task API routes enforce **key scopes only** today (no role intersection).
 
-### Layer 3 — Delegate credential level
+### Layer 3 — Delegate Identity Level
 
-- After core handoff login, the session carries `auth: { signInProvider,
-  twoFactor, signInSecondFactor, authTime }` from Delegate.
-- Roles may declare `requiredAuth`; `resolveAuthContext` exposes
-  `authSatisfied` (enforced cheaply on API routes when a role is active).
-- **Two Delegate mechanisms** (same `DELEGATE_SHARED_SECRET`, do not mix):
+- After verifying an Identity Token (or legacy handoff), the Core Session
+  carries `level`, `profileId`, and `auth: { signInProvider, twoFactor,
+  signInSecondFactor, authTime }` from Delegate.
+- Roles may declare `requiredAuth` (`minLevel`, `twoFactor`);
+  `resolveAuthContext` exposes `authSatisfied` and **enforces** it on API
+  routes when a role is active (`meetsRequiredAuth`).
+- **Two Delegate mechanisms** (do not mix):
 
 | Mechanism | Caller | Result |
 | --- | --- | --- |
-| **Core handoff** (`/handoff/*`) | Sites on `@engine9/core` | Identity → local `person_id` session |
+| **Identity Token (JWT)** | Sites on `@engine9/core` | ES256 JWT → `unid` / `person_id` (no shared secret) |
+| **Legacy handoff** (`/handoff/*`) | Existing Sites | Code/bridge + `DELEGATE_SHARED_SECRET` → same person + session |
 | **Session bridge** (`/oauth/session-bridge`) | engine9 API hosts (`@engine9/server`) | Firebase credentials → `engine9_session` |
 
 Shared HMAC helpers: `@engine9/core/auth/hmac` (`parseSharedSecrets`,
@@ -130,7 +134,7 @@ Shared HMAC helpers: `@engine9/core/auth/hmac` (`parseSharedSecrets`,
 copy of the same `encoded.sig` pattern; do not unify identity models.
 
 Policy helper: `resolveAuthContext` from `@engine9/core/auth` (or
-`@engine9/core/auth/policy`).
+`@engine9/core/auth/policy`). See [auth/README.md](auth/README.md).
 
 ## The `e9` CLI (two binaries)
 
@@ -185,15 +189,13 @@ The client is the minimum needed for a functioning website:
   `SQLWorker.createTable` if it is missing.
   Interface tables come from `installStandard()` (or `e9 sqlite-ddl`
   migrations).
-- **Authenticate end users via delegate** -- the shared cross-organization
-  auth service. `createDelegateAuth` exchanges delegate's one-time handoff
-  codes server-to-server under `DELEGATE_SHARED_SECRET`, maps the delegate
-  unid into a `person_id` through the normal identifier pipeline (id_type
-  `delegate` → `person_id_delegate` on SQLite/D1), derives roles from
-  `person_segment` membership (role_id = segment UUID), and signs local
-  sessions carrying the reported credential level
-  (`@engine9/core/auth/delegate`). See [Delegate authentication](#delegate-authentication)
-  below.
+- **Authenticate Users via delegate** -- the shared cross-organization
+  identity service. `createDelegateAuth` verifies delegate-signed Identity
+  Tokens (JWT, ES256, JWKS; no shared secret), maps `unid` into a
+  `person_id` (id_type `delegate` → `person_id_delegate` on SQLite/D1),
+  derives roles from `person_segment` (role_id = segment UUID), and may mint
+  a local HMAC Core Session. Legacy handoff codes/bridges still work when
+  `handoffSecret` is set. See [Delegate authentication](#delegate-authentication).
 - **Create/update single people in real time** -- the exact `loadPeople`
   inbound pipeline (normalize, extract identifiers, resolve input, assign
   person ids with deduplication, resolve source codes, upsert person/email/
@@ -283,82 +285,127 @@ app.use('/api', express.json(), api.expressHandler());
 | `POST /people` | run `{ people: [...] }` through the inbound person pipeline and upsert | `people:write` |
 | `POST /upsert/:table` | upsert `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
 | `GET /read/:name` | read a configured table, optionally gated by `person_segment` (`?person_id=`) | `data:read` |
-| `POST /auth/role` | change role (`{ role_id, person_id?, exclusive?, session_token? }`); requires `delegateAuth` | API key |
+| `POST /auth/login` | exchange `{ delegate_token \| delegate_code \| delegate_bridge, return_to? }` → `{ session, token }` | API key |
+| `GET /auth/me` | current User (`personId`, `roles`, `level`, `unid`, `profileId`, `profile?`, `auth`) | API key + session or JWT |
+| `POST /auth/logout` | `{ loggedOut: true }` (cookie clear is the host's job) | API key |
+| `POST /auth/role` | change role (`{ role_id, person_id?, exclusive?, session_token? }`); session/JWT must match `person_id` unless `admin` | API key |
 
 Server Task API (same keys; see `@engine9/server` Task docs): `tasks:read`,
 `tasks:schedule`.
 
 Keys are passed as `Authorization: Bearer e9key_...` or `X-API-Key: e9key_...`.
 Effective scopes come from the active role and API key (see auth map above).
-Keys/roles with no scopes recorded have full access.
+Empty key scopes **deny** every check (keys must be created with an explicit
+list). `admin` grants every scope. Roles with empty scopes do not constrain
+the key.
+
+A Core Session is an HMAC token the **host** delivers (`Cookie` via
+`createSessionCookieHeaders`, or `X-Engine9-Session`). An Identity Token JWT
+may be sent as `Authorization: Bearer` (three segments, not `e9key_` /
+`e9publickey_`) together with `X-API-Key`.
 
 ## Delegate authentication
 
-Delegate is engine9's shared identity service. Sites built on `@engine9/core`
-never talk to the identity provider directly — they use **core handoff**:
+Delegate is engine9's shared identity service. A **User** (the person on
+delegate) presents a **Profile** to a **Site** (this deployment's origin).
+Sites on `@engine9/core` verify a delegate-signed **Identity Token** (JWT).
+They never talk to the identity provider directly. This is not OIDC.
 
-1. Browser goes to `{delegateUrl}/handoff/authorize?return_to=<your callback>`.
-2. After login, delegate redirects to your callback with either:
-   - `?delegate_code=` (production hosts — your server exchanges it), or
-   - `?delegate_bridge=` (localhost / loopback — signed identity for local
-     development, so your machine never needs to `POST /handoff/exchange`
-     through Cloudflare Bot Fight).
-3. For codes: your server exchanges at `POST {delegateUrl}/handoff/exchange`
-   with `Authorization: Bearer <DELEGATE_SHARED_SECRET>`. If that POST is
-   challenged, `login(code, { returnTo })` attaches `error.browserExchangeUrl`
-   so you can prompt the developer to open `/handoff/browser-exchange` in
-   the browser and finish with `?delegate_bridge=`.
-4. Core maps the returned `unid` into a `person_id` (id_type `delegate`),
-   snapshots roles from `person_segment` as segment UUIDs, and signs a local
-   session cookie.
+Vocabulary: **User** (not Account), **Site** (not Audience). The JWT claim
+name remains `aud` (RFC 7519) and must equal the Site origin.
 
 ```js
-import { createDelegateAuth } from '@engine9/core/auth/delegate';
+import { createDelegateAuth, createSessionCookieHeaders } from '@engine9/core/auth/delegate';
 
 const auth = createDelegateAuth({
-  worker,                                    // PersonWorker for this site's DB
+  worker,
   delegateUrl: process.env.DELEGATE_URL,     // e.g. https://delegate.engine9.ai
-  handoffSecret: process.env.DELEGATE_SHARED_SECRET,
-  sessionSecret: process.env.SESSION_SECRET, // signs this site's cookie only
+  site: 'https://yoursite.example',          // JWT aud
+  sessionSecret: process.env.SESSION_SECRET, // signs this Site's cookie only
+  // handoffSecret is optional — only needed for legacy code/bridge
   pluginId: '<website plugin uuid>',
   remoteInputId: 'delegate-login',
   roles: {
-    '<admin-segment-uuid>': { name: 'Admin', scopes: ['admin'] },
-    '<vip-segment-uuid>': { name: 'VIP', scopes: ['data:read'] }
+    '<admin-segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 2 } },
+    '<vip-segment-uuid>': { name: 'VIP', scopes: ['data:read'], requiredAuth: { minLevel: 1 } }
   }
 });
 
-// Start login
-res.redirect(auth.loginUrl({ returnTo: 'https://yoursite.example/auth/delegate' }));
-
-// Callback: code or bridge → person + roles + signed token
-const { session, token } = await auth.login(codeOrBridge, { returnTo: callbackUrl });
-
-// Change role (role_id = segment UUID)
-const { token: next } = await auth.changeRole({
-  personId: session.personId,
-  roleId: '<vip-segment-uuid>',
-  exclusive: true,
-  session
+const { session, token } = await auth.login(delegateToken, {
+  returnTo: 'https://yoursite.example/auth/delegate'
 });
+res.setHeader('Set-Cookie', createSessionCookieHeaders(token, { secure: true }));
 ```
 
-`DELEGATE_SHARED_SECRET` must match the value configured on the delegate
-deployment (comma-separated values allow rotation). `SESSION_SECRET` is local
-to your site and never shared with delegate.
+### Authentication vs authorization
 
-### When to use which mechanism
+- **Authentication** answers who is present: API key (the caller) plus an
+  Identity Token or Core Session (the User).
+- **Authorization** answers what they may do: key scopes ∩ role scopes, plus
+  `requiredAuth` (`minLevel`, `twoFactor`).
+- Identity **Levels** (0–7) are confidence, not permission. A Level 4 User
+  may still lack the VIP role.
+- **Roles** are Site authorization (`role_id === segment_id`). They are not
+  an identity concept.
 
-Delegate exposes **two** authorization mechanisms that share one secret
-(`DELEGATE_SHARED_SECRET`) but serve different callers:
+### When do you need a session?
 
-| Mechanism | Use when | What you get |
+You do not. A Core Session is an optional HMAC cache of `personId`, `roles`,
+`unid`, `level`, and `auth` after the Site has verified an Identity Token.
+The host delivers it (HttpOnly cookie or `X-Engine9-Session`). The browser
+can instead send the JWT as `Authorization: Bearer` on each request. Mint a
+session when you want fewer JWKS/person lookups; skip it for token-only APIs.
+
+### Verifying delegate identity (JWT)
+
+`verifyDelegateIdentityToken` (and `auth.verifyIdentityToken` /
+`auth.login` when the token starts with `eyJ` and has two dots):
+
+1. Fetch `{delegateUrl}/.well-known/jwks.json` (cached in memory by URL).
+2. Verify ES256, `iss` (default: delegateUrl origin), `aud === site`, `exp`.
+3. Map claims to a DelegateUser: `unid`, optional `firebaseUid`, `email`
+   from `profile` when `email_verified`, `level`, `profileId` (`sub` unless
+   `unid:…`), `profile`, `auth`.
+
+`firebaseUid` is not required. Person resolution uses `unid` only.
+
+### Roles minLevel
+
+`requiredAuth.minLevel` is a number. `meetsRequiredAuth` requires
+`credentialLevel.level >= minLevel` (session `level`, else `auth.level`)
+and still enforces `twoFactor` when that flag is true.
+
+Email is copied onto the person record only when `emailVerified === true`
+or `level >= 2`, so unverified Level 0/1 addresses do not merge people.
+
+### `/auth/*` endpoints
+
+All except `GET /ok` still require an API key.
+
+| Endpoint | Body / headers | Response |
 | --- | --- | --- |
-| **Core handoff** (`/handoff/*`) | Your site runs `@engine9/core` and needs a local `person_id` session | One-time code → server exchange → identity (`unid`, email, credential level). You run the person pipeline yourself. |
-| **Session bridge** (`/oauth/session-bridge`) | Your host is an engine9 API server that already speaks Firebase sessions | Short-lived HMAC token carrying Firebase credentials so the API host can mint its own `engine9_session` cookie. |
+| `POST /auth/login` | `{ delegate_token \| delegate_code \| delegate_bridge, return_to? }` | `{ session, token }` |
+| `GET /auth/me` | `X-Engine9-Session` or Bearer JWT | `{ personId, roles, level, unid, profileId, profile?, auth }` or 401 |
+| `POST /auth/logout` | API key | `{ loggedOut: true }` — host must clear its cookie |
+| `POST /auth/role` | `{ role_id, person_id? }` + session/JWT, or `admin` key | `{ roles, token, session }` |
 
-Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
-`data.engine9.io`); see the delegate service README for that flow.
+`POST /auth/role` rejects a bare `person_id` unless the session/JWT
+`personId` matches or the key/role has the `admin` scope.
+
+### Legacy handoff
+
+Existing Sites may still use `delegate_code` / `delegate_bridge` and
+`DELEGATE_SHARED_SECRET`. `login()` treats 64-hex (and short test) strings
+as codes, `encoded.sig` (contains `.` but is not a JWT) as a bridge, and
+`eyJ` + two dots as a JWT. JWT login does not need `handoffSecret`.
+
+`loginUrl()` still points at `/handoff/authorize`. New Sites should use
+`auth.identityUrl({ returnTo, minLevel, responseMode })` (or
+`delegateIdentityUrl`) which builds `/identity/authorize`. See
+`id/docs/protocol.md`.
+
+Session bridge (`/oauth/session-bridge`) remains for engine9 API hosts
+(Firebase → `engine9_session`). It is not this protocol.
 
 ## Package layout
 
@@ -376,9 +423,9 @@ Core sites always use handoff. Session bridge is for engine9 API hosts (e.g.
 - `lib/peoplePipeline/` -- shared inbound transform chain used by processPeople and server loadPeople
 - `lib/id/` -- person identifier stores (compact SQLite, legacy MySQL, Durable Objects)
 - `auth/` -- API key creation/verification, SQL + KV stores, policy + HMAC helpers
-- `auth/delegate.js` -- delegate login via core handoff: code exchange, person
-  resolution via id_type `delegate`, roles-as-segment-UUIDs, signed sessions
-  (ships `delegate.d.ts` for TypeScript consumers)
+- `auth/delegate.js` -- Identity Token (JWT) verification, optional legacy
+  handoff, person resolution via id_type `delegate`, roles-as-segment-UUIDs,
+  HMAC Core Sessions (ships `delegate.d.ts` for TypeScript consumers)
 - `logging/` -- JSONL file logger and batch logger (R2 sink included)
 - `api/` -- framework-agnostic endpoint handlers (fetch + Express adapters)
 - `cloudflare/` -- Worker example, wrangler config, input-tools shim, install guide

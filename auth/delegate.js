@@ -1,29 +1,30 @@
 /*
   Delegate authentication for core deployments (auth layer 3 + role helpers).
 
-  "Delegate" is the shared, cross-organization authentication service. A core
-  deployment never talks to the identity provider itself; it:
+  "Delegate" is the shared, cross-organization identity service. A core Site
+  never talks to the identity provider itself. Preferred path:
 
-    1. sends the browser to delegate's /handoff/authorize with a return_to
-       pointing at its own callback (`delegateAuthorizeUrl`)
-    2. receives a one-time ?delegate_code= on that callback and exchanges it
-       server-to-server using DELEGATE_SHARED_SECRET (`exchangeDelegateCode`)
-    3. runs the returned identity through the normal person pipeline so the
-       delegate unid becomes a person_id via id_type "delegate"
-       (`resolveDelegatePersonId` -> person_id_delegate on SQLite/D1)
-    4. mints its own signed local session containing the person_id and the
-       credential level delegate reported (`createSessionToken` /
-       `verifySessionToken`)
+    1. Browser obtains a delegate-signed Identity Token (JWT, ES256) via
+       /identity/authorize or /identity/bridge
+    2. Site verifies the JWT with JWKS (`verifyDelegateIdentityToken`) — no
+       shared secret. Claims: unid, level, profile, auth; aud is the Site origin
+    3. Maps unid / profile_id → person_id (`resolveDelegatePersonId`) and
+       optionally mints a local HMAC Core Session (`createSessionToken`)
+
+  Legacy handoff (still supported when handoffSecret is set):
+
+    1. /handoff/authorize → ?delegate_code= or ?delegate_bridge=
+    2. exchangeDelegateCode / verifyHandoffBridgeToken (DELEGATE_SHARED_SECRET)
+    3. same person pipeline + local session
 
   Roles (auth layer 2): role_id === segment_id (UUID). The site supplies a
-  UUID-keyed `roles` registry (display name, scopes, requiredAuth). Session
-  `roles` is an array of those segment UUIDs. Legacy `roleSegments: { name: uuid }`
-  is normalized to the UUID-keyed shape. Omit `roles` / `roleSegments` when unused.
+  UUID-keyed `roles` registry (display name, scopes, requiredAuth including
+  minLevel). Session `roles` is an array of those segment UUIDs.
 
-  This is the *core handoff* mechanism. Engine9 API hosts use a different
-  mechanism (session bridge) with the same DELEGATE_SHARED_SECRET — see the
-  Engine9 auth map in the package README.
+  Engine9 API hosts use a different mechanism (session bridge) with the same
+  DELEGATE_SHARED_SECRET — see the package README. That is not this protocol.
 */
+import { jwtVerify, createLocalJWKSet, errors as joseErrors } from 'jose';
 import {
   parseSharedSecrets,
   base64urlEncode,
@@ -32,6 +33,9 @@ import {
   verifySignedPayload,
   splitSignedToken
 } from './hmac.js';
+
+/** In-memory JWKS (createLocalJWKSet) keyed by delegateUrl. */
+const delegateJwksCache = new Map();
 
 /*
   Classify delegate login failures for end-user messaging.
@@ -97,6 +101,14 @@ const DELEGATE_LOGIN_ERRORS = {
     kind: 'auth',
     message:
       'Sign-in did not finish on this site after Delegate sent you back. Please try signing in again.'
+  },
+  invalid_identity_token: {
+    kind: 'auth',
+    message: 'Your sign-in token is invalid or expired. Please sign in again.'
+  },
+  invalid_site: {
+    kind: 'auth',
+    message: 'This identity token is not valid for this site. Please sign in again.'
   }
 };
 
@@ -200,6 +212,35 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
 }
 
 /** Build the browser URL that starts a delegate login for this site. */
+/** Browser URL that starts Identity Token authorize (preferred over handoff). */
+export function delegateIdentityUrl({
+  delegateUrl,
+  site,
+  returnTo,
+  prompt,
+  minLevel,
+  maxLevel,
+  fields,
+  nonce,
+  state,
+  responseMode = 'query'
+}) {
+  if (!delegateUrl) throw new Error('delegateIdentityUrl requires delegateUrl');
+  if (!site) throw new Error('delegateIdentityUrl requires site (Site origin)');
+  if (!returnTo) throw new Error('delegateIdentityUrl requires returnTo');
+  const url = new URL('/identity/authorize', delegateUrl);
+  url.searchParams.set('site', site);
+  url.searchParams.set('return_to', returnTo);
+  if (prompt) url.searchParams.set('prompt', prompt);
+  if (minLevel !== undefined) url.searchParams.set('min_level', String(minLevel));
+  if (maxLevel !== undefined) url.searchParams.set('max_level', String(maxLevel));
+  if (fields) url.searchParams.set('fields', Array.isArray(fields) ? fields.join(',') : fields);
+  if (nonce) url.searchParams.set('nonce', nonce);
+  if (state) url.searchParams.set('state', state);
+  if (responseMode) url.searchParams.set('response_mode', responseMode);
+  return url.toString();
+}
+
 export function delegateAuthorizeUrl({ delegateUrl, returnTo, prompt }) {
   if (!delegateUrl) throw new Error('delegateAuthorizeUrl requires delegateUrl');
   if (!returnTo) throw new Error('delegateAuthorizeUrl requires returnTo (absolute callback URL)');
@@ -334,6 +375,187 @@ export function verifyHandoffBridgeToken({ secret, token, expectedReturnTo }) {
   };
 }
 
+/** Site origin from an absolute URL, or null when unparseable. */
+export function siteOriginFromUrl(value) {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** True when token looks like a JWT (eyJ header + three segments). */
+export function isDelegateIdentityJwt(token) {
+  return typeof token === 'string' && token.startsWith('eyJ') && token.split('.').length === 3;
+}
+
+/**
+ * Classify a login token: Identity JWT, HMAC handoff bridge, or handoff code.
+ * Production codes are 64-hex; shorter strings without `.` still exchange as codes.
+ */
+export function classifyDelegateLoginToken(token) {
+  if (typeof token !== 'string' || !token) return 'unknown';
+  if (isDelegateIdentityJwt(token)) return 'jwt';
+  if (/^[0-9a-f]{64}$/i.test(token)) return 'code';
+  if (token.includes('.')) return 'bridge';
+  return 'code';
+}
+
+async function loadDelegateJwks(delegateUrl, { jwks, fetchImpl = fetch } = {}) {
+  if (jwks) {
+    const set = jwks.keys ? jwks : { keys: Array.isArray(jwks) ? jwks : [jwks] };
+    return createLocalJWKSet(set);
+  }
+  const cacheKey = String(delegateUrl);
+  const cached = delegateJwksCache.get(cacheKey);
+  if (cached) return cached;
+  const url = new URL('/.well-known/jwks.json', delegateUrl).toString();
+  const response = await fetchImpl(url);
+  if (!response.ok) {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: `JWKS fetch failed: ${response.status}`
+    });
+  }
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'JWKS response is not valid JSON'
+    });
+  }
+  if (!body?.keys) {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'JWKS response missing keys'
+    });
+  }
+  const local = createLocalJWKSet(body);
+  delegateJwksCache.set(cacheKey, local);
+  return local;
+}
+
+function mapJoseVerifyError(err) {
+  if (err instanceof joseErrors.JWTClaimValidationFailed && err.claim === 'aud') {
+    return createDelegateLoginFailure('invalid_site', { detail: err.message });
+  }
+  return createDelegateLoginFailure('invalid_identity_token', {
+    detail: err?.message || 'identity token verification failed'
+  });
+}
+
+/**
+ * Verify a delegate Identity Token (JWT, ES256) via JWKS.
+ * Fetches `{delegateUrl}/.well-known/jwks.json` unless `jwks` is passed.
+ * Checks alg ES256, iss (default delegateUrl origin), aud === site, exp (±60s).
+ *
+ * firebaseUid is optional — person resolution only needs unid.
+ */
+export async function verifyDelegateIdentityToken({
+  token,
+  delegateUrl,
+  site,
+  jwks,
+  issuer,
+  fetchImpl = fetch
+} = {}) {
+  if (!token || typeof token !== 'string') {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'verifyDelegateIdentityToken requires a token'
+    });
+  }
+  if (!delegateUrl) {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'verifyDelegateIdentityToken requires delegateUrl'
+    });
+  }
+  if (!site) {
+    throw createDelegateLoginFailure('invalid_site', {
+      detail: 'verifyDelegateIdentityToken requires site (JWT aud / Site origin)'
+    });
+  }
+
+  const iss = issuer || siteOriginFromUrl(delegateUrl);
+  if (!iss) {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'verifyDelegateIdentityToken could not determine issuer from delegateUrl'
+    });
+  }
+
+  const verifyOpts = {
+    algorithms: ['ES256'],
+    issuer: iss,
+    audience: site,
+    clockTolerance: 60
+  };
+
+  let keySet;
+  try {
+    keySet = await loadDelegateJwks(delegateUrl, { jwks, fetchImpl });
+  } catch (err) {
+    if (err?.reason) throw err;
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: err?.message || 'JWKS load failed'
+    });
+  }
+
+  let payload;
+  try {
+    payload = (await jwtVerify(token, keySet, verifyOpts)).payload;
+  } catch (err) {
+    if (!jwks && err?.code === 'ERR_JWKS_NO_MATCHING_KEY') {
+      delegateJwksCache.delete(String(delegateUrl));
+      try {
+        const retryKeys = await loadDelegateJwks(delegateUrl, { fetchImpl });
+        payload = (await jwtVerify(token, retryKeys, verifyOpts)).payload;
+      } catch (retryErr) {
+        throw mapJoseVerifyError(retryErr);
+      }
+    } else {
+      throw mapJoseVerifyError(err);
+    }
+  }
+
+  if (!payload?.unid) {
+    throw createDelegateLoginFailure('invalid_identity_token', {
+      detail: 'identity token missing unid'
+    });
+  }
+
+  const rawAuth = payload.auth && typeof payload.auth === 'object' ? payload.auth : {};
+  const profile = payload.profile && typeof payload.profile === 'object' ? payload.profile : undefined;
+  const emailVerified = profile?.email_verified === true;
+  const email = emailVerified && profile?.email ? String(profile.email) : undefined;
+  const sub = typeof payload.sub === 'string' ? payload.sub : undefined;
+  const profileId = sub && !sub.startsWith('unid:') ? sub : undefined;
+  const level = typeof payload.level === 'number' ? payload.level : undefined;
+  const amr = Array.isArray(rawAuth.amr) ? rawAuth.amr : [];
+  const signInSecondFactor =
+    rawAuth.sign_in_second_factor ||
+    rawAuth.signInSecondFactor ||
+    (amr.includes('mfa') || amr.includes('swk')
+      ? amr.find((method) => method === 'mfa' || method === 'swk')
+      : undefined);
+
+  const delegateUser = {
+    unid: payload.unid,
+    email,
+    emailVerified,
+    auth: {
+      signInProvider: rawAuth.provider || rawAuth.signInProvider,
+      twoFactor: Boolean(rawAuth.two_factor ?? rawAuth.twoFactor),
+      signInSecondFactor,
+      authTime: rawAuth.auth_time ?? rawAuth.authTime
+    },
+    level,
+    profileId,
+    profile
+  };
+  const firebaseUid = payload.firebaseUid || payload.firebase_uid;
+  if (firebaseUid) delegateUser.firebaseUid = firebaseUid;
+  return delegateUser;
+}
+
 /*
   Exchange a one-time delegate_code for the delegate identity payload.
   Server-to-server: authenticated with the shared handoff secret, never the
@@ -402,7 +624,14 @@ export async function resolveDelegatePersonId({
   if (!worker) throw new Error('resolveDelegatePersonId requires a worker (PersonWorker)');
   if (!delegateUser?.unid) throw new Error('resolveDelegatePersonId requires delegateUser.unid');
   const record = { delegate_id: delegateUser.unid, ...person };
-  if (delegateUser.email && !record.email) record.email = delegateUser.email;
+  // Only copy email onto the person record when Delegate has confirmed it
+  // (emailVerified === true) or the Identity Token is at least Level 2
+  // (Contact Confirmed). Unverified Level 0/1 emails must not merge people
+  // via the email identifier.
+  const canCopyEmail =
+    delegateUser.emailVerified === true ||
+    (typeof delegateUser.level === 'number' && delegateUser.level >= 2);
+  if (canCopyEmail && delegateUser.email && !record.email) record.email = delegateUser.email;
   const summary = await worker.processPeople({
     pluginId,
     remoteInputId,
@@ -454,6 +683,25 @@ export function verifySessionToken(token, { secret }) {
   return payload;
 }
 
+/**
+ * Set-Cookie header value for a host-delivered Core Session.
+ * Cookie clear on logout is the host's job (this helper only mints).
+ */
+export function createSessionCookieHeaders(
+  token,
+  { cookieName = 'session', maxAge = 86400, secure, sameSite = 'lax', path = '/' } = {}
+) {
+  const parts = [
+    `${cookieName}=${token}`,
+    `Max-Age=${maxAge}`,
+    `Path=${path}`,
+    `SameSite=${sameSite}`,
+    'HttpOnly'
+  ];
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
+
 /* ---------------------------------------------------------------------------
    Session shape helpers (pure -- no worker or secrets required).
 
@@ -488,21 +736,23 @@ export function sessionNeedsRole(session) {
     const auth = createDelegateAuth({
       worker,                      // PersonWorker bound to the deployment DB
       delegateUrl,                 // e.g. https://delegate.engine9.ai
-      handoffSecret,               // DELEGATE_SHARED_SECRET (Bearer on /handoff/exchange)
+      site,                        // Site origin for JWT aud (optional; else returnTo origin)
+      handoffSecret,               // optional — required only for legacy code/bridge
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes
       remoteInputId: 'delegate',   // input the delegate logins record under
       // Preferred — role_id === segment UUID:
       roles: {
-        '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: {} }
+        '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 2 } }
       },
       // Legacy (deprecated): roleSegments: { admin: '<segment uuid>' },
       sessionTtlSeconds: 86400
     });
 
     auth.loginUrl({ returnTo, prompt? })
-    await auth.login(code)
-    auth.verify(token)
+    await auth.login(token)                 // JWT, 64-hex code, or HMAC bridge
+    await auth.verifyIdentityToken(jwt)
+    auth.verify(sessionToken)
     auth.issueToken(session)
     await auth.rolesForPerson(id)           // role_ids from person_segment
     await auth.grantRole(id, roleId, opts?)
@@ -524,7 +774,10 @@ export function createDelegateAuth({
   roles,
   roleSegments = {},
   loadRolesOnLogin = true,
-  fetchImpl = fetch
+  fetchImpl = fetch,
+  site,
+  issuer,
+  jwks
 }) {
   if (!worker) throw new Error('createDelegateAuth requires a worker (PersonWorker)');
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
@@ -577,8 +830,21 @@ export function createDelegateAuth({
       unid: payload.unid,
       email: payload.email,
       auth: payload.auth || {},
-      exp: payload.exp
+      exp: payload.exp,
+      level: payload.level,
+      profileId: payload.profileId
     };
+  }
+
+  async function verifyIdentityToken(token, opts = {}) {
+    return verifyDelegateIdentityToken({
+      token,
+      delegateUrl,
+      site: opts.site || site,
+      jwks: opts.jwks || jwks,
+      issuer: opts.issuer || issuer,
+      fetchImpl
+    });
   }
 
   /**
@@ -597,6 +863,8 @@ export function createDelegateAuth({
       nextSession.unid = session.unid;
       nextSession.email = session.email;
       nextSession.auth = session.auth || {};
+      nextSession.level = session.level;
+      nextSession.profileId = session.profileId;
     }
     return {
       roles: nextRoles,
@@ -609,32 +877,62 @@ export function createDelegateAuth({
     return delegateAuthorizeUrl({ delegateUrl, returnTo, prompt });
   }
 
+  function identityUrl({ returnTo, prompt, minLevel, maxLevel, fields, nonce, state, responseMode } = {}) {
+    return delegateIdentityUrl({
+      delegateUrl,
+      site: site || siteOriginFromUrl(returnTo),
+      returnTo,
+      prompt,
+      minLevel,
+      maxLevel,
+      fields,
+      nonce,
+      state,
+      responseMode
+    });
+  }
+
   function browserExchangeUrl({ code, returnTo }) {
     return delegateBrowserExchangeUrl({ delegateUrl, code, returnTo });
   }
 
   /*
-    Full login from either:
-      - a one-time ?delegate_code= (server POST /handoff/exchange), or
-      - a signed ?delegate_bridge= token (browser delivery for localhost /
-        Cloudflare Bot Fight bypass).
+    Full login from:
+      - an Identity Token JWT (starts with eyJ, three segments) — no handoffSecret
+      - a one-time ?delegate_code= (64-hex or short test codes)
+      - a signed ?delegate_bridge= token (contains "." but is not a JWT)
 
-    Bridge tokens contain a "." and are not 64-char hex codes. On a
-    cloudflare_challenge from exchange, the thrown error includes
+    JWT aud is `site` (constructor or login option), else returnTo origin.
+    On a cloudflare_challenge from code exchange, the thrown error includes
     `browserExchangeUrl` when returnTo is provided.
   */
-  async function login(token, { person = {}, returnTo } = {}) {
+  async function login(token, { person = {}, returnTo, site: siteOverride } = {}) {
     let delegateUser;
-    const isBridge =
-      typeof token === 'string' && token.includes('.') && !/^[0-9a-f]{64}$/i.test(token);
+    const kind = classifyDelegateLoginToken(token);
 
-    if (isBridge) {
+    if (kind === 'jwt') {
+      const jwtSite = siteOverride || site || siteOriginFromUrl(returnTo);
+      delegateUser = await verifyDelegateIdentityToken({
+        token,
+        delegateUrl,
+        site: jwtSite,
+        jwks,
+        issuer,
+        fetchImpl
+      });
+    } else if (kind === 'bridge') {
+      if (!handoffSecret) {
+        throw createDelegateLoginFailure('missing_handoff_secret');
+      }
       delegateUser = verifyHandoffBridgeToken({
         secret: handoffSecret,
         token,
         expectedReturnTo: returnTo
       });
     } else {
+      if (!handoffSecret) {
+        throw createDelegateLoginFailure('missing_handoff_secret');
+      }
       try {
         delegateUser = await exchangeDelegateCode({
           delegateUrl,
@@ -652,6 +950,10 @@ export function createDelegateAuth({
         }
         throw err;
       }
+    }
+
+    if (delegateUser.profile_id && !delegateUser.profileId) {
+      delegateUser = { ...delegateUser, profileId: delegateUser.profile_id };
     }
 
     const personId = await resolveDelegatePersonId({
@@ -673,16 +975,20 @@ export function createDelegateAuth({
         twoFactor: delegateUser.auth?.twoFactor,
         signInSecondFactor: delegateUser.auth?.signInSecondFactor,
         authTime: delegateUser.auth?.authTime
-      }
+      },
+      level: delegateUser.level,
+      profileId: delegateUser.profileId
     };
     return { session, token: issueToken(session), delegateUser };
   }
 
   return {
     loginUrl,
+    identityUrl,
     browserExchangeUrl,
     login,
     verify,
+    verifyIdentityToken,
     issueToken,
     rolesForPerson,
     grantRole,
@@ -695,12 +1001,18 @@ export default {
   createDelegateLoginFailure,
   normalizeDelegateLoginFailure,
   delegateAuthorizeUrl,
+  delegateIdentityUrl,
   delegateBrowserExchangeUrl,
   exchangeDelegateCode,
   verifyHandoffBridgeToken,
+  verifyDelegateIdentityToken,
+  isDelegateIdentityJwt,
+  classifyDelegateLoginToken,
+  siteOriginFromUrl,
   resolveDelegatePersonId,
   createSessionToken,
   verifySessionToken,
+  createSessionCookieHeaders,
   sessionHasRole,
   sessionPrimaryRole,
   sessionNeedsRole,

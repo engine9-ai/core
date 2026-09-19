@@ -5,8 +5,9 @@
  * (Workers + D1 + KV). Generic Node / MySQL deployments do not use them —
  * they read `person_id_delegate` and `person_segment` directly from SQL.
  *
- * Not wired into the API or PersonWorker yet; import from
- * `@engine9/core/cloudflare/kv` when adding edge cache paths.
+ * Pass the Worker `env` as `kvEnv` to `createApi` so Identity Token
+ * requests can cache unid → person_id (`PERSON_ID_DELEGATE_KV`) at the edge.
+ * Import helpers from `@engine9/core/cloudflare/kv`.
  */
 
 export {

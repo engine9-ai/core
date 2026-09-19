@@ -69,11 +69,16 @@ export function assertValidKeyScopes(scopes) {
 
 /**
  * Check Delegate credential level against a role's requiredAuth.
- * Only enforces keys that are explicitly true on requiredAuth (e.g. twoFactor).
+ * Enforces twoFactor when requiredAuth.twoFactor === true, and minLevel when
+ * requiredAuth.minLevel is a number (credentialLevel.level >= minLevel).
  */
 export function meetsRequiredAuth(requiredAuth, credentialLevel) {
   if (!requiredAuth || typeof requiredAuth !== 'object') return true;
   if (requiredAuth.twoFactor === true && !credentialLevel?.twoFactor) return false;
+  if (typeof requiredAuth.minLevel === 'number') {
+    const level = Number(credentialLevel?.level);
+    if (!Number.isFinite(level) || level < requiredAuth.minLevel) return false;
+  }
   return true;
 }
 
@@ -85,7 +90,7 @@ export function meetsRequiredAuth(requiredAuth, credentialLevel) {
  * @param {{
  *   apiKey?: { id?: string, scopes?: string[], default_role_id?: string|null },
  *   roleId?: string|null,
- *   session?: { roles?: string[], auth?: object }|null,
+ *   session?: { roles?: string[], auth?: object, level?: number }|null,
  *   rolesRegistry?: Record<string, { name?: string, scopes?: string[], requiredAuth?: object }>
  * }} opts
  */
@@ -108,7 +113,12 @@ export function resolveAuthContext({
   const roleScopes = role?.scopes || [];
   const scopes = intersectScopes(keyScopes, roleScopes);
   const requiredAuth = role?.requiredAuth || {};
-  const credentialLevel = session?.auth || null;
+  // session.level (Identity Token) wins; fall back to auth.level so minLevel works
+  // whether the host put the integer on the session or inside credentialLevel.
+  const credentialLevel = {
+    ...(session?.auth || {}),
+    level: session?.level ?? session?.auth?.level
+  };
   const authSatisfied = meetsRequiredAuth(requiredAuth, credentialLevel);
 
   return {

@@ -23,9 +23,10 @@ a Worker.
 
 > **Cloudflare-only KV caches.** `PERSON_ID_DELEGATE_KV` and `PERSON_SEGMENT_VK`
 > exist only on Cloudflare-style deployments. Generic Node / MySQL sites read
-> `person_id_delegate` and `person_segment` from SQL directly. The cache helpers
-> in [`kv/`](kv/) are **not wired into the API or PersonWorker yet** — they are
-> ready for a future edge path; D1 remains the source of truth.
+> `person_id_delegate` and `person_segment` from SQL directly. Pass the Worker
+> `env` as `kvEnv` to `createApi({ kvEnv: env })` so Identity Token requests
+> can cache unid → `person_id` in `PERSON_ID_DELEGATE_KV`. D1 remains the
+> source of truth.
 
 ## Install
 
@@ -120,8 +121,8 @@ curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
 ## KV caches (Cloudflare only)
 
 Optional edge caches for hot lookups. Import from `@engine9/core/cloudflare/kv`.
-**Not used by `createApi` / `PersonWorker` yet** — wire them in when adding an
-edge cache path. Always treat D1 as authoritative.
+Pass the Worker `env` as `kvEnv` on `createApi` to enable the delegate
+person-id cache on JWT identity requests. Always treat D1 as authoritative.
 
 ### `PERSON_ID_DELEGATE_KV` — cache of `person_id_delegate`
 

@@ -198,9 +198,9 @@ export function extractApiKey(request) {
   if (auth && auth.indexOf('Bearer ') === 0) {
     const token = auth.slice('Bearer '.length).trim();
     // Only treat as API key for Engine9 prefixes — other Bearers
-    // (session tokens, Firebase) are left for layer 3 handlers.
+    // (Identity Token JWT, session tokens) are left for layer 3.
+    // Fall through to X-API-Key so JWT + key can be sent together.
     if (isEngine9ApiKeyToken(token)) return token;
-    return null;
   }
   const headerKey = getHeader('X-API-Key');
   if (headerKey) return headerKey.trim();

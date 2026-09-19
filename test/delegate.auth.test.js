@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
@@ -11,6 +12,9 @@ import {
   delegateAuthorizeUrl,
   delegateBrowserExchangeUrl,
   verifyHandoffBridgeToken,
+  verifyDelegateIdentityToken,
+  classifyDelegateLoginToken,
+  createSessionCookieHeaders,
   resolveDelegatePersonId,
   createDelegateAuth,
   createDelegateLoginFailure,
@@ -20,6 +24,34 @@ import {
   sessionNeedsRole
 } from '../auth/delegate.js';
 import { getVersionedUUID } from '../lib/utilities.js';
+
+async function signDelegateJwt({
+  privateKey,
+  kid = 'test-key',
+  issuer = 'https://delegate.engine9.ai',
+  site = 'https://site.example.com',
+  unid = UNID_A,
+  level = 2,
+  sub,
+  profile,
+  auth = { provider: 'google.com', two_factor: true, auth_time: 1234 },
+  expires = '1h'
+}) {
+  const jwt = new SignJWT({
+    unid,
+    level,
+    profile,
+    auth
+  });
+  jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'delegate+jwt' });
+  jwt.setIssuer(issuer);
+  jwt.setAudience(site);
+  jwt.setSubject(sub || (profile?.id || `unid:${unid}`));
+  jwt.setIssuedAt();
+  jwt.setExpirationTime(expires);
+  jwt.setJti(`jti-${crypto.randomUUID()}`);
+  return jwt.sign(privateKey);
+}
 
 const UNID_A = '11111111-2222-8e91-8333-444444444444';
 const UNID_B = '55555555-6666-8e91-8777-888888888888';
@@ -35,7 +67,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const personId = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { unid: UNID_A, email: 'alice@example.com' },
+      delegateUser: { unid: UNID_A, email: 'alice@example.com', emailVerified: true },
       person: { given_name: 'Alice', family_name: 'Anderson' }
     });
     assert.ok(personId, 'a person_id was assigned');
@@ -48,7 +80,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const again = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { unid: UNID_A, email: 'alice@example.com' }
+      delegateUser: { unid: UNID_A, email: 'alice@example.com', emailVerified: true }
     });
     assert.equal(again, personId, 'repeat delegate login resolves to the same person');
     const { data: people } = await worker.query('select id from person');
@@ -59,7 +91,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const merged = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { unid: UNID_B, email: 'alice@example.com' }
+      delegateUser: { unid: UNID_B, email: 'alice@example.com', level: 2 }
     });
     assert.equal(merged, personId, 'same email merges a new delegate id into the existing person');
     const { data: delegateIds2 } = await worker.query('select person_id from person_id_delegate');
@@ -70,9 +102,25 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const other = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { unid: 'aaaaaaaa-bbbb-8e91-8ccc-dddddddddddd', email: 'bob@example.com' }
+      delegateUser: { unid: 'aaaaaaaa-bbbb-8e91-8ccc-dddddddddddd', email: 'bob@example.com', emailVerified: true }
     });
     assert.notEqual(other, personId);
+
+    const unverified = await resolveDelegatePersonId({
+      worker,
+      pluginId,
+      delegateUser: {
+        unid: 'cccccccc-dddd-8e91-8eee-ffffffffffff',
+        email: 'unverified-unique@example.com',
+        emailVerified: false,
+        level: 0
+      }
+    });
+    const { data: unverifiedEmails } = await worker.query({
+      sql: 'select email from person_email where person_id=?',
+      values: [unverified]
+    });
+    assert.equal(unverifiedEmails.length, 0, 'unverified level 0 email is not copied onto the person');
   } finally {
     await worker.destroy();
   }
@@ -484,4 +532,117 @@ test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () =>
   assert.equal(verified.unid, 'u1');
   assert.equal(verified.firebaseUid, 'fb1');
   assert.equal(verified.email, 'a@b.c');
+});
+
+test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
+  assert.equal(classifyDelegateLoginToken('a'.repeat(64).replace(/./g, '0')), 'code');
+  assert.equal(classifyDelegateLoginToken('one-time-code'), 'code');
+  assert.equal(classifyDelegateLoginToken('abc.def'), 'bridge');
+  assert.equal(
+    classifyDelegateLoginToken('eyJhbGciOiJFUzI1NiJ9.eyJ1bmlkIjoidSJ9.sig'),
+    'jwt'
+  );
+  const cookie = createSessionCookieHeaders('tok.val', { cookieName: 'session', maxAge: 60, secure: true });
+  assert.match(cookie, /^session=tok\.val;/);
+  assert.match(cookie, /Max-Age=60/);
+  assert.match(cookie, /SameSite=lax/i);
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /Secure/);
+});
+
+test('createDelegateAuth: login() with JWT creates session with level/profileId', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await applyStandardStack(worker);
+    const pluginId = getPluginUUID('engine9.test', 'test-delegate-jwt');
+    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-jwt', name: 'Test Delegate JWT' });
+
+    const { privateKey, publicKey } = await generateKeyPair('ES256');
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = 'test-key';
+    jwk.alg = 'ES256';
+    jwk.use = 'sig';
+
+    const jwt = await signDelegateJwt({
+      privateKey,
+      profile: { id: 'prof-1', email: 'alice@example.com', email_verified: true, display_name: 'Alice' },
+      sub: 'prof-1'
+    });
+
+    const fetchImpl = async (url) => {
+      assert.match(String(url), /\/\.well-known\/jwks\.json$/);
+      return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+    };
+
+    const verifiedUser = await verifyDelegateIdentityToken({
+      token: jwt,
+      delegateUrl: 'https://delegate.engine9.ai',
+      site: 'https://site.example.com',
+      fetchImpl
+    });
+    assert.equal(verifiedUser.unid, UNID_A);
+    assert.equal(verifiedUser.level, 2);
+    assert.equal(verifiedUser.profileId, 'prof-1');
+    assert.equal(verifiedUser.email, 'alice@example.com');
+    assert.equal(verifiedUser.emailVerified, true);
+    assert.equal(verifiedUser.firebaseUid, undefined, 'JWT path does not require firebaseUid');
+    assert.equal(verifiedUser.auth.signInProvider, 'google.com');
+    assert.equal(verifiedUser.auth.twoFactor, true);
+
+    await assert.rejects(
+      verifyDelegateIdentityToken({
+        token: jwt,
+        delegateUrl: 'https://delegate.engine9.ai',
+        site: 'https://other.example.com',
+        fetchImpl
+      }),
+      (err) => err.reason === 'invalid_site'
+    );
+
+    const byUnid = new Map();
+    let nextPersonId = 1;
+    worker.processPeople = async ({ batch }) => {
+      const personIds = (batch || []).map((row) => {
+        const unid = row.delegate_id;
+        if (unid && byUnid.has(unid)) return byUnid.get(unid);
+        const id = nextPersonId++;
+        if (unid) byUnid.set(unid, id);
+        return id;
+      });
+      return { personIds, records: personIds.length, recordsWithPersonIds: personIds.length };
+    };
+
+    const auth = createDelegateAuth({
+      worker,
+      delegateUrl: 'https://delegate.engine9.ai',
+      site: 'https://site.example.com',
+      sessionSecret: 'session-secret',
+      pluginId,
+      fetchImpl
+    });
+
+    const { session, token, delegateUser } = await auth.login(jwt, {
+      returnTo: 'https://site.example.com/auth/delegate'
+    });
+    assert.ok(session.personId > 0);
+    assert.equal(session.unid, UNID_A);
+    assert.equal(session.level, 2);
+    assert.equal(session.profileId, 'prof-1');
+    assert.equal(session.email, 'alice@example.com');
+    assert.equal(session.auth.signInProvider, 'google.com');
+    assert.equal(session.auth.twoFactor, true);
+    assert.equal(delegateUser.firebaseUid, undefined, 'JWT path does not require firebaseUid');
+    assert.equal(delegateUser.emailVerified, true);
+
+    const verified = auth.verify(token);
+    assert.equal(verified.personId, session.personId);
+    assert.equal(verified.level, 2);
+    assert.equal(verified.profileId, 'prof-1');
+
+    const again = await auth.verifyIdentityToken(jwt);
+    assert.equal(again.unid, UNID_A);
+    assert.equal(again.profileId, 'prof-1');
+  } finally {
+    await worker.destroy();
+  }
 });

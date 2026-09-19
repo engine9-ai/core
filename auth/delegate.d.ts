@@ -15,14 +15,21 @@ export interface DelegateAuthState {
   authTime?: number;
 }
 
-/** Identity payload returned by POST {delegateUrl}/handoff/exchange. */
+/** Identity payload from an Identity Token or POST {delegateUrl}/handoff/exchange. */
 export interface DelegateUser {
   unid: string;
-  firebaseUid: string;
+  /** Optional — JWT path does not require it; person resolution uses unid. */
+  firebaseUid?: string;
   email?: string;
+  emailVerified?: boolean;
   auth: DelegateAuthState;
   returnTo?: string;
   createdAt?: string;
+  level?: number;
+  profileId?: string;
+  profile?: Record<string, unknown>;
+  /** Legacy handoff field; login() copies this onto profileId when needed. */
+  profile_id?: string;
 }
 
 /** Credential level carried inside a local session (auth layer 3). */
@@ -31,11 +38,14 @@ export interface CredentialLevel {
   twoFactor?: boolean;
   signInSecondFactor?: string;
   authTime?: number;
+  level?: number;
 }
 
 /** Required Delegate credential constraints on a role (auth layer 2). */
 export interface RequiredAuth {
   twoFactor?: boolean;
+  /** Minimum Identity Level (0–7). Enforced as credentialLevel.level >= minLevel. */
+  minLevel?: number;
 }
 
 /** Role registry entry. Keys of the registry are role_id === segment_id UUIDs. */
@@ -82,7 +92,25 @@ export interface DelegateSession {
   email?: string;
   auth: CredentialLevel;
   exp?: number;
+  /** Identity Level from the Identity Token (or handoff payload). */
+  level?: number;
+  /** Profile id (`sub` when it is not `unid:<unid>`). */
+  profileId?: string;
+  profile?: Record<string, unknown>;
 }
+
+export function delegateIdentityUrl(options: {
+  delegateUrl: string;
+  site: string;
+  returnTo: string;
+  prompt?: string;
+  minLevel?: number;
+  maxLevel?: number;
+  fields?: string[] | string;
+  nonce?: string;
+  state?: string;
+  responseMode?: string;
+}): string;
 
 export function delegateAuthorizeUrl(options: {
   delegateUrl: string;
@@ -112,12 +140,57 @@ export function verifyHandoffBridgeToken(options: {
 
 export function resolveDelegatePersonId(options: {
   worker: unknown;
-  delegateUser: { unid: string; email?: string };
+  delegateUser: {
+    unid: string;
+    email?: string;
+    emailVerified?: boolean;
+    level?: number;
+  };
   pluginId?: string;
   remoteInputId?: string;
   inputType?: string;
   person?: Record<string, unknown>;
 }): Promise<number>;
+
+/** Site origin from an absolute URL, or null when unparseable. */
+export function siteOriginFromUrl(value?: string | null): string | null;
+
+/** True when token looks like a JWT (eyJ header + three segments). */
+export function isDelegateIdentityJwt(token: string | null | undefined): boolean;
+
+/** Classify a login token: `jwt` | `bridge` | `code` | `unknown`. */
+export function classifyDelegateLoginToken(
+  token: string | null | undefined
+): "jwt" | "bridge" | "code" | "unknown";
+
+/**
+ * Verify a delegate Identity Token (JWT, ES256) via JWKS.
+ * `aud` must equal `site` (Site origin). Issuer defaults to delegateUrl origin.
+ */
+export function verifyDelegateIdentityToken(options: {
+  token: string;
+  delegateUrl: string;
+  /** Site origin — compared to JWT `aud`. */
+  site: string;
+  jwks?: { keys: Record<string, unknown>[] } | Record<string, unknown>[];
+  issuer?: string;
+  fetchImpl?: typeof fetch;
+}): Promise<DelegateUser>;
+
+/**
+ * Set-Cookie header value for a host-delivered Core Session.
+ * Cookie clear on logout is the host's job.
+ */
+export function createSessionCookieHeaders(
+  token: string,
+  options?: {
+    cookieName?: string;
+    maxAge?: number;
+    secure?: boolean;
+    sameSite?: string;
+    path?: string;
+  }
+): string;
 
 export function createSessionToken(
   payload: object,
@@ -160,23 +233,44 @@ export function resolveRoleId(
 export interface DelegateAuth {
   /** Browser URL that starts a delegate login for this site. */
   loginUrl(options: { returnTo: string; prompt?: string }): string;
+  /** Preferred Identity Token authorize URL (`/identity/authorize`). */
+  identityUrl(options: {
+    returnTo: string;
+    prompt?: string;
+    minLevel?: number;
+    maxLevel?: number;
+    fields?: string[] | string;
+    nonce?: string;
+    state?: string;
+    responseMode?: string;
+  }): string;
   /** Browser URL that finishes a blocked local code exchange via Delegate. */
   browserExchangeUrl(options: { code: string; returnTo: string }): string;
   /**
-   * Complete login from ?delegate_code= (server exchange) or ?delegate_bridge=
-   * (signed browser token). Pass returnTo so CF-challenge errors include a
-   * browserExchangeUrl for the local-dev continue step.
+   * Complete login from an Identity Token JWT, ?delegate_code= (server
+   * exchange), or ?delegate_bridge= (signed browser token). JWT path does not
+   * require handoffSecret. Pass returnTo so CF-challenge errors include a
+   * browserExchangeUrl, and so JWT aud can default to the returnTo origin.
    */
   login(
-    codeOrBridge: string,
-    options?: { person?: Record<string, unknown>; returnTo?: string }
+    codeOrBridgeOrJwt: string,
+    options?: { person?: Record<string, unknown>; returnTo?: string; site?: string }
   ): Promise<{
     session: DelegateSession;
     token: string;
     delegateUser: DelegateUser;
   }>;
-  /** Verify a session token; null when invalid or expired. */
+  /** Verify a Core Session token; null when invalid or expired. Returns level and profileId. */
   verify(token: string | null | undefined): DelegateSession | null;
+  /** Verify a delegate Identity Token using this auth's delegateUrl / site / JWKS. */
+  verifyIdentityToken(
+    token: string,
+    options?: {
+      site?: string;
+      jwks?: { keys: Record<string, unknown>[] };
+      issuer?: string;
+    }
+  ): Promise<DelegateUser>;
   /** Re-sign an updated session payload. */
   issueToken(session: DelegateSession): string;
   /** role_ids from person_segment membership for configured roles. */
@@ -208,8 +302,17 @@ export interface DelegateAuth {
 export function createDelegateAuth(config: {
   worker: unknown;
   delegateUrl: string;
-  /** DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange / bridge HMAC. */
-  handoffSecret: string;
+  /**
+   * DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange / bridge HMAC.
+   * Optional when the Site only accepts Identity Tokens (JWT).
+   */
+  handoffSecret?: string;
+  /** Site origin for JWT `aud` checks. Defaults to returnTo origin on login(). */
+  site?: string;
+  /** JWT iss; defaults to delegateUrl origin. */
+  issuer?: string;
+  /** Preloaded JWKS; skips fetch of /.well-known/jwks.json. */
+  jwks?: { keys: Record<string, unknown>[] };
   sessionSecret: string;
   sessionTtlSeconds?: number;
   pluginId?: string;
@@ -239,9 +342,14 @@ declare const _default: {
   delegateBrowserExchangeUrl: typeof delegateBrowserExchangeUrl;
   exchangeDelegateCode: typeof exchangeDelegateCode;
   verifyHandoffBridgeToken: typeof verifyHandoffBridgeToken;
+  verifyDelegateIdentityToken: typeof verifyDelegateIdentityToken;
+  isDelegateIdentityJwt: typeof isDelegateIdentityJwt;
+  classifyDelegateLoginToken: typeof classifyDelegateLoginToken;
+  siteOriginFromUrl: typeof siteOriginFromUrl;
   resolveDelegatePersonId: typeof resolveDelegatePersonId;
   createSessionToken: typeof createSessionToken;
   verifySessionToken: typeof verifySessionToken;
+  createSessionCookieHeaders: typeof createSessionCookieHeaders;
   sessionHasRole: typeof sessionHasRole;
   sessionPrimaryRole: typeof sessionPrimaryRole;
   sessionNeedsRole: typeof sessionNeedsRole;

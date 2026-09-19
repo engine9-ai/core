@@ -12,6 +12,7 @@ import {
   hashApiKey,
   generateApiKey,
   getApiKeyCatalog,
+  extractApiKey,
   PUBLIC_API_KEY_PREFIX,
   API_KEY_PREFIX
 } from '../auth/index.js';
@@ -38,6 +39,16 @@ test('intersectScopes and hasScope', () => {
   assert.deepEqual(assertValidKeyScopes([' tasks:read ', '']), ['tasks:read']);
   assert.ok(generateApiKey({ scopes: [ADMIN_SCOPE] }).startsWith(API_KEY_PREFIX));
   assert.ok(generateApiKey({ scopes: [PUBLIC_SCOPE] }).startsWith(PUBLIC_API_KEY_PREFIX));
+
+  const key = generateApiKey({ scopes: [ADMIN_SCOPE] });
+  assert.equal(extractApiKey({ headers: { authorization: `Bearer ${key}` } }), key);
+  assert.equal(
+    extractApiKey({
+      headers: { authorization: 'Bearer eyJhbGciOiJFUzI1NiJ9.eyJ1bmlkIjoidSJ9.sig', 'x-api-key': key }
+    }),
+    key,
+    'Identity Token Bearer falls through to X-API-Key'
+  );
 });
 
 test('meetsRequiredAuth and resolveAuthContext', () => {
@@ -53,6 +64,18 @@ test('meetsRequiredAuth and resolveAuthContext', () => {
   assert.equal(meetsRequiredAuth({}, { twoFactor: false }), true);
   assert.equal(meetsRequiredAuth({ twoFactor: true }, { twoFactor: true }), true);
   assert.equal(meetsRequiredAuth({ twoFactor: true }, { twoFactor: false }), false);
+  assert.equal(meetsRequiredAuth({ minLevel: 2 }, { level: 2 }), true);
+  assert.equal(meetsRequiredAuth({ minLevel: 2 }, { level: 3 }), true);
+  assert.equal(meetsRequiredAuth({ minLevel: 2 }, { level: 1 }), false);
+  assert.equal(meetsRequiredAuth({ minLevel: 2 }, {}), false);
+  assert.equal(
+    meetsRequiredAuth({ minLevel: 2, twoFactor: true }, { level: 3, twoFactor: false }),
+    false
+  );
+  assert.equal(
+    meetsRequiredAuth({ minLevel: 2, twoFactor: true }, { level: 3, twoFactor: true }),
+    true
+  );
 
   const ctx = resolveAuthContext({
     apiKey: { id: 'k1', scopes: ['data:read', 'people:write'], default_role_id: roleId },
@@ -71,6 +94,32 @@ test('meetsRequiredAuth and resolveAuthContext', () => {
   });
   assert.equal(ok.authSatisfied, true);
   assert.deepEqual(ok.scopes, ['data:read']);
+
+  const minLevelRoleId = getVersionedUUID();
+  const minLevelRegistry = {
+    [minLevelRoleId]: {
+      name: 'Confirmed',
+      scopes: ['data:read'],
+      requiredAuth: { minLevel: 2 }
+    }
+  };
+  const tooLow = resolveAuthContext({
+    apiKey: { scopes: ['admin'] },
+    roleId: minLevelRoleId,
+    rolesRegistry: minLevelRegistry,
+    session: { roles: [minLevelRoleId], auth: { twoFactor: false }, level: 1 }
+  });
+  assert.equal(tooLow.credentialLevel.level, 1);
+  assert.equal(tooLow.authSatisfied, false);
+
+  const minOk = resolveAuthContext({
+    apiKey: { scopes: ['admin'] },
+    roleId: minLevelRoleId,
+    rolesRegistry: minLevelRegistry,
+    session: { roles: [minLevelRoleId], auth: { twoFactor: false }, level: 2 }
+  });
+  assert.equal(minOk.credentialLevel.level, 2);
+  assert.equal(minOk.authSatisfied, true);
 });
 
 test('SqlApiKeyStore default_role_id and rotate', async () => {

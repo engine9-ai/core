@@ -1,9 +1,9 @@
 /**
  * PERSON_ID_DELEGATE_KV — edge cache of the `person_id_delegate` lookup table.
  *
- * Cloudflare-style deployments only. Not wired into PersonWorker / the API
- * yet; this module is the cache access layer for a future edge path that
- * mirrors `person_id_<id_type>` (id_type = `delegate`) without hitting D1.
+ * Cloudflare-style deployments only. Pass `{ PERSON_ID_DELEGATE_KV }` as
+ * `kvEnv` to `createApi` so Bearer Identity Tokens can resolve person_id
+ * from this cache before SQL (`getPersonIdByUnid` / `setDelegatePersonId`).
  *
  * Source of truth remains D1/SQLite (`person_id_delegate` or
  * `person_identifier` with id_type `delegate`). This KV is a read-through /

@@ -12,20 +12,29 @@
                                    body: { rows: [...] }
     GET  /read/:name            -- read a configured table; optionally gated
                                    by person_segment membership
+    POST /auth/login            -- exchange delegate_token | delegate_code |
+                                   delegate_bridge (requires API key + delegateAuth)
+    GET  /auth/me               -- current User from session or Identity Token
+    POST /auth/logout           -- { loggedOut: true }; cookie clear is the host's job
     POST /auth/role             -- change role (requires delegateAuth); body:
                                    { role_id, person_id?, exclusive?, session_token? }
+                                   person_id without a matching session/JWT needs admin
 
   Auth layers (see package README):
     1. API key (required on all routes except /ok)
     2. Role (role_id = segment UUID; scopes from role registry ∩ key scopes)
-    3. Delegate credential level (session.auth; requiredAuth on roles)
+    3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
+
+  Identity: X-Engine9-Session (HMAC Core Session) and/or Authorization Bearer JWT
+  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches unid → person_id.
 
   Usage:
     const api = createApi({
       worker,           // client PersonWorker
       keyStore,         // SqlApiKeyStore | KVApiKeyStore
       logger,           // JsonlFileLogger | BatchLogger | NullLogger
-      delegateAuth,     // optional createDelegateAuth() — enables POST /auth/role
+      delegateAuth,     // optional createDelegateAuth() — enables /auth/*
+      kvEnv,            // optional Cloudflare env (PERSON_ID_DELEGATE_KV)
       config: {
         pluginId,
         defaultRemoteInputId: 'website',
@@ -45,7 +54,23 @@ import {
   ADMIN_SCOPE,
   PUBLIC_SCOPE
 } from '../auth/policy.js';
-import { normalizeRoleRegistry } from '../auth/delegate.js';
+import { normalizeRoleRegistry, resolveDelegatePersonId, isDelegateIdentityJwt } from '../auth/delegate.js';
+import { getPersonIdByUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
+
+const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
+
+function isApiKeyBearer(token) {
+  const t = String(token || '');
+  return API_KEY_PREFIXES.some((p) => t.indexOf(p) === 0);
+}
+
+function extractBearer(headers) {
+  const auth = getHeader(headers, 'Authorization') || getHeader(headers, 'authorization');
+  if (auth && String(auth).indexOf('Bearer ') === 0) {
+    return String(auth).slice('Bearer '.length).trim();
+  }
+  return null;
+}
 
 const debug = debug$0('client:api');
 
@@ -73,11 +98,22 @@ function getHeader(headers, name) {
   return headers[name.toLowerCase()] || headers[name] || null;
 }
 
+/**
+ * @param {{
+ *   worker: object,
+ *   keyStore: object,
+ *   logger?: object,
+ *   delegateAuth?: object | null,
+ *   kvEnv?: object | null,
+ *   config?: Record<string, unknown>
+ * }} opts
+ */
 export function createApi({
   worker,
   keyStore,
   logger = new NullLogger(),
   delegateAuth = null,
+  kvEnv = null,
   config = {}
 }) {
   if (!worker) throw new Error('createApi requires a worker (client PersonWorker)');
@@ -242,26 +278,133 @@ export function createApi({
     }
   }
 
-  async function postAuthRole({ body, apiKey, headers }) {
+  async function sessionFromIdentityToken(jwt) {
+    const delegateUser = await delegateAuth.verifyIdentityToken(jwt);
+    let personId = null;
+    if (kvEnv?.PERSON_ID_DELEGATE_KV) {
+      try {
+        const cached = await getPersonIdByUnid(kvEnv, delegateUser.unid);
+        const n = cached != null ? parseInt(cached, 10) : NaN;
+        if (Number.isInteger(n)) personId = n;
+      } catch {
+        /* KV miss / missing binding — fall through to SQL */
+      }
+    }
+    if (!Number.isInteger(personId)) {
+      personId = await resolveDelegatePersonId({
+        worker,
+        delegateUser,
+        pluginId,
+        remoteInputId: 'delegate',
+        inputType: defaultInputType
+      });
+      if (kvEnv?.PERSON_ID_DELEGATE_KV) {
+        try {
+          await setDelegatePersonId(kvEnv, delegateUser.unid, personId);
+        } catch {
+          /* cache write is best-effort */
+        }
+      }
+    }
+    const roles = await delegateAuth.rolesForPerson(personId);
+    return {
+      personId,
+      roles,
+      unid: delegateUser.unid,
+      email: delegateUser.email,
+      auth: delegateUser.auth || {},
+      level: delegateUser.level,
+      profileId: delegateUser.profileId,
+      profile: delegateUser.profile
+    };
+  }
+
+  async function postAuthLogin({ body }) {
+    if (!delegateAuth) {
+      return json(501, { error: 'login requires delegateAuth on createApi' });
+    }
+    const token = body?.delegate_token || body?.delegate_code || body?.delegate_bridge;
+    if (!token) {
+      return json(400, { error: 'delegate_token, delegate_code, or delegate_bridge is required' });
+    }
+    const returnTo = body?.return_to || body?.returnTo;
+    try {
+      const result = await delegateAuth.login(token, {
+        returnTo,
+        site: body?.site
+      });
+      return json(200, { session: result.session, token: result.token });
+    } catch (e) {
+      debug('postAuthLogin error:', e);
+      const status = e.reason === 'invalid_site' ? 400 : e.kind === 'configuration' ? 503 : 401;
+      return json(status, {
+        error: e.userMessage || String(e.message || e),
+        reason: e.reason
+      });
+    }
+  }
+
+  function getAuthMe({ session }) {
+    if (!session || !Number.isInteger(session.personId)) {
+      return json(401, { error: 'session or identity token required' });
+    }
+    const me = {
+      personId: session.personId,
+      roles: session.roles || [],
+      level: session.level ?? null,
+      unid: session.unid,
+      profileId: session.profileId ?? null,
+      auth: session.auth || {}
+    };
+    if (session.profile) me.profile = session.profile;
+    return json(200, me);
+  }
+
+  function postAuthLogout() {
+    // Core sessions are stateless HMAC tokens. Clearing the host cookie is
+    // the host's job (Set-Cookie Max-Age=0). This route only acknowledges logout.
+    return json(200, { loggedOut: true });
+  }
+
+  async function postAuthRole({ body, apiKey, headers, session, query }) {
     if (!delegateAuth) {
       return json(501, { error: 'change-role requires delegateAuth on createApi' });
     }
     const roleId = body?.role_id || body?.roleId;
     if (!roleId) return json(400, { error: 'body.role_id is required' });
 
-    let session = null;
-    const sessionToken =
-      body?.session_token ||
-      body?.sessionToken ||
-      getHeader(headers, 'X-Engine9-Session') ||
-      getHeader(headers, 'x-engine9-session');
-    if (sessionToken) {
-      session = delegateAuth.verify(sessionToken);
-      if (!session) return json(401, { error: 'invalid session' });
+    if (!session) {
+      const sessionToken =
+        body?.session_token ||
+        body?.sessionToken ||
+        getHeader(headers, 'X-Engine9-Session') ||
+        getHeader(headers, 'x-engine9-session');
+      if (sessionToken) {
+        session = delegateAuth.verify(sessionToken);
+        if (!session) return json(401, { error: 'invalid session' });
+      }
     }
 
-    const personId = body?.person_id || body?.personId || session?.personId;
-    if (!personId) return json(400, { error: 'person_id or session_token is required' });
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const isAdmin = scopesAllow(ctx.scopes, SCOPES.ADMIN);
+    const requestedPersonId = body?.person_id || body?.personId;
+    const requestedNum = requestedPersonId != null ? Number(requestedPersonId) : null;
+
+    if (!session && !isAdmin) {
+      return json(401, { error: 'session or identity token required' });
+    }
+    if (
+      session &&
+      requestedNum != null &&
+      Number.isFinite(requestedNum) &&
+      requestedNum !== Number(session.personId) &&
+      !isAdmin
+    ) {
+      return json(403, { error: 'person_id does not match session' });
+    }
+
+    const personId = requestedPersonId || session?.personId;
+    if (!personId) return json(400, { error: 'person_id or session is required' });
 
     const exclusive = body?.exclusive !== undefined ? Boolean(body.exclusive) : true;
     try {
@@ -315,10 +458,44 @@ export function createApi({
         getHeader(req.headers, 'X-Engine9-Session') ||
         getHeader(req.headers, 'x-engine9-session');
       if (sessionToken) session = delegateAuth.verify(sessionToken);
+
+      if (!session) {
+        const bearer = extractBearer(req.headers);
+        if (
+          bearer &&
+          !isApiKeyBearer(bearer) &&
+          isDelegateIdentityJwt(bearer) &&
+          typeof delegateAuth.verifyIdentityToken === 'function'
+        ) {
+          try {
+            session = await sessionFromIdentityToken(bearer);
+          } catch (e) {
+            return json(401, {
+              error: e.userMessage || 'invalid identity token',
+              reason: e.reason || 'invalid_identity_token'
+            });
+          }
+        }
+      }
     }
 
+    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
+      return postAuthLogin({ body: req.body, apiKey });
+    }
+    if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
+      return getAuthMe({ session });
+    }
+    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
+      return postAuthLogout();
+    }
     if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'role') {
-      return postAuthRole({ body: req.body, apiKey, headers: req.headers });
+      return postAuthRole({
+        body: req.body,
+        apiKey,
+        headers: req.headers,
+        session,
+        query: req.query || {}
+      });
     }
     if (method === 'POST' && parts[0] === 'people') {
       return postPeople({ body: req.body, apiKey, query: req.query || {}, session });
