@@ -1,5 +1,6 @@
 # Example wrangler configuration for the Engine9 core API on Cloudflare.
-# Copy the relevant pieces into your site's wrangler.toml.
+# npx e9core setup writes wrangler.jsonc for you (database id included).
+# Copy pieces from this file only when you want optional KV or R2 bindings.
 
 name = "engine9-core-api"
 main = "node_modules/@engine9/core/cloudflare/worker.js"

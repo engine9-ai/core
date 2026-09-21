@@ -2,7 +2,7 @@
   "name": "@engine9/core",
   "version": "1.1.1",
   "type": "module",
-  "description": "Engine9 core: plugin deployment, people pipeline, table upserts, segment-gated reads, and API-key authenticated endpoints (Cloudflare Workers/D1 tier-1, generic Node deployments supported).",
+  "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
@@ -44,7 +44,7 @@
     "./cloudflare/kv": "./cloudflare/kv/index.js"
   },
   "bin": {
-    "e9": "./bin/e9.js"
+    "e9core": "./bin/e9core.js"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.js",

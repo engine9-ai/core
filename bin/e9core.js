@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /*
-  @engine9/core bin.e9 → bin/e9.js
+  @engine9/core bin.e9core → bin/e9core.js
 
   Core-only helpers against a database connection (--db / ENGINE9_DATABASE_CONNECTION).
   No accounts.d, no WorkerRunner.
 
-  This is not the server CLI. @engine9/server also publishes bin.e9, but that
-  points at server/bin/e9 (WorkerRunner: `e9 personworker installStandard -a …`).
-  See core/README.md "The e9 CLI (two binaries)" and server/README.md.
+  This is not the server CLI. @engine9/server publishes bin.e9, which points at
+  server/bin/e9 (WorkerRunner: `e9 personworker installStandard -a …`).
+  See core/README.md "The e9core CLI" and server/README.md.
 
-    e9 create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
+    e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
         Core-only wrapper around SQLWorker.createApiKey.
         The plaintext key is printed once and only the hash is stored.
         --scopes is required (comma-separated). Use scope "admin" for full
@@ -17,15 +17,29 @@
         On an Engine9 server account use:
           e9 sqlworker createApiKey -a <account_id> --name … --scopes …
 
-    e9 create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
+    e9core setup [--name my-site] [--remote] [--domain example.com] [--node]
+        Automatic Site setup. Writes wrangler.jsonc, creates D1, loads tables,
+        and stores keys in .env. You do not edit those files by hand.
+        --remote also loads production D1, saves Cloudflare secrets, and deploys.
+        --node skips Cloudflare and uses a local SQLite file.
+        Do not add .dev.vars (Wrangler prefers it over .env).
+
+    e9core setup-keys [--d1 engine9] [--remote] [--rotate]
+        Create the site admin key, the public form key, and SESSION_SECRET.
+        Writes plaintext to .env only (gitignored). Do not add .dev.vars;
+        Wrangler prefers that file and ignores the same names in .env.
+        Stores only hashes in local D1. --remote also stores hashes in
+        production D1 and saves the three values as Cloudflare secrets.
+
+    e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9 sqlite-ddl --schema @engine9/interfaces/person
+    e9core sqlite-ddl --schema @engine9/interfaces/person
         Print the SQLite/D1 create statements for a schema -- useful for D1
         migration files.
 
-    e9 installStandard --db sqlite://./engine9.db [--stack ...]
+    e9core installStandard --db sqlite://./engine9.db [--stack ...]
         Live-install a stack (default @engine9/interfaces/stacks/standard)
         into the database: plugin rows + create/alter tables.
 
@@ -39,6 +53,8 @@ import {
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
+import { setupKeys } from './setupKeys.js';
+import { SETUP_HELP, setupSite } from './setupSite.js';
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -80,6 +96,61 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const [command] = args._;
   switch (command) {
+    case 'setup': {
+      if (args.help) {
+        console.log(SETUP_HELP);
+        break;
+      }
+      const result = await setupSite({
+        cwd: process.cwd(),
+        name: args.name && args.name !== true ? String(args.name) : undefined,
+        d1: args.d1 && args.d1 !== true ? String(args.d1) : undefined,
+        db: args.db && args.db !== true ? String(args.db) : undefined,
+        domain: args.domain && args.domain !== true ? String(args.domain) : undefined,
+        remote: args.remote === true,
+        deploy: args['no-deploy'] ? false : undefined,
+        node: args.node === true,
+        rotate: args.rotate === true,
+        refreshSchema: args['refresh-schema'] === true
+      });
+      for (const note of result.notes) console.log(note);
+      if (!args.remote && !args.node) {
+        console.log('Local setup is done. Front-end work can use .env.');
+        console.log('When you want it on the internet: npx e9core setup --remote');
+      }
+      break;
+    }
+    case 'setup-keys': {
+      const worker = args.db ? getPluginWorker(args) : null;
+      try {
+        const result = await setupKeys({
+          cwd: process.cwd(),
+          d1: args.d1 && args.d1 !== true ? String(args.d1) : 'engine9',
+          remote: args.remote === true,
+          rotate: args.rotate === true,
+          applySql: worker
+            ? async (sql) => {
+              await worker.query({ sql });
+            }
+            : undefined
+        });
+        if (result.reused) {
+          console.log('Keys already in .env. Pass --rotate to replace them.');
+        } else {
+          console.log('Saved keys in .env (not committed). Do not add .dev.vars.');
+          if (result.created.admin) console.log('  E9_ADMIN_API_KEY — server only');
+          if (result.created.public) console.log('  E9_PUBLIC_API_KEY — signup forms / browser');
+          if (result.created.session) console.log('  SESSION_SECRET — signs the login cookie');
+        }
+        for (const note of result.notes) console.log(note);
+        if (!args.remote) {
+          console.log('When you deploy: npx e9core setup-keys --remote');
+        }
+      } finally {
+        if (worker) await worker.destroy();
+      }
+      break;
+    }
     case 'create-api-key': {
       if (!args.scopes || args.scopes === true) {
         console.error('create-api-key requires --scopes <list>');
@@ -122,12 +193,12 @@ async function main() {
     case 'sqlite-ddl': {
       if (args.stack) {
         console.error('sqlite-ddl does not accept --stack; pass --schema <package>');
-        console.error('  Example: e9 sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
         process.exit(1);
       }
       if (!args.schema || args.schema === true) {
         console.error('sqlite-ddl requires --schema <package>');
-        console.error('  Example: e9 sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
         process.exit(1);
       }
       const schema = await loadSchemaModule(args.schema);
@@ -159,7 +230,9 @@ async function main() {
       break;
     }
     default:
-      console.log('Usage: e9 <create-api-key|sqlite-ddl|installStandard> [--db <connection>] [options]');
+      if (!command || args.help) console.log(SETUP_HELP);
+      console.log('Other commands: e9core <setup-keys|create-api-key|sqlite-ddl|installStandard>');
+      console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }
 }

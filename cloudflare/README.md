@@ -1,14 +1,23 @@
-# engine9 Client on Cloudflare
+# `@engine9/core` on Cloudflare
 
-Cloudflare Workers + D1 is a tier-1 deployment target for `@engine9/core`.
-The D1 database *is* the engine9 database. Call `PersonWorker.installStandard()`
-(or core `e9 installStandard` from [`bin/e9.js`](../bin/e9.js)) to deploy plugin
-rows and tables, or generate SQL for one interface with `e9 sqlite-ddl --schema …`
-and apply it as a wrangler migration. Then serve the people/upsert/read API from
+First-time setup (plain language, including D1): [docs/deploy.md](../docs/deploy.md).
+This file is the shorter technical reference.
+
+`@engine9/core` is a standalone library. On Cloudflare it creates an
+engine9-standard database in D1 and serves the standard endpoints from a
+Worker. D1 can be the site’s primary database, or the engine9 database beside
+one you already run. The schemas it installs come from the public
+[`@engine9/interfaces`](https://github.com/engine9-io/interfaces) package.
+
+Call `PersonWorker.installStandard()` (or `e9core installStandard` from
+[`bin/e9core.js`](../bin/e9core.js)) to deploy plugin rows and tables, or
+generate SQL for one interface with `e9core sqlite-ddl --schema …` and apply
+it as a wrangler migration. Then serve the people, upsert, and read API from
 a Worker.
 
-> These `e9 …` commands are **core** `bin.e9` (`@engine9/core`), not the server
-> WorkerRunner. See [The e9 CLI (two binaries)](../README.md#the-e9-cli-two-binaries).
+> These `e9core …` commands are this package’s CLI. The private server’s
+> WorkerRunner is `e9`, for databases that are already engine9-capable.
+> See [The e9core CLI](../README.md#the-e9core-cli).
 
 ## What runs where
 
@@ -17,20 +26,31 @@ a Worker.
 | engine9 database | D1 (SQLite dialect) |
 | API endpoints | Worker (`api.handleFetch`) |
 | API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
-| Delegate id cache | KV `PERSON_ID_DELEGATE_KV` — edge cache of `person_id_delegate` (`@engine9/core/cloudflare/kv`) |
+| Identity-provider id cache | KV `PERSON_ID_DELEGATE_KV` — used by the default provider. See [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md) |
 | Segment membership cache | KV `PERSON_SEGMENT_VK` — edge cache of `person_segment` (`@engine9/core/cloudflare/kv`) |
 | Modification logs | R2 batch objects (`BatchLogger` + `r2Sink`), flushed via `ctx.waitUntil` |
 
 > **Cloudflare-only KV caches.** `PERSON_ID_DELEGATE_KV` and `PERSON_SEGMENT_VK`
-> exist only on Cloudflare-style deployments. Generic Node / MySQL sites read
-> `person_id_delegate` and `person_segment` from SQL directly. Pass the Worker
-> `env` as `kvEnv` to `createApi({ kvEnv: env })` so Identity Token requests
-> can cache unid → `person_id` in `PERSON_ID_DELEGATE_KV`. D1 remains the
-> source of truth.
+> exist only on Cloudflare-style deployments, and only matter after you turn
+> on an identity provider. Generic Node / MySQL sites read the same rows from
+> SQL. D1 remains the source of truth. The binding name matches the default
+> provider; see [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
 
 ## Install
 
-1. **Add the client to your site**
+The usual path writes `wrangler.jsonc` for you, including the D1 database id:
+
+```bash
+npx wrangler login
+npm install @engine9/core
+npx e9core setup
+npx e9core setup --remote
+```
+
+See [docs/deploy.md](../docs/deploy.md). The steps below are the same work,
+one piece at a time.
+
+1. **Install the library**
 
    ```bash
    npm install @engine9/core
@@ -47,13 +67,13 @@ a Worker.
    Live plugin install deploys plugin rows and tables:
 
    ```bash
-   npx e9 installStandard --db sqlite://./engine9.db
+   npx e9core installStandard --db sqlite://./engine9.db
    ```
 
    Or print SQLite DDL for one interface and apply it as a wrangler migration:
 
    ```bash
-   npx e9 sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
+   npx e9core sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
    wrangler d1 migrations apply engine9 --remote
    ```
 
@@ -71,7 +91,7 @@ a Worker.
 
    ```bash
    # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)
-   npx e9 create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
+   npx e9core create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
    ```
 
    The plaintext key (`e9key_...`) is printed once; only its SHA-256 hash is
@@ -79,14 +99,15 @@ a Worker.
 
 5. **Configure wrangler**
 
-   Copy `wrangler.toml.example` into your project's `wrangler.toml`. The
-   important parts:
+   `npx e9core setup` writes `wrangler.jsonc` (Worker entry, `nodejs_compat`,
+   the D1 binding, and `E9_PLUGIN_ID`). Copy from `wrangler.toml.example` only
+   when you want the optional KV or R2 bindings. The important parts:
 
-   - `compatibility_flags = ["nodejs_compat"]` (the client uses `node:crypto`
+   - `compatibility_flags = ["nodejs_compat"]` (the library uses `node:crypto`
      and `node:buffer`)
    - the `[alias]` mapping `@engine9/input-tools` to
-     `@engine9/core/cloudflare/input-tools-shim`, which keeps server-only
-     dependencies (AWS SDK, archiver, googleapis) out of the bundle
+     `@engine9/core/cloudflare/input-tools-shim`, which keeps Node-only
+     dependencies (AWS SDK, archiver, googleapis) out of the Worker bundle
 
 6. **Deploy**
 
@@ -103,7 +124,7 @@ a Worker.
 # health
 curl https://your-worker.example.workers.dev/api/ok
 
-# create/update a person (same pipeline as the server's loadPeople)
+# create/update a person (the standard inbound people pipeline)
 curl -X POST https://your-worker.example.workers.dev/api/people \
   -H "Authorization: Bearer e9key_..." -H "Content-Type: application/json" \
   -d '{"people":[{"email":"alice@example.com","given_name":"Alice","source_code":"WEB_SIGNUP"}]}'
@@ -113,23 +134,18 @@ curl -X POST https://your-worker.example.workers.dev/api/upsert/person_segment \
   -H "Authorization: Bearer e9key_..." -H "Content-Type: application/json" \
   -d '{"rows":[{"segment_id":"<uuid>","person_id":123}]}'
 
-# segment-gated read; person_id supplied by the caller (e.g. via delegate)
+# segment-gated read; person_id supplied by the caller (for example after login)
 curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
   -H "Authorization: Bearer e9key_..."
 ```
 
 ## KV caches (Cloudflare only)
 
-Optional edge caches for hot lookups. Import from `@engine9/core/cloudflare/kv`.
-Pass the Worker `env` as `kvEnv` on `createApi` to enable the delegate
-person-id cache on JWT identity requests. Always treat D1 as authoritative.
-
-### `PERSON_ID_DELEGATE_KV` — cache of `person_id_delegate`
-
-| Key | Value |
-| --- | --- |
-| `unid:<unid>` | `<person_id>` |
-| `person:<person_id>` | `<unid>` |
+Optional. Skip these until login works. `PERSON_SEGMENT_VK` caches segment
+membership. `PERSON_ID_DELEGATE_KV` is the default identity provider’s
+person-id cache; key layout is in
+[docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
+D1 stays the source of truth.
 
 ### `PERSON_SEGMENT_VK` — cache of `person_segment`
 
@@ -142,4 +158,5 @@ person-id cache on JWT identity requests. Always treat D1 as authoritative.
 Every successful write is committed to D1 first, then appended to the
 modification log. With the R2 sink, each request's batch is written as a
 timestamped `.jsonl` object under `modifications/` for long-term storage and
-downstream processing (e.g. periodic sync into the full engine9 server).
+downstream processing by any library that reads the engine9 standard,
+including the private server when this D1 database is engine9-capable.

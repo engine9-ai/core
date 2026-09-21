@@ -1,10 +1,16 @@
 # The inbound people pipeline and how plugins join it
 
-This is the pipeline every person record goes through on its way into an
-engine9 account: a signup form post, a CSV of donors, a nightly CRM sync, a
-transaction file. It runs the same way on the server (`PersonWorker.loadPeople`)
-and in the core client (`PersonWorker.processPeople`, including Cloudflare
-Workers). The code is `getInboundTransforms.js` in this directory.
+This is the standard pipeline every person record goes through on its way into
+an engine9-capable database: a signup form post, a CSV of donors, a nightly
+CRM sync, a transaction file. `@engine9/core` runs it as
+`PersonWorker.processPeople`, including on Cloudflare Workers. The private
+server runs the same slots as `PersonWorker.loadPeople` when the database
+already follows this standard. The code is `getInboundTransforms.js` in this
+directory.
+
+Plugin steps come from published packages such as
+[`@engine9/interfaces`](https://github.com/engine9-io/interfaces). Installing
+a plugin adds its steps; the pipeline itself stays fixed.
 
 ## The one idea: slots
 
@@ -126,7 +132,8 @@ upsert    woven  @engine9/interfaces/person_phone:transforms:upsertPersonPhone
 upsert    woven  @engine9/interfaces/person_remote:transforms:upsertPersonRemote
 ```
 
-CLI: `e9 personworker getInboundTransforms --plugin_id=<id> --describe=true`.
+On the private server, once the database is engine9-capable:
+`e9 personworker getInboundTransforms --plugin_id=<id> --describe=true`.
 `loadPeople` and `processPeople` also log this at debug level.
 
 Typical questions this answers:
@@ -168,6 +175,6 @@ Jobs can adjust the woven chain without touching plugins:
 
 - Weaver, slots, describe: `core/lib/peoplePipeline/getInboundTransforms.js`
 - Snapshot at install: `core/lib/PluginWorker.js` (`installRow`)
-- Client transform registry (what a Worker can execute): `core/lib/PersonWorker.js`
+- Transform registry a Worker executes: `core/lib/PersonWorker.js`
 - Example declarations: `interfaces/person_email/index.js`, `interfaces/person_hash/index.js`
 - Tests: `core/test/inboundWeaver.test.js`

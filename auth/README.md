@@ -1,11 +1,19 @@
 # `@engine9/core/auth`
 
-Module reference for core authentication and authorization. Product vocabulary:
-**User** (not Account), **Site** (not Audience). The JWT claim is still `aud`.
+Module reference for authentication and authorization on the standard
+endpoints `@engine9/core` serves. The same API-key scopes apply on any
+engine9-capable database, including when the private server’s Task API is
+in use. Product vocabulary: **User**, **Site**, **Identity Token**. The JWT
+claim is still `aud`.
+
+Login uses an optional **identity provider**. Production defaults to delegate.
+Provider-specific terms (UNID, handoff fields) are in
+[docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
+`delegate.js` is the implementation of that default provider.
 
 This is **not** OpenID Connect. Do not invent OIDC discovery, `id_token`
-aliases, or extra OIDC claims. The wire protocol is
-[`id/docs/protocol.md`](../../id/docs/protocol.md).
+aliases, or extra OIDC claims. The default provider’s wire protocol is
+[`id` protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
 
 ## Layout
 
@@ -22,7 +30,10 @@ aliases, or extra OIDC claims. The wire protocol is
 1. **API key** (layer 1) — enables the caller. Empty `scopes` deny. `admin`
    grants every scope. Prefix `e9key_` or `e9publickey_` (`public` scope).
 2. **Role** (layer 2) — `role_id === segment_id`. Effective scopes =
-   key ∩ role (`intersectScopes`).
+   key ∩ role (`intersectScopes`). Soft **declared roles** with the same
+   `requiredAuth` shape (no `person_id`) are documented in
+   [`@engine9/id` declared roles](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
+   and demonstrated in [`id-demo`](https://github.com/engine9-ai/id-demo).
 3. **Identity Level** (layer 3) — `requiredAuth.minLevel` and
    `requiredAuth.twoFactor` against the session / Identity Token. Levels are
    not authorization.
@@ -41,21 +52,13 @@ aliases, or extra OIDC claims. The wire protocol is
 
 ## Identity Tokens (`delegate.js`)
 
+Default provider implementation. Behavior and vocabulary:
+[docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
+
 `verifyDelegateIdentityToken({ token, delegateUrl, site, jwks?, issuer?, fetchImpl? })`
-
-- GET `{delegateUrl}/.well-known/jwks.json` (in-memory cache by `delegateUrl`).
-- Verify ES256, `iss` (default: delegateUrl origin), `aud === site`, `exp`
-  (±60s).
-- Returns a DelegateUser-like object: `unid`, optional `firebaseUid`, `email`
-  from `profile` when `email_verified`, `auth` (`signInProvider` ←
-  `auth.provider`, `twoFactor` ← `auth.two_factor`, `signInSecondFactor`,
-  `authTime` ← `auth.auth_time`), `level`, `profileId` (`sub` if not
-  `unid:…`), `profile`.
-
-`firebaseUid` is optional. `resolveDelegatePersonId` only needs `unid`.
-
-Email is written onto the person record only when
-`delegateUser.emailVerified === true` **or** `delegateUser.level >= 2`.
+verifies the provider JWT and returns the provider user object. Email is
+written onto the person record only when it is verified or the Identity Level
+is at least 2.
 
 ## `createDelegateAuth`
 
