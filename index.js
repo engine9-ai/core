@@ -93,8 +93,7 @@ export {
 export {
   createDelegateLoginFailure,
   normalizeDelegateLoginFailure,
-  delegateAuthorizeUrl,
-  exchangeDelegateCode,
+  delegateIdentityUrl,
   verifyDelegateIdentityToken,
   isDelegateIdentityJwt,
   classifyDelegateLoginToken,

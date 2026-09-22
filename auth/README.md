@@ -7,7 +7,7 @@ in use. Product vocabulary: **User**, **Site**, **Identity Token**. The JWT
 claim is still `aud`.
 
 Login uses an optional **identity provider**. Production defaults to delegate.
-Provider-specific terms (UNID, handoff fields) are in
+Provider-specific terms (UNID) are in
 [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
 `delegate.js` is the implementation of that default provider.
 
@@ -22,7 +22,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 | `index.js` | API keys (`SqlApiKeyStore`, `KVApiKeyStore`, prefixes, catalog) |
 | `policy.js` | Scopes, `requiredAuth` (`minLevel`, `twoFactor`), `resolveAuthContext` |
 | `hmac.js` | `encoded.sig` HMAC helpers (Core Session + legacy bridge) |
-| `delegate.js` | Identity Tokens, legacy handoff, person + role + session |
+| `delegate.js` | Identity Tokens, person + role + session |
 | `delegate.d.ts` | Types for `createDelegateAuth` and JWT verification |
 
 ## Authentication vs authorization
@@ -67,7 +67,6 @@ createDelegateAuth({
   worker,
   delegateUrl,
   site,              // Site origin for JWT aud; else returnTo origin on login
-  handoffSecret,     // optional — legacy code/bridge only
   sessionSecret,     // required — HMAC Core Session
   pluginId,
   roles,             // { [segmentUuid]: { name, scopes, requiredAuth } }
@@ -75,13 +74,8 @@ createDelegateAuth({
 })
 ```
 
-`login(token)` detects:
-
-| Form | Detection | Secret |
-| --- | --- | --- |
-| Identity Token | starts with `eyJ` and has two dots | none |
-| HMAC bridge | contains `.` but is not a JWT | `handoffSecret` |
-| Handoff code | 64-hex, or any other string without `.` | `handoffSecret` |
+`login(token)` accepts an Identity Token (JWT). Verification uses the
+provider JWKS. No shared secret.
 
 `verify(sessionToken)` returns `personId`, `roles`, `unid`, `email`, `auth`,
 `level`, `profileId`, `exp`.
@@ -89,11 +83,87 @@ createDelegateAuth({
 `verifyIdentityToken(jwt)` is the same JWKS check with constructor `site` /
 `delegateUrl`.
 
-## Core Session (host-delivered)
+## Local session (`SESSION_SECRET`)
 
-Sessions are compact HMAC tokens (`createSessionToken` /
-`verifySessionToken`). The host sets the cookie or sends
-`X-Engine9-Session`. Core does not store sessions.
+A **Core Session** is a compact HMAC token the host mints after it has
+verified an Identity Token. Later requests present that token. The host
+checks the signature and `exp` in process. It does not call Delegate, fetch
+JWKS, or read the database to decide that the caller is the same User who
+just logged in.
+
+The env name is **`SESSION_SECRET`**. It is the HMAC-SHA256 key. Anyone who
+knows it can mint a session the host will accept, so production must use an
+unguessable value kept out of git. Each host has its own value. A Site’s
+secret does not sign the engine9 API’s sessions, and the API’s secret does
+not sign a Site’s cookie.
+
+Create one (32 random bytes, hex). This is the same generator `e9core
+setup-keys` uses:
+
+```bash
+openssl rand -hex 32
+```
+
+`npx e9core setup-keys` writes `SESSION_SECRET` into `.env` next to the API
+keys. `npx e9core setup-keys --remote` stores that value as a Cloudflare
+secret. Rotate with `npx e9core setup-keys --rotate`, then `--remote` again.
+
+### What it is, and what it is not
+
+| Secret | Who holds it | What it does |
+| --- | --- | --- |
+| `SESSION_SECRET` | The Site, or the engine9 API host | Signs that host’s local session |
+| `E9_ADMIN_API_KEY` / `E9_PUBLIC_API_KEY` | The caller | Authorizes the HTTP API. Empty scopes deny |
+
+Identity Tokens are verified with the provider’s public JWKS
+(`{delegateUrl}/.well-known/jwks.json`). The signing key stays on the
+provider.
+
+An Identity Token proves the User to the host once. A Core Session is the
+host’s own cache of that result. Login still needs Delegate (or another
+provider). Requests after that need `SESSION_SECRET`.
+
+### When a request hits Delegate
+
+| Call | Credential | Delegate? |
+| --- | --- | --- |
+| `POST /auth/login` with `delegate_token` | Identity Token (JWT, `aud` = Site) | Yes. JWKS verify, then map UNID → `person_id` |
+| `GET /auth/me`, `POST /auth/role`, other routes with `X-Engine9-Session` or the session cookie | Core Session | No. HMAC + `exp` |
+| Same routes with `Authorization: Bearer <jwt>` (three segments, not an API key) | Identity Token | Yes, when `verifyIdentityToken` is configured |
+| `POST /people` and other data routes | API key | No |
+
+Mint a session when the browser or app will call back many times and you
+want those calls to skip the provider. Send the Identity Token on each
+request when you would rather not hold a host session. People writes need
+only an API key; they never read `SESSION_SECRET`.
+
+### Token shape
+
+`createSessionToken(payload, { secret, ttlSeconds })` builds
+`base64url(JSON).base64url(HMAC-SHA256)`. The JSON is the payload plus
+`exp` in unix milliseconds (`Date.now() + ttlSeconds * 1000`). Default TTL
+is 86400 seconds. `verifySessionToken` returns the payload, or `null` when
+the signature, encoding, or `exp` fails. Core does not store sessions.
+
+`createDelegateAuth({ sessionSecret })` requires the secret. `login()`
+verifies the Identity Token, resolves the person, and returns
+`{ session, token }`. `verify(token)` reads that token back. The session
+object is:
+
+```js
+{
+  personId,          // Site person
+  roles,             // role_id values (segment UUIDs)
+  unid,
+  email,             // only when the provider said it was verified, or level >= 2
+  auth,              // { signInProvider, twoFactor, signInSecondFactor, authTime }
+  level,             // Identity Level from the provider
+  profileId,
+  exp                // unix milliseconds
+}
+```
+
+The host delivers the token. Core will not set a cookie for you.
 
 ```js
 createSessionCookieHeaders(token, {
@@ -106,8 +176,37 @@ createSessionCookieHeaders(token, {
 // → Set-Cookie header value (HttpOnly)
 ```
 
-Logout (`POST /auth/logout`) returns `{ loggedOut: true }`. Clearing the
-cookie is the host's job.
+The other delivery is the `X-Engine9-Session` header. Logout
+(`POST /auth/logout`) returns `{ loggedOut: true }`. Clearing the cookie
+or dropping the header is the host's job.
+
+### Development
+
+Local people APIs do not need a provider and do not need this secret.
+`setup-keys` still writes `SESSION_SECRET` so the value is already there
+when you turn login on. `createDelegateAuth` throws if `sessionSecret` is
+missing; there is no built-in development key inside core. A laptop process
+can use any string you put in `.env`. Production must use the random value
+from the one-liner above, because a published default would let anyone mint
+a session.
+
+### The engine9 API host
+
+The private server (Conductor and MCP against `data.engine9.ai`) uses the
+same env name for the same job. After it verifies an Identity Token
+(`aud` = the API origin), it signs an **operator session** and clients send
+that as `Authorization: Bearer`. The HMAC check is local. Delegate is not
+called again until the next login.
+
+That session is not a Core Session. The body is the operator’s Firebase
+`uid`, email, `unid`, and Identity Level, and `exp` is unix seconds. A Site
+session’s body is `personId` and roles, and `exp` is unix milliseconds.
+The two tokens do not verify against each other. Give the API host its own
+`SESSION_SECRET`.
+
+On that host the secret is required when `NODE_ENV=production`. Any other
+`NODE_ENV` uses a fixed development key so a local API can sign sessions
+without a provisioned secret. Production refuses that fallback.
 
 ## HTTP (`createApi`)
 
@@ -121,14 +220,9 @@ All routes except `GET /ok` require an API key.
 
 | Route | Notes |
 | --- | --- |
-| `POST /auth/login` | API key; body `delegate_token` \| `delegate_code` \| `delegate_bridge` |
+| `POST /auth/login` | API key; body `delegate_token` |
 | `GET /auth/me` | session or JWT → `{ personId, roles, level, unid, profileId, profile?, auth }` |
 | `POST /auth/logout` | API key; `{ loggedOut: true }` |
 | `POST /auth/role` | session/JWT `personId` must match `body.person_id`, or `admin` scope |
-
-## Legacy handoff
-
-`delegateAuthorizeUrl` / `exchangeDelegateCode` / `verifyHandoffBridgeToken`
-still use `DELEGATE_SHARED_SECRET`. Prefer Identity Tokens for new Sites.
 
 Error reasons include `invalid_identity_token` and `invalid_site`.

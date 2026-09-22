@@ -12,8 +12,7 @@
                                    body: { rows: [...] }
     GET  /read/:name            -- read a configured table; optionally gated
                                    by person_segment membership
-    POST /auth/login            -- exchange delegate_token | delegate_code |
-                                   delegate_bridge (requires API key + delegateAuth)
+    POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth)
     GET  /auth/me               -- current User from session or Identity Token
     POST /auth/logout           -- { loggedOut: true }; cookie clear is the host's job
     POST /auth/role             -- change role (requires delegateAuth); body:
@@ -323,9 +322,9 @@ export function createApi({
     if (!delegateAuth) {
       return json(501, { error: 'login requires delegateAuth on createApi' });
     }
-    const token = body?.delegate_token || body?.delegate_code || body?.delegate_bridge;
+    const token = body?.delegate_token;
     if (!token) {
-      return json(400, { error: 'delegate_token, delegate_code, or delegate_bridge is required' });
+      return json(400, { error: 'delegate_token is required' });
     }
     const returnTo = body?.return_to || body?.returnTo;
     try {

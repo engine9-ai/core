@@ -72,22 +72,9 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     jwk.alg = 'ES256';
     jwk.use = 'sig';
 
-    const fetchImpl = async (url, options) => {
+    const fetchImpl = async (url) => {
       if (String(url).includes('/.well-known/jwks.json')) {
         return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
-      }
-      if (String(url).includes('/handoff/exchange')) {
-        return new Response(
-          JSON.stringify({
-            unid: UNID,
-            firebaseUid: 'fb-api',
-            email: 'api@example.com',
-            level: 2,
-            profile_id: 'prof-handoff',
-            auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false }
-          }),
-          { status: 200 }
-        );
       }
       return new Response('not found', { status: 404 });
     };
@@ -109,7 +96,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       worker,
       delegateUrl: DELEGATE_URL,
       site: SITE,
-      handoffSecret: 'shared',
       sessionSecret: 'session-secret',
       pluginId,
       roles: {
@@ -148,18 +134,22 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     const apiHeaders = { authorization: `Bearer ${key}` };
     const adminHeaders = { authorization: `Bearer ${adminKey}` };
 
+    const loginToken = await signIdentityJwt({
+      privateKey,
+      profile: { id: 'prof-login', email: 'api@example.com', email_verified: true }
+    });
     const loginCode = await api.handle({
       method: 'POST',
       path: '/auth/login',
       headers: apiHeaders,
-      body: { delegate_code: 'one-time-code', return_to: `${SITE}/auth/delegate` }
+      body: { delegate_token: loginToken, return_to: `${SITE}/auth/delegate` }
     });
     assert.equal(loginCode.status, 200, JSON.stringify(loginCode.body));
     assert.ok(loginCode.body.token);
     assert.ok(loginCode.body.session.personId > 0);
     assert.equal(loginCode.body.session.unid, UNID);
     assert.equal(loginCode.body.session.level, 2);
-    assert.equal(loginCode.body.session.profileId, 'prof-handoff');
+    assert.equal(loginCode.body.session.profileId, 'prof-login');
     const personId = loginCode.body.session.personId;
     const sessionToken = loginCode.body.token;
 
@@ -172,7 +162,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(meSession.body.personId, personId);
     assert.equal(meSession.body.unid, UNID);
     assert.equal(meSession.body.level, 2);
-    assert.equal(meSession.body.profileId, 'prof-handoff');
+    assert.equal(meSession.body.profileId, 'prof-login');
     assert.ok(meSession.body.auth);
 
     const noSession = await api.handle({

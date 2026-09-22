@@ -276,7 +276,7 @@ Storing people (`POST /people`) needs an API key. An identity provider is
 optional, including for local development.
 
 Production defaults to **delegate**. Provider-specific setup (token fields,
-UNID, handoff) lives in
+UNID) lives in
 [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
 The browser library is [`@engine9/id`](https://github.com/engine9-ai/id).
 
@@ -293,10 +293,16 @@ The browser library is [`@engine9/id`](https://github.com/engine9-ai/id).
 ### When a session helps
 
 A Core Session is an optional HMAC cache of `personId`, `roles`, `level`, and
-`auth` after the Site has verified an Identity Token. The host delivers it
-(HttpOnly cookie or `X-Engine9-Session`). The browser can instead send the
-Identity Token as `Authorization: Bearer` on each request. Mint a session when
-you want fewer provider lookups.
+`auth` after the Site has verified an Identity Token. The host signs it with
+`SESSION_SECRET` and delivers it (HttpOnly cookie or `X-Engine9-Session`).
+Later requests check that signature locally. They do not call the identity
+provider again. The browser can instead send the Identity Token as
+`Authorization: Bearer` on each request. Mint a session when you want fewer
+provider lookups.
+
+`openssl rand -hex 32` creates the secret. `e9core setup-keys` writes the
+same kind of value. How the token is built, and which calls still hit Delegate:
+[auth/README.md](auth/README.md#local-session-session_secret).
 
 ### Roles `minLevel`
 

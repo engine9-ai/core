@@ -44,7 +44,9 @@ not in setup docs.
   The JWT claim remains `aud`.
 - Do not invent OpenID Connect discovery, `id_token` aliases, or extra OIDC claims.
 - A Core Session is an optional HMAC token the **host** delivers (cookie or
-  `X-Engine9-Session`). Never required for authentication.
+  `X-Engine9-Session`). Never required for authentication. The env name is
+  `SESSION_SECRET`. It is the local authenticator so later requests skip the
+  identity provider. Documented in [auth/README.md](auth/README.md).
 - Roles may set `requiredAuth.minLevel`; that is authorization policy, not
   an identity level itself.
 

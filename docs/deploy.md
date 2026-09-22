@@ -131,7 +131,7 @@ You do **not** need KV, R2, or Durable Objects for a working people API.
 | --- | --- |
 | `E9_ADMIN_API_KEY` | Full access. Server and scripts only. Never put this in page JavaScript |
 | `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser |
-| `SESSION_SECRET` | Signs the login cookie, if you turn login on later |
+| `SESSION_SECRET` | HMAC key for a Core Session. After login, the host checks this token locally and does not call the identity provider again. `openssl rand -hex 32`, or leave the value `setup-keys` wrote. See [auth/README.md](../auth/README.md#local-session-session_secret) |
 
 `npx e9core setup --remote` copies those three values to Cloudflare secrets.
 To replace them: `npx e9core setup --rotate`, then `npx e9core setup --remote`.

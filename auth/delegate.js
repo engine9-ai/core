@@ -11,22 +11,15 @@
     3. Maps unid / profile_id → person_id (`resolveDelegatePersonId`) and
        optionally mints a local HMAC Core Session (`createSessionToken`)
 
-  Legacy handoff (still supported when handoffSecret is set):
-
-    1. /handoff/authorize → ?delegate_code= or ?delegate_bridge=
-    2. exchangeDelegateCode / verifyHandoffBridgeToken (DELEGATE_SHARED_SECRET)
-    3. same person pipeline + local session
-
   Roles (auth layer 2): role_id === segment_id (UUID). The site supplies a
   UUID-keyed `roles` registry (display name, scopes, requiredAuth including
   minLevel). Session `roles` is an array of those segment UUIDs.
 
-  Engine9 API hosts use a different mechanism (session bridge) with the same
-  DELEGATE_SHARED_SECRET — see the package README. That is not this protocol.
+  Engine9 API hosts sign their own operator session with SESSION_SECRET.
+  That is not this protocol.
 */
 import { jwtVerify, createLocalJWKSet, errors as joseErrors } from 'jose';
 import {
-  parseSharedSecrets,
   base64urlEncode,
   base64urlDecode,
   signPayload,
@@ -44,58 +37,15 @@ const delegateJwksCache = new Map();
   auth          — normal sign-in flow failure; the user can try again
 */
 const DELEGATE_LOGIN_ERRORS = {
-  invalid_shared_secret: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because this site is misconfigured: DELEGATE_SHARED_SECRET does not match the delegate service. Contact the site operator.'
-  },
-  invalid_return_to: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because this site callback URL is not allowed by the delegate service. Contact the site operator.'
-  },
-  invalid_json_body: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because this site sent an invalid request to the delegate service. Contact the site operator.'
-  },
-  missing_code: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because this site did not send a handoff code to the delegate service. Contact the site operator.'
-  },
-  incomplete_delegate_payload: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because the delegate service returned an unexpected response. Contact the site operator.'
-  },
   person_resolution_failed: {
     kind: 'configuration',
     message:
       'Sign-in cannot be completed because this site could not create or look up your person record. Contact the site operator.'
   },
-  missing_handoff_secret: {
-    kind: 'configuration',
-    message:
-      'Sign-in cannot be completed because this site is misconfigured: DELEGATE_SHARED_SECRET is not set. Contact the site operator.'
-  },
   missing_session_secret: {
     kind: 'configuration',
     message:
       'Sign-in cannot be completed because this site is misconfigured: SESSION_SECRET is not set. Contact the site operator.'
-  },
-  invalid_or_expired_code: {
-    kind: 'auth',
-    message: 'Your sign-in link expired or was already used. Please sign in again.'
-  },
-  cloudflare_challenge: {
-    kind: 'configuration',
-    message:
-      'Local development needs an extra browser step: Cloudflare blocks server-to-server handoff from your machine. Open the continue link to finish sign-in in your browser.'
-  },
-  missing_delegate_code: {
-    kind: 'auth',
-    message: 'Sign-in did not finish because no authorization code was received. Please sign in again.'
   },
   login_failed: {
     kind: 'auth',
@@ -116,7 +66,6 @@ const DELEGATE_LOGIN_ERRORS = {
 function inferLoginReasonFromMessage(message) {
   const text = String(message || '').toLowerCase();
   if (!text) return null;
-  if (text.includes('delegate_shared_secret')) return 'missing_handoff_secret';
   if (text.includes('sessionsecret') || text.includes('session_secret')) {
     return 'missing_session_secret';
   }
@@ -127,7 +76,7 @@ function inferLoginReasonFromMessage(message) {
 }
 
 /**
- * Build login failure metadata for a delegate handoff reason code.
+ * Build login failure metadata for a delegate login reason code.
  * @returns {{ reason: string, kind: 'configuration' | 'auth', userMessage: string }}
  */
 function loginErrorForReason(reason) {
@@ -158,7 +107,7 @@ function loginErrorForReason(reason) {
         reason: key,
         kind: 'configuration',
         userMessage:
-          'Sign-in cannot be completed because this site could not exchange the authorization code with the delegate service. Contact the site operator.'
+          'Sign-in cannot be completed because Delegate rejected the request. Contact the site operator.'
       };
     }
   }
@@ -182,7 +131,6 @@ export function normalizeDelegateLoginFailure(err, { detail } = {}) {
       detail: detail || candidate.message
     });
     failure.userMessage = candidate.userMessage;
-    if (candidate.browserExchangeUrl) failure.browserExchangeUrl = candidate.browserExchangeUrl;
     if (candidate.status) failure.status = candidate.status;
     return failure;
   }
@@ -193,7 +141,6 @@ export function normalizeDelegateLoginFailure(err, { detail } = {}) {
     inferLoginReasonFromMessage(message) ||
     (candidate.status ? `status_${candidate.status}` : 'login_failed');
   const failure = createDelegateLoginFailure(reason, { detail: message });
-  if (candidate.browserExchangeUrl) failure.browserExchangeUrl = candidate.browserExchangeUrl;
   if (candidate.status) failure.status = candidate.status;
   return failure;
 }
@@ -211,8 +158,7 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
   return error;
 }
 
-/** Build the browser URL that starts a delegate login for this site. */
-/** Browser URL that starts Identity Token authorize (preferred over handoff). */
+/** Browser URL that starts Identity Token authorize. */
 export function delegateIdentityUrl({
   delegateUrl,
   site,
@@ -238,32 +184,6 @@ export function delegateIdentityUrl({
   if (nonce) url.searchParams.set('nonce', nonce);
   if (state) url.searchParams.set('state', state);
   if (responseMode) url.searchParams.set('response_mode', responseMode);
-  return url.toString();
-}
-
-export function delegateAuthorizeUrl({ delegateUrl, returnTo, prompt }) {
-  if (!delegateUrl) throw new Error('delegateAuthorizeUrl requires delegateUrl');
-  if (!returnTo) throw new Error('delegateAuthorizeUrl requires returnTo (absolute callback URL)');
-  const url = new URL('/handoff/authorize', delegateUrl);
-  url.searchParams.set('return_to', returnTo);
-  // prompt=consent: Delegate shows its login/continue page and requires a
-  // button click even when the user already has a Delegate session.
-  if (prompt) url.searchParams.set('prompt', prompt);
-  return url.toString();
-}
-
-/**
- * Browser URL that converts a one-time handoff code into a signed
- * ?delegate_bridge= redirect. Used when local POST /handoff/exchange is
- * blocked by Cloudflare Bot Fight.
- */
-export function delegateBrowserExchangeUrl({ delegateUrl, code, returnTo }) {
-  if (!delegateUrl) throw new Error('delegateBrowserExchangeUrl requires delegateUrl');
-  if (!code) throw new Error('delegateBrowserExchangeUrl requires code');
-  if (!returnTo) throw new Error('delegateBrowserExchangeUrl requires returnTo');
-  const url = new URL('/handoff/browser-exchange', delegateUrl);
-  url.searchParams.set('code', code);
-  url.searchParams.set('return_to', returnTo);
   return url.toString();
 }
 
@@ -317,64 +237,6 @@ export function resolveRoleId(registry, roleIdOrName) {
   return match ? match[0] : null;
 }
 
-/**
- * Verify a browser-delivered handoff bridge token (HMAC with DELEGATE_SHARED_SECRET).
- * Accepts comma-separated secrets for rotation. Returns the same identity shape
- * as exchangeDelegateCode, or throws.
- */
-export function verifyHandoffBridgeToken({ secret, token, expectedReturnTo }) {
-  if (!secret) throw new Error('verifyHandoffBridgeToken requires DELEGATE_SHARED_SECRET');
-  const parts = splitSignedToken(token);
-  if (!parts) {
-    throw createDelegateLoginFailure('invalid_or_expired_code', {
-      detail: 'delegate bridge token missing or malformed'
-    });
-  }
-  const secrets = parseSharedSecrets(typeof secret === 'string' ? secret : String(secret));
-  const list = secrets.length ? secrets : [String(secret)];
-  if (!verifySignedPayload(parts.encoded, parts.signature, list)) {
-    throw createDelegateLoginFailure('invalid_or_expired_code', {
-      detail: 'delegate bridge token signature mismatch'
-    });
-  }
-  let payload;
-  try {
-    payload = JSON.parse(base64urlDecode(parts.encoded));
-  } catch {
-    throw createDelegateLoginFailure('incomplete_delegate_payload', {
-      detail: 'delegate bridge token is not valid JSON'
-    });
-  }
-  if (!payload?.unid || !payload?.firebaseUid) {
-    throw createDelegateLoginFailure('incomplete_delegate_payload');
-  }
-  if (typeof payload.exp !== 'number' || payload.exp <= Date.now()) {
-    throw createDelegateLoginFailure('invalid_or_expired_code', {
-      detail: 'delegate bridge token expired'
-    });
-  }
-  if (expectedReturnTo) {
-    try {
-      if (new URL(payload.returnTo).origin !== new URL(expectedReturnTo).origin) {
-        throw createDelegateLoginFailure('invalid_return_to', {
-          detail: 'delegate bridge returnTo origin mismatch'
-        });
-      }
-    } catch (err) {
-      if (err.reason) throw err;
-      throw createDelegateLoginFailure('invalid_return_to');
-    }
-  }
-  return {
-    unid: payload.unid,
-    firebaseUid: payload.firebaseUid,
-    email: payload.email,
-    auth: payload.auth || {},
-    returnTo: payload.returnTo,
-    createdAt: payload.createdAt
-  };
-}
-
 /** Site origin from an absolute URL, or null when unparseable. */
 export function siteOriginFromUrl(value) {
   if (!value) return null;
@@ -390,16 +252,10 @@ export function isDelegateIdentityJwt(token) {
   return typeof token === 'string' && token.startsWith('eyJ') && token.split('.').length === 3;
 }
 
-/**
- * Classify a login token: Identity JWT, HMAC handoff bridge, or handoff code.
- * Production codes are 64-hex; shorter strings without `.` still exchange as codes.
- */
+/** Classify a login token. Identity Tokens are JWTs; anything else is unknown. */
 export function classifyDelegateLoginToken(token) {
-  if (typeof token !== 'string' || !token) return 'unknown';
   if (isDelegateIdentityJwt(token)) return 'jwt';
-  if (/^[0-9a-f]{64}$/i.test(token)) return 'code';
-  if (token.includes('.')) return 'bridge';
-  return 'code';
+  return 'unknown';
 }
 
 async function loadDelegateJwks(delegateUrl, { jwks, fetchImpl = fetch } = {}) {
@@ -560,56 +416,6 @@ export async function verifyDelegateIdentityToken({
   return delegateUser;
 }
 
-/*
-  Exchange a one-time delegate_code for the delegate identity payload.
-  Server-to-server: authenticated with the shared handoff secret, never the
-  browser. Returns:
-    { unid, firebaseUid, email?, auth: { loggedIn, signInProvider, twoFactor,
-      signInSecondFactor?, idTokenExp?, authTime? }, returnTo, createdAt }
-*/
-export async function exchangeDelegateCode({ delegateUrl, secret, code, fetchImpl = fetch }) {
-  if (!delegateUrl) throw new Error('exchangeDelegateCode requires delegateUrl');
-  if (!secret) throw new Error('exchangeDelegateCode requires DELEGATE_SHARED_SECRET');
-  if (!code) throw new Error('exchangeDelegateCode requires a code');
-  const url = new URL('/handoff/exchange', delegateUrl);
-  // Use the first secret when rotating (comma-separated).
-  const secrets = parseSharedSecrets(secret);
-  const bearer = secrets[0] || secret;
-  const response = await fetchImpl(url.toString(), {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${bearer}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ code })
-  });
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    /* non-JSON error body (e.g. Cloudflare challenge HTML) */
-  }
-  if (!response.ok) {
-    // 403 with no JSON error is almost always Cloudflare Bot Fight / managed
-    // challenge blocking a non-browser POST (common for local → production).
-    const reason =
-      body?.error ||
-      (response.status === 403 && !body
-        ? 'cloudflare_challenge'
-        : `status_${response.status}`);
-    const error = createDelegateLoginFailure(reason, {
-      detail: `delegate handoff exchange failed: ${reason}`
-    });
-    error.status = response.status;
-    throw error;
-  }
-  if (!body?.unid || !body?.firebaseUid) {
-    throw createDelegateLoginFailure('incomplete_delegate_payload', {
-      detail: 'delegate handoff exchange returned an incomplete payload'
-    });
-  }
-  return body;
-}
 
 /*
   Run a delegate identity through the normal inbound person pipeline so the
@@ -741,7 +547,6 @@ export function sessionNeedsRole(session) {
       worker,                      // PersonWorker bound to the deployment DB
       delegateUrl,                 // e.g. https://delegate.engine9.ai
       site,                        // Site origin for JWT aud (optional; else returnTo origin)
-      handoffSecret,               // optional — required only for legacy code/bridge
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes
       remoteInputId: 'delegate',   // input the delegate logins record under
@@ -753,8 +558,8 @@ export function sessionNeedsRole(session) {
       sessionTtlSeconds: 86400
     });
 
-    auth.loginUrl({ returnTo, prompt? })
-    await auth.login(token)                 // JWT, 64-hex code, or HMAC bridge
+    auth.identityUrl({ returnTo, prompt?, minLevel? })
+    await auth.login(token)                 // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
     auth.verify(sessionToken)
     auth.issueToken(session)
@@ -769,7 +574,6 @@ export function sessionNeedsRole(session) {
 export function createDelegateAuth({
   worker,
   delegateUrl,
-  handoffSecret,
   sessionSecret,
   sessionTtlSeconds = 86400,
   pluginId,
@@ -877,10 +681,6 @@ export function createDelegateAuth({
     };
   }
 
-  function loginUrl({ returnTo, prompt } = {}) {
-    return delegateAuthorizeUrl({ delegateUrl, returnTo, prompt });
-  }
-
   function identityUrl({ returnTo, prompt, minLevel, maxLevel, fields, nonce, state, responseMode } = {}) {
     return delegateIdentityUrl({
       delegateUrl,
@@ -896,65 +696,25 @@ export function createDelegateAuth({
     });
   }
 
-  function browserExchangeUrl({ code, returnTo }) {
-    return delegateBrowserExchangeUrl({ delegateUrl, code, returnTo });
-  }
-
   /*
-    Full login from:
-      - an Identity Token JWT (starts with eyJ, three segments) — no handoffSecret
-      - a one-time ?delegate_code= (64-hex or short test codes)
-      - a signed ?delegate_bridge= token (contains "." but is not a JWT)
-
-    JWT aud is `site` (constructor or login option), else returnTo origin.
-    On a cloudflare_challenge from code exchange, the thrown error includes
-    `browserExchangeUrl` when returnTo is provided.
+    Login from an Identity Token JWT. aud is `site` (constructor or login
+    option), else the returnTo origin.
   */
   async function login(token, { person = {}, returnTo, site: siteOverride } = {}) {
-    let delegateUser;
-    const kind = classifyDelegateLoginToken(token);
-
-    if (kind === 'jwt') {
-      const jwtSite = siteOverride || site || siteOriginFromUrl(returnTo);
-      delegateUser = await verifyDelegateIdentityToken({
-        token,
-        delegateUrl,
-        site: jwtSite,
-        jwks,
-        issuer,
-        fetchImpl
+    if (classifyDelegateLoginToken(token) !== 'jwt') {
+      throw createDelegateLoginFailure('invalid_identity_token', {
+        detail: 'login requires an Identity Token'
       });
-    } else if (kind === 'bridge') {
-      if (!handoffSecret) {
-        throw createDelegateLoginFailure('missing_handoff_secret');
-      }
-      delegateUser = verifyHandoffBridgeToken({
-        secret: handoffSecret,
-        token,
-        expectedReturnTo: returnTo
-      });
-    } else {
-      if (!handoffSecret) {
-        throw createDelegateLoginFailure('missing_handoff_secret');
-      }
-      try {
-        delegateUser = await exchangeDelegateCode({
-          delegateUrl,
-          secret: handoffSecret,
-          code: token,
-          fetchImpl
-        });
-      } catch (err) {
-        if (err?.reason === 'cloudflare_challenge' && returnTo && token) {
-          err.browserExchangeUrl = delegateBrowserExchangeUrl({
-            delegateUrl,
-            code: token,
-            returnTo
-          });
-        }
-        throw err;
-      }
     }
+    const jwtSite = siteOverride || site || siteOriginFromUrl(returnTo);
+    let delegateUser = await verifyDelegateIdentityToken({
+      token,
+      delegateUrl,
+      site: jwtSite,
+      jwks,
+      issuer,
+      fetchImpl
+    });
 
     if (delegateUser.profile_id && !delegateUser.profileId) {
       delegateUser = { ...delegateUser, profileId: delegateUser.profile_id };
@@ -987,9 +747,7 @@ export function createDelegateAuth({
   }
 
   return {
-    loginUrl,
     identityUrl,
-    browserExchangeUrl,
     login,
     verify,
     verifyIdentityToken,
@@ -1004,11 +762,7 @@ export function createDelegateAuth({
 export default {
   createDelegateLoginFailure,
   normalizeDelegateLoginFailure,
-  delegateAuthorizeUrl,
   delegateIdentityUrl,
-  delegateBrowserExchangeUrl,
-  exchangeDelegateCode,
-  verifyHandoffBridgeToken,
   verifyDelegateIdentityToken,
   isDelegateIdentityJwt,
   classifyDelegateLoginToken,

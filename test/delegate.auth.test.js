@@ -8,10 +8,6 @@ import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 import {
   createSessionToken,
   verifySessionToken,
-  exchangeDelegateCode,
-  delegateAuthorizeUrl,
-  delegateBrowserExchangeUrl,
-  verifyHandoffBridgeToken,
   verifyDelegateIdentityToken,
   classifyDelegateLoginToken,
   createSessionCookieHeaders,
@@ -147,19 +143,16 @@ test('delegate session tokens: sign, verify, tamper, expire', () => {
 });
 
 test('createDelegateLoginFailure separates configuration and auth failures', () => {
-  const config = createDelegateLoginFailure('invalid_shared_secret');
+  const config = createDelegateLoginFailure('missing_session_secret');
   assert.equal(config.kind, 'configuration');
   assert.match(config.userMessage, /misconfigured/i);
-  assert.match(config.userMessage, /DELEGATE_SHARED_SECRET/i);
+  assert.match(config.userMessage, /SESSION_SECRET/i);
   assert.doesNotMatch(config.userMessage, /try again/i);
 
-  const auth = createDelegateLoginFailure('invalid_or_expired_code');
+  const auth = createDelegateLoginFailure('invalid_identity_token');
   assert.equal(auth.kind, 'auth');
-  assert.match(auth.userMessage, /expired|already used/i);
+  assert.match(auth.userMessage, /invalid or expired/i);
   assert.match(auth.userMessage, /sign in again/i);
-
-  const missing = createDelegateLoginFailure('missing_delegate_code');
-  assert.equal(missing.kind, 'auth');
 
   const server = createDelegateLoginFailure('status_503');
   assert.equal(server.kind, 'configuration');
@@ -170,16 +163,16 @@ test('createDelegateLoginFailure separates configuration and auth failures', () 
 });
 
 test('normalizeDelegateLoginFailure maps plain errors and preserves structured failures', () => {
-  const structured = createDelegateLoginFailure('invalid_or_expired_code');
+  const structured = createDelegateLoginFailure('invalid_identity_token');
   assert.equal(
     normalizeDelegateLoginFailure(structured).userMessage,
     structured.userMessage
   );
 
   const missingSecret = normalizeDelegateLoginFailure(
-    new Error('exchangeDelegateCode requires DELEGATE_SHARED_SECRET')
+    new Error('createSessionToken requires a session_secret')
   );
-  assert.equal(missingSecret.reason, 'missing_handoff_secret');
+  assert.equal(missingSecret.reason, 'missing_session_secret');
   assert.equal(missingSecret.kind, 'configuration');
 
   const generic = normalizeDelegateLoginFailure(new Error('database is locked'));
@@ -187,84 +180,18 @@ test('normalizeDelegateLoginFailure maps plain errors and preserves structured f
   assert.match(generic.message, /database is locked/);
 });
 
-test('exchangeDelegateCode posts the shared secret and returns the payload', async () => {
-  const calls = [];
-  const payload = {
-    unid: UNID_A,
-    firebaseUid: 'fb-1',
-    email: 'alice@example.com',
-    auth: { loggedIn: true, twoFactor: false },
-    returnTo: 'https://site.example.com/auth/delegate'
+async function jwksFetch(publicKey, kid = 'test-key') {
+  const jwk = await exportJWK(publicKey);
+  jwk.kid = kid;
+  jwk.alg = 'ES256';
+  jwk.use = 'sig';
+  return async (url) => {
+    if (String(url).includes('/.well-known/jwks.json')) {
+      return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+    }
+    return new Response('not found', { status: 404 });
   };
-  const fetchImpl = async (url, options) => {
-    calls.push({ url, options });
-    return new Response(JSON.stringify(payload), { status: 200 });
-  };
-  const result = await exchangeDelegateCode({
-    delegateUrl: 'https://delegate.engine9.ai',
-    secret: 'shared-secret',
-    code: 'abc123',
-    fetchImpl
-  });
-  assert.deepEqual(result, payload);
-  assert.equal(calls[0].url, 'https://delegate.engine9.ai/handoff/exchange');
-  assert.equal(calls[0].options.headers.Authorization, 'Bearer shared-secret');
-  assert.deepEqual(JSON.parse(calls[0].options.body), { code: 'abc123' });
-
-  // Error surfaces the delegate reason, kind, and user-facing message
-  const failing = async () => new Response(JSON.stringify({ error: 'invalid_or_expired_code' }), { status: 404 });
-  await assert.rejects(
-    exchangeDelegateCode({
-      delegateUrl: 'https://delegate.engine9.ai',
-      secret: 'shared-secret',
-      code: 'stale',
-      fetchImpl: failing
-    }),
-    (err) => {
-      assert.equal(err.reason, 'invalid_or_expired_code');
-      assert.equal(err.kind, 'auth');
-      assert.match(err.userMessage, /expired|already used/i);
-      return /invalid_or_expired_code/.test(err.message);
-    }
-  );
-
-  const badSecret = async () => new Response(JSON.stringify({ error: 'invalid_shared_secret' }), { status: 401 });
-  await assert.rejects(
-    exchangeDelegateCode({
-      delegateUrl: 'https://delegate.engine9.ai',
-      secret: 'wrong-secret',
-      code: 'abc',
-      fetchImpl: badSecret
-    }),
-    (err) => {
-      assert.equal(err.reason, 'invalid_shared_secret');
-      assert.equal(err.kind, 'configuration');
-      assert.match(err.userMessage, /DELEGATE_SHARED_SECRET/i);
-      return /invalid_shared_secret/.test(err.message);
-    }
-  );
-
-  // Cloudflare Bot Fight returns HTML 403 (non-JSON) to non-browser clients
-  const challenged = async () =>
-    new Response('<!DOCTYPE html><title>Just a moment...</title>', {
-      status: 403,
-      headers: { 'content-type': 'text/html' }
-    });
-  await assert.rejects(
-    exchangeDelegateCode({
-      delegateUrl: 'https://delegate.engine9.ai',
-      secret: 'shared-secret',
-      code: 'abc',
-      fetchImpl: challenged
-    }),
-    (err) => {
-      assert.equal(err.reason, 'cloudflare_challenge');
-      assert.equal(err.kind, 'configuration');
-      assert.match(err.userMessage, /browser step|Continue|Cloudflare/i);
-      return true;
-    }
-  );
-});
+}
 
 test('createDelegateAuth: login -> person -> roles-as-segments -> signed session', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -273,7 +200,6 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
-    // Roles are segments
     const vipSegmentId = getVersionedUUID();
     const adminSegmentId = getVersionedUUID();
     await worker.insertArray({
@@ -284,23 +210,29 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       ]
     });
 
-    // Stubbed delegate /handoff/exchange
-    const fetchImpl = async () =>
-      new Response(
-        JSON.stringify({
-          unid: UNID_A,
-          firebaseUid: 'fb-1',
-          email: 'alice@example.com',
-          auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: true, authTime: 1234 },
-          returnTo: 'https://site.example.com/auth/delegate'
-        }),
-        { status: 200 }
-      );
+    const { privateKey, publicKey } = await generateKeyPair('ES256');
+    const fetchImpl = await jwksFetch(publicKey, 'roles-key');
+    const site = 'https://site.example.com';
+    const profile = {
+      id: 'prof-roles',
+      email: 'alice@example.com',
+      email_verified: true
+    };
+    const sign = (twoFactor) =>
+      signDelegateJwt({
+        privateKey,
+        kid: 'roles-key',
+        issuer: 'https://delegate.example.test',
+        site,
+        sub: profile.id,
+        profile,
+        auth: { provider: 'google.com', two_factor: twoFactor, auth_time: 1234 }
+      });
 
     const auth = createDelegateAuth({
       worker,
-      delegateUrl: 'https://delegate.engine9.ai',
-      handoffSecret: 'shared-secret',
+      delegateUrl: 'https://delegate.example.test',
+      site,
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
@@ -312,11 +244,10 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     });
 
     assert.ok(
-      auth.loginUrl({ returnTo: 'https://site.example.com/auth/delegate' }).includes('/handoff/authorize')
+      auth.identityUrl({ returnTo: 'https://site.example.com/auth/delegate' }).includes('/identity/authorize')
     );
 
-    // First login: new person, no roles yet
-    const { session, token } = await auth.login('one-time-code');
+    const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
     assert.deepEqual(session.roles, []);
     assert.equal(session.unid, UNID_A);
@@ -324,13 +255,11 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.equal(session.auth.twoFactor, true, 'credential level travels into the session');
     assert.equal(sessionNeedsRole(session), true);
 
-    // Token round-trips through verify
     const verified = auth.verify(token);
     assert.equal(verified.personId, session.personId);
     assert.deepEqual(verified.roles, []);
     assert.equal(auth.verify('tampered'), null);
 
-    // Grant a role by segment UUID and confirm helpers see it
     const roles = await auth.grantRole(session.personId, vipSegmentId);
     assert.deepEqual(roles, [vipSegmentId]);
     const { data: memberships } = await worker.query('select segment_id, person_id from person_segment');
@@ -342,12 +271,10 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.equal(sessionPrimaryRole(updated, [adminSegmentId, vipSegmentId]), vipSegmentId);
     assert.equal(sessionNeedsRole(updated), false);
 
-    // Second login with the same unid: same person, roles picked up from segments
-    const again = await auth.login('another-code');
+    const again = await auth.login(await sign(true));
     assert.equal(again.session.personId, session.personId, 'delegate id dedupes to the same person');
     assert.deepEqual(again.session.roles, [vipSegmentId]);
 
-    // Exclusive grant replaces other configured role segments
     const exclusive = await auth.grantRole(session.personId, adminSegmentId, { exclusive: true });
     assert.deepEqual(exclusive, [adminSegmentId]);
     const { data: afterExclusive } = await worker.query({
@@ -359,7 +286,6 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       [adminSegmentId]
     );
 
-    // changeRole re-signs session
     const changed = await auth.changeRole({
       personId: session.personId,
       roleId: vipSegmentId,
@@ -369,7 +295,6 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.deepEqual(changed.roles, [vipSegmentId]);
     assert.equal(auth.verify(changed.token).roles[0], vipSegmentId);
 
-    // Legacy display name still resolves
     await auth.grantRole(session.personId, 'Admin', { exclusive: true });
     assert.deepEqual(await auth.rolesForPerson(session.personId), [adminSegmentId]);
 
@@ -392,29 +317,23 @@ test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on sess
       array: [{ id: vipSegmentId, plugin_id: pluginId, name: 'VIP', build_type: 'list' }]
     });
 
-    const fetchImpl = async () =>
-      new Response(
-        JSON.stringify({
-          unid: UNID_A,
-          firebaseUid: 'fb-1',
-          email: 'alice@example.com',
-          auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
-          returnTo: 'https://site.example.com/auth/delegate'
-        }),
-        { status: 200 }
-      );
-
+    const { privateKey, publicKey } = await generateKeyPair('ES256');
     const auth = createDelegateAuth({
       worker,
-      delegateUrl: 'https://delegate.engine9.ai',
-      handoffSecret: 'shared-secret',
+      delegateUrl: 'https://delegate.example.test',
+      site: 'https://site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       roleSegments: { vip: vipSegmentId },
-      fetchImpl
+      fetchImpl: await jwksFetch(publicKey, 'legacy-roles-key')
     });
 
-    const { session } = await auth.login('code-1');
+    const jwt = await signDelegateJwt({
+      privateKey,
+      kid: 'legacy-roles-key',
+      issuer: 'https://delegate.example.test'
+    });
+    const { session } = await auth.login(jwt);
     const roles = await auth.grantRole(session.personId, 'vip');
     assert.deepEqual(roles, [vipSegmentId], 'legacy name grant returns UUID role_ids');
   } finally {
@@ -439,22 +358,11 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
       ]
     });
 
-    const fetchImpl = async () =>
-      new Response(
-        JSON.stringify({
-          unid: UNID_A,
-          firebaseUid: 'fb-1',
-          email: 'alice@example.com',
-          auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
-          returnTo: 'https://site.example.com/auth/delegate'
-        }),
-        { status: 200 }
-      );
-
+    const { privateKey, publicKey } = await generateKeyPair('ES256');
     const auth = createDelegateAuth({
       worker,
-      delegateUrl: 'https://delegate.engine9.ai',
-      handoffSecret: 'shared-secret',
+      delegateUrl: 'https://delegate.example.test',
+      site: 'https://site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
@@ -463,12 +371,18 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
         [vipSegmentId]: { name: 'VIP' }
       },
       loadRolesOnLogin: false,
-      fetchImpl
+      fetchImpl: await jwksFetch(publicKey, 'session-roles-key')
     });
 
-    const first = await auth.login('code-1');
+    const sign = () =>
+      signDelegateJwt({
+        privateKey,
+        kid: 'session-roles-key',
+        issuer: 'https://delegate.example.test'
+      });
+    const first = await auth.login(await sign());
     await auth.grantRole(first.session.personId, vipSegmentId);
-    const again = await auth.login('code-2');
+    const again = await auth.login(await sign());
     assert.equal(again.session.personId, first.session.personId);
     assert.deepEqual(again.session.roles, [], 'session roles stay empty when loadRolesOnLogin is false');
     assert.equal(sessionNeedsRole(again.session), true);
@@ -478,66 +392,10 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
   }
 });
 
-test('delegateAuthorizeUrl builds the handoff login URL', () => {
-  const url = delegateAuthorizeUrl({
-    delegateUrl: 'https://delegate.engine9.ai',
-    returnTo: 'https://site.example.com/auth/delegate'
-  });
-  const parsed = new URL(url);
-  assert.equal(parsed.origin, 'https://delegate.engine9.ai');
-  assert.equal(parsed.pathname, '/handoff/authorize');
-  assert.equal(parsed.searchParams.get('return_to'), 'https://site.example.com/auth/delegate');
-  assert.equal(parsed.searchParams.get('prompt'), null);
-});
-
-test('delegateAuthorizeUrl includes prompt=consent when requested', () => {
-  const url = delegateAuthorizeUrl({
-    delegateUrl: 'https://delegate.engine9.ai',
-    returnTo: 'https://site.example.com/auth/delegate',
-    prompt: 'consent'
-  });
-  const parsed = new URL(url);
-  assert.equal(parsed.searchParams.get('prompt'), 'consent');
-});
-
-test('delegateBrowserExchangeUrl and verifyHandoffBridgeToken round-trip', () => {
-  const url = delegateBrowserExchangeUrl({
-    delegateUrl: 'https://delegate.engine9.ai',
-    code: 'abc123',
-    returnTo: 'http://localhost:3001/auth/delegate'
-  });
-  const parsed = new URL(url);
-  assert.equal(parsed.pathname, '/handoff/browser-exchange');
-  assert.equal(parsed.searchParams.get('code'), 'abc123');
-
-  const secret = 'bridge-secret';
-  const payload = {
-    unid: 'u1',
-    firebaseUid: 'fb1',
-    email: 'a@b.c',
-    auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false },
-    returnTo: 'http://localhost:3001/auth/delegate',
-    createdAt: new Date().toISOString(),
-    exp: Date.now() + 60_000
-  };
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', secret).update(encoded).digest('base64url');
-  const token = `${encoded}.${sig}`;
-
-  const verified = verifyHandoffBridgeToken({
-    secret,
-    token,
-    expectedReturnTo: 'http://localhost:3001/auth/delegate'
-  });
-  assert.equal(verified.unid, 'u1');
-  assert.equal(verified.firebaseUid, 'fb1');
-  assert.equal(verified.email, 'a@b.c');
-});
-
 test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
-  assert.equal(classifyDelegateLoginToken('a'.repeat(64).replace(/./g, '0')), 'code');
-  assert.equal(classifyDelegateLoginToken('one-time-code'), 'code');
-  assert.equal(classifyDelegateLoginToken('abc.def'), 'bridge');
+  assert.equal(classifyDelegateLoginToken('a'.repeat(64).replace(/./g, '0')), 'unknown');
+  assert.equal(classifyDelegateLoginToken('one-time-code'), 'unknown');
+  assert.equal(classifyDelegateLoginToken('abc.def'), 'unknown');
   assert.equal(
     classifyDelegateLoginToken('eyJhbGciOiJFUzI1NiJ9.eyJ1bmlkIjoidSJ9.sig'),
     'jwt'

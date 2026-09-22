@@ -2,13 +2,13 @@
   Shared HMAC helpers for Delegate-related signed tokens.
 
   Canonical copy for `encoded.sig` tokens (base64url payload + HMAC-SHA256).
-  Used by core handoff bridge / local sessions; Engine9 API hosts use the same
+  Used by local sessions; Engine9 API hosts use the same
   shape for session-bridge tokens (see @engine9/server oauthSessionBridge).
   Callers may import these instead of reimplementing crypto.
 */
 import crypto from 'node:crypto';
 
-/** Parse DELEGATE_SHARED_SECRET (comma-separated to allow rotation). */
+/** Parse a comma-separated secret list (rotation: current, then previous). */
 export function parseSharedSecrets(config) {
   if (typeof config !== 'string' || !config.trim()) return [];
   return config.split(',').map((s) => s.trim()).filter(Boolean);

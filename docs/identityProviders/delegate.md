@@ -30,9 +30,13 @@ Do this after `POST /api/people` works. See [../deploy.md](../deploy.md).
 
 1. Allow your exact origin (for example `https://www.example.com`) on delegate.
    There is no OAuth client id. The Site is the origin.
-2. `SESSION_SECRET` is already created by `npx e9core setup-keys`.
+2. `SESSION_SECRET` is already created by `npx e9core setup-keys`
+   (`openssl rand -hex 32` is the same 32-byte value).
    `npx e9core setup-keys --remote` stores it as a Cloudflare secret.
-   It signs **your** session cookie. It is not a delegate password.
+   It signs the Core Session this Site checks on later requests, so those
+   requests do not call Delegate again. Full account of the token, the cookie,
+   and when a request still hits Delegate:
+   [auth/README.md](../../auth/README.md#local-session-session_secret).
 3. In the Worker, configure the default provider:
 
 ```js
@@ -57,9 +61,6 @@ const auth = createDelegateAuth({
 4. In the browser, `@engine9/id` talks to delegate and then calls
    `id.core.login()` with the public API key.
    See [id with core](https://github.com/engine9-ai/id/blob/main/docs/with-core.md).
-
-`DELEGATE_SHARED_SECRET` is only for older handoff logins (`delegate_code`,
-`delegate_bridge`). Normal JWT login does not need it.
 
 ## What core does with the token
 
@@ -88,13 +89,11 @@ only when it is verified or the Identity Level is at least 2.
 
 | Body field | When |
 | --- | --- |
-| `delegate_token` | Normal Identity Token |
-| `delegate_code` / `delegate_bridge` | Legacy handoff, needs `DELEGATE_SHARED_SECRET` |
+| `delegate_token` | Identity Token |
 
 `GET /auth/me` includes `personId`, `roles`, `level`, and `unid`.
 
-New Sites should send visitors to `/identity/authorize` (`auth.identityUrl`),
-not `/handoff/authorize`.
+Send visitors to `/identity/authorize` (`auth.identityUrl`).
 
 ## Optional Cloudflare cache
 

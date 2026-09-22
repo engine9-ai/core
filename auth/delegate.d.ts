@@ -15,7 +15,7 @@ export interface DelegateAuthState {
   authTime?: number;
 }
 
-/** Identity payload from an Identity Token or POST {delegateUrl}/handoff/exchange. */
+/** Identity payload from an Identity Token. */
 export interface DelegateUser {
   unid: string;
   /** Optional — JWT path does not require it; person resolution uses unid. */
@@ -28,7 +28,7 @@ export interface DelegateUser {
   level?: number;
   profileId?: string;
   profile?: Record<string, unknown>;
-  /** Legacy handoff field; login() copies this onto profileId when needed. */
+  /** Copied onto profileId when the token uses this name. */
   profile_id?: string;
 }
 
@@ -65,8 +65,6 @@ export interface DelegateLoginFailure extends Error {
   kind: DelegateLoginErrorKind;
   userMessage: string;
   status?: number;
-  /** Present on cloudflare_challenge when returnTo was passed to login(). */
-  browserExchangeUrl?: string;
 }
 
 export function createDelegateLoginFailure(
@@ -92,7 +90,7 @@ export interface DelegateSession {
   email?: string;
   auth: CredentialLevel;
   exp?: number;
-  /** Identity Level from the Identity Token (or handoff payload). */
+  /** Identity Level from the Identity Token. */
   level?: number;
   /** Profile id (`sub` when it is not `unid:<unid>`). */
   profileId?: string;
@@ -111,32 +109,6 @@ export function delegateIdentityUrl(options: {
   state?: string;
   responseMode?: string;
 }): string;
-
-export function delegateAuthorizeUrl(options: {
-  delegateUrl: string;
-  returnTo: string;
-  /** When 'consent', Delegate requires an explicit button click even if already logged in. */
-  prompt?: string;
-}): string;
-
-export function delegateBrowserExchangeUrl(options: {
-  delegateUrl: string;
-  code: string;
-  returnTo: string;
-}): string;
-
-export function exchangeDelegateCode(options: {
-  delegateUrl: string;
-  secret: string;
-  code: string;
-  fetchImpl?: typeof fetch;
-}): Promise<DelegateUser>;
-
-export function verifyHandoffBridgeToken(options: {
-  secret: string;
-  token: string;
-  expectedReturnTo?: string;
-}): DelegateUser;
 
 export function resolveDelegatePersonId(options: {
   worker: unknown;
@@ -158,10 +130,10 @@ export function siteOriginFromUrl(value?: string | null): string | null;
 /** True when token looks like a JWT (eyJ header + three segments). */
 export function isDelegateIdentityJwt(token: string | null | undefined): boolean;
 
-/** Classify a login token: `jwt` | `bridge` | `code` | `unknown`. */
+/** Classify a login token: `jwt` or `unknown`. */
 export function classifyDelegateLoginToken(
   token: string | null | undefined
-): "jwt" | "bridge" | "code" | "unknown";
+): "jwt" | "unknown";
 
 /**
  * Verify a delegate Identity Token (JWT, ES256) via JWKS.
@@ -231,9 +203,7 @@ export function resolveRoleId(
 ): string | null;
 
 export interface DelegateAuth {
-  /** Browser URL that starts a delegate login for this site. */
-  loginUrl(options: { returnTo: string; prompt?: string }): string;
-  /** Preferred Identity Token authorize URL (`/identity/authorize`). */
+  /** Identity Token authorize URL (`/identity/authorize`). */
   identityUrl(options: {
     returnTo: string;
     prompt?: string;
@@ -244,16 +214,12 @@ export interface DelegateAuth {
     state?: string;
     responseMode?: string;
   }): string;
-  /** Browser URL that finishes a blocked local code exchange via Delegate. */
-  browserExchangeUrl(options: { code: string; returnTo: string }): string;
   /**
-   * Complete login from an Identity Token JWT, ?delegate_code= (server
-   * exchange), or ?delegate_bridge= (signed browser token). JWT path does not
-   * require handoffSecret. Pass returnTo so CF-challenge errors include a
-   * browserExchangeUrl, and so JWT aud can default to the returnTo origin.
+   * Complete login from an Identity Token JWT. Pass returnTo so JWT aud can
+   * default to the returnTo origin.
    */
   login(
-    codeOrBridgeOrJwt: string,
+    identityToken: string,
     options?: { person?: Record<string, unknown>; returnTo?: string; site?: string }
   ): Promise<{
     session: DelegateSession;
@@ -302,11 +268,6 @@ export interface DelegateAuth {
 export function createDelegateAuth(config: {
   worker: unknown;
   delegateUrl: string;
-  /**
-   * DELEGATE_SHARED_SECRET — Bearer for POST /handoff/exchange / bridge HMAC.
-   * Optional when the Site only accepts Identity Tokens (JWT).
-   */
-  handoffSecret?: string;
   /** Site origin for JWT `aud` checks. Defaults to returnTo origin on login(). */
   site?: string;
   /** JWT iss; defaults to delegateUrl origin. */
@@ -338,10 +299,7 @@ export function createDelegateAuth(config: {
 declare const _default: {
   createDelegateLoginFailure: typeof createDelegateLoginFailure;
   normalizeDelegateLoginFailure: typeof normalizeDelegateLoginFailure;
-  delegateAuthorizeUrl: typeof delegateAuthorizeUrl;
-  delegateBrowserExchangeUrl: typeof delegateBrowserExchangeUrl;
-  exchangeDelegateCode: typeof exchangeDelegateCode;
-  verifyHandoffBridgeToken: typeof verifyHandoffBridgeToken;
+  delegateIdentityUrl: typeof delegateIdentityUrl;
   verifyDelegateIdentityToken: typeof verifyDelegateIdentityToken;
   isDelegateIdentityJwt: typeof isDelegateIdentityJwt;
   classifyDelegateLoginToken: typeof classifyDelegateLoginToken;

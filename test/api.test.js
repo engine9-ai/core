@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore, API_KEY_SCHEMA, hashApiKey } from '../auth/index.js';
 import { BatchLogger } from '../logging/index.js';
@@ -153,27 +154,42 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
       ]
     });
 
+    const { privateKey, publicKey } = await generateKeyPair('ES256');
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = 'api-role-key';
+    jwk.alg = 'ES256';
+    jwk.use = 'sig';
+    const identityJwt = await new SignJWT({
+      unid: '11111111-2222-8e91-8333-444444444444',
+      level: 2,
+      profile: { id: 'prof-role', email: 'role@example.com', email_verified: true },
+      auth: { provider: 'google.com', two_factor: false, auth_time: 1700000000 }
+    })
+      .setProtectedHeader({ alg: 'ES256', kid: 'api-role-key', typ: 'JWT' })
+      .setIssuer('https://delegate.engine9.ai')
+      .setAudience('https://site.example.com')
+      .setSubject('prof-role')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(privateKey);
+
     const { createDelegateAuth } = await import('../auth/delegate.js');
     const delegateAuth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.engine9.ai',
-      handoffSecret: 'shared',
+      site: 'https://site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       roles: {
         [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
         [adminRoleId]: { name: 'Admin', scopes: ['admin'] }
       },
-      fetchImpl: async () =>
-        new Response(
-          JSON.stringify({
-            unid: '11111111-2222-8e91-8333-444444444444',
-            firebaseUid: 'fb-1',
-            email: 'role@example.com',
-            auth: { loggedIn: true, signInProvider: 'google.com', twoFactor: false }
-          }),
-          { status: 200 }
-        )
+      fetchImpl: async (url) => {
+        if (String(url).includes('/.well-known/jwks.json')) {
+          return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+        }
+        return new Response('not found', { status: 404 });
+      }
     });
 
     const keyStore = new SqlApiKeyStore({ worker });
@@ -214,7 +230,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     const readOk = await api.handle({ method: 'GET', path: '/read/open', headers, query: {} });
     assert.equal(readOk.status, 200);
 
-    const { session } = await delegateAuth.login('code');
+    const { session } = await delegateAuth.login(identityJwt);
     const changed = await api.handle({
       method: 'POST',
       path: '/auth/role',
