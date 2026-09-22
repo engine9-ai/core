@@ -3,6 +3,8 @@
  * Gated by E9_SETUP_TOKEN. Never shows the admin key.
  */
 
+import { setupStep } from './setupSteps.js';
+
 const META_TABLE = 'e9core_meta';
 const KEY_FINISHED = 'setup_finished';
 const KEY_ORIGINS = 'allowed_origins';
@@ -108,6 +110,11 @@ export function timingSafeEqualString(a, b) {
 
 /** Local setup wizard. Served only by `e9core serve`, never by the production Worker. */
 export function renderWizardHtml({ token }) {
+  const choose = setupStep('choose');
+  const prompt = (id) => setupStep(id)?.prompt || id;
+  const choices = (choose?.choices || []).map((choice) => (
+    `<button class="choice" type="button" data-host="${choice.id}"><strong>${choice.label}</strong>${choice.detail}</button>`
+  )).join('\n    ');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -135,32 +142,31 @@ export function renderWizardHtml({ token }) {
 </head>
 <body>
   <h1>engine9 setup</h1>
-  <p class="note">Pages and the engine9 API stay one website. Choose where that website will run.</p>
+  <p class="note">${choose?.prompt || ''}</p>
   <div id="choose" class="choices">
-    <button class="choice" type="button" data-host="cloudflare"><strong>Cloudflare</strong>Recommended when this site should live on Cloudflare.</button>
-    <button class="choice" type="button" data-host="node"><strong>Your own servers</strong>Node.js on a machine you run, including this one.</button>
+    ${choices}
   </div>
 
   <section id="cloudflare" hidden>
     <h2>Cloudflare</h2>
-    <p class="note" id="cf-account">Checking the Cloudflare account on this machine…</p>
-    <button type="button" id="cf-login">Log in to Cloudflare</button>
-    <button type="button" id="cf-setup">Create the project</button>
-    <button type="button" id="cf-preview">Start a local preview</button>
+    <p class="note" id="cf-account">${prompt('whoami')}</p>
+    <button type="button" id="cf-login">${prompt('login')}</button>
+    <button type="button" id="cf-setup">${prompt('setup-cloudflare')}</button>
+    <button type="button" id="cf-preview">${prompt('preview')}</button>
     <p class="note" id="cf-preview-url"></p>
-    <label for="cf-domain">Hostname to attach (optional)</label>
+    <label for="cf-domain">${prompt('deploy')}</label>
     <input id="cf-domain" type="text" placeholder="www.example.com" />
-    <button type="button" id="cf-deploy">Put it on the internet</button>
+    <button type="button" id="cf-deploy">Deploy</button>
     <p class="note" id="cf-msg"></p>
   </section>
 
   <section id="node" hidden>
     <h2>Your own servers</h2>
-    <button type="button" id="node-setup">Create the database</button>
+    <button type="button" id="node-setup">${prompt('setup-node')}</button>
     <p class="note" id="node-ok"></p>
     <pre id="node-snippet" hidden></pre>
-    <button type="button" id="node-write">Write engine9-config.js</button>
-    <h3>Try a signup</h3>
+    <button type="button" id="node-write">${prompt('write-config')}</button>
+    <h3>${prompt('try-signup')}</h3>
     <label for="try-email">Email</label>
     <input id="try-email" type="email" value="alex@example.com" />
     <label for="try-name">Name</label>
@@ -170,14 +176,14 @@ export function renderWizardHtml({ token }) {
   </section>
 
   <section id="after" hidden>
-    <button type="button" id="finish">Finish setup</button>
+    <button type="button" id="finish">${prompt('finish')}</button>
     <p class="note">Finish closes this wizard. Reopen later with <code>npx e9core serve --setup</code> on this machine.</p>
     <details>
       <summary>Advanced</summary>
-      <p class="note">Independent hosts: HTML on another site, API here. List origins (scheme, host, and port), one per line.</p>
+      <p class="note">${prompt('origins')}</p>
       <textarea id="origins" rows="3" placeholder="https://www.example.com"></textarea>
       <button type="button" id="save-origins">Save origins</button>
-      <button type="button" id="rotate-public">Replace the public key</button>
+      <button type="button" id="rotate-public">${prompt('rotate-public')}</button>
       <p class="note" id="adv-msg"></p>
       <p class="note" id="status-line"></p>
     </details>
@@ -223,14 +229,14 @@ export function renderWizardHtml({ token }) {
         const data = await post('whoami');
         document.getElementById('cf-account').textContent = data.account
           ? ('Cloudflare account: ' + data.account)
-          : 'Not logged in yet. Use the button to open Cloudflare login on this machine.';
+          : 'Not logged in on this development machine yet.';
       } catch (err) {
         document.getElementById('cf-account').textContent = err.message;
       }
     }
     async function refreshNode() {
       const data = await post('status');
-      document.getElementById('node-ok').textContent = data.apiOk ? 'This website is running.' : 'Create the database, then this page will confirm the API.';
+      document.getElementById('node-ok').textContent = data.apiOk ? 'The local development site is running.' : 'Create the local development database, then this page will confirm the API.';
       if (data.publicKey) {
         const pre = document.getElementById('node-snippet');
         pre.hidden = false;

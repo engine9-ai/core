@@ -102,9 +102,9 @@ Try it on your machine. The wizard runs locally and is not part of the deployed 
 npx e9core serve
 ```
 
-Choose **Cloudflare**. That page checks the Cloudflare login on this machine, creates the project, starts a local preview, and can deploy. The address it prints looks like `http://127.0.0.1:8787/setup?token=…`.
+Choose **Cloudflare** when that is where the production site will run. The wizard itself stays on this development machine: it checks the Cloudflare login here, creates the local project, starts a local preview, and can deploy production. The address it prints looks like `http://127.0.0.1:8787/setup?token=…`.
 
-When the same site should go on the internet, use **Put it on the internet** in the wizard, or:
+To deploy production, use **Deploy the production site to Cloudflare** in the wizard, or:
 
 ```bash
 npx e9core setup --remote
@@ -148,7 +148,7 @@ artifact preview, etc.).
 
 1. Stand up engine9 with Cloudflare (`e9core setup` + `wrangler dev` / `--remote`)
    or Node (`e9core setup --node` + `e9core serve --api-only`).
-2. Open the local wizard (`npx e9core serve`) and choose Cloudflare or your own servers. Independent hosts is under Advanced.
+2. Open the local wizard (`npx e9core serve`) and answer where the **production** site will run: Cloudflare or your own servers. Independent hosts is under Advanced.
 3. Copy the **independent hosts** snippet into the page:
    - `ENGINE9_API` — full URL of the API (whatever host and port is actually
      running; any port is fine if this matches). This is a **constant in your

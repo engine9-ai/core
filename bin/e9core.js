@@ -60,6 +60,8 @@ import sqliteDialect from '../lib/sql/dialects/SQLite.js';
 import { setupKeys, readEnvValue } from './setupKeys.js';
 import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
+import { runSetupStep } from './setupFlow.js';
+import { SETUP_STEPS } from '../api/setupSteps.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -106,7 +108,34 @@ async function main() {
     case 'setup': {
       if (args.help) {
         console.log(SETUP_HELP);
+        console.log('');
+        console.log('Wizard steps (same questions as /setup). Pass one answer at a time:');
+        for (const step of SETUP_STEPS) {
+          const when = step.when ? ` [${step.when}]` : '';
+          console.log(`  --step ${step.id}${when}`);
+          console.log(`    ${step.prompt}`);
+        }
         break;
+      }
+      if (args.step && args.step !== true) {
+        const result = await runSetupStep({
+          action: String(args.step),
+          host: args.host && args.host !== true ? String(args.host) : undefined,
+          domain: args.domain && args.domain !== true ? String(args.domain) : undefined,
+          origins: args.origins && args.origins !== true ? String(args.origins) : undefined,
+          email: args.email && args.email !== true ? String(args.email) : undefined,
+          givenName: args['given-name'] && args['given-name'] !== true ? String(args['given-name']) : undefined
+        }, {
+          cwd: process.cwd(),
+          db: args.db && args.db !== true ? String(args.db) : undefined
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+      if (args.host && args.host !== true) {
+        const host = String(args.host);
+        await runSetupStep({ action: 'choose', host }, { cwd: process.cwd() });
+        if (host === 'node') args.node = true;
       }
       const result = await setup({
         cwd: process.cwd(),

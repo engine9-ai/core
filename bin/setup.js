@@ -37,15 +37,18 @@ const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
 export const SETUP_HELP = `Write the engine9 database, config, and .env for a new project.
 
 Recommended: content (HTML/CSS) and engine9 on the same platform.
+The first wizard question is where the production site will run.
+The wizard and these local commands run on the development machine.
+Production Cloudflare deploy is --remote, or the deploy step.
 
-  Cloudflare (same platform):
+  Cloudflare (production on Cloudflare; develop locally):
     npx wrangler login
     npm install @engine9/core
     npx e9core setup
     npx wrangler dev
     Open the wizard: npx e9core serve  (prints /setup?token=…).
 
-  Your own servers / Node.js (same platform):
+  Your own servers (production on Node.js you run; develop locally):
     npm install @engine9/core
     npx e9core setup --node
     npx e9core serve
@@ -77,6 +80,10 @@ setup writes wrangler.jsonc (Cloudflare path), .env (including API keys and
 E9_SETUP_TOKEN), and the database. It keeps a database id that is already
 filled in. It installs knex and better-sqlite3 if they are missing.
 Do not add .dev.vars (Wrangler prefers that file over .env).
+
+The HTML wizard and an agent use the same steps. Ask with:
+  npx e9core setup --help
+Each answer is: npx e9core setup --step <id>
 `;
 
 export function parseDatabaseId(text) {

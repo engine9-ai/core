@@ -67,6 +67,14 @@ const MIME = {
   '.woff2': 'font/woff2'
 };
 
+function resolveDatabase(cwd, db) {
+  const value = String(db || 'sqlite://./engine9.db');
+  if (!value.startsWith('sqlite://') || value.includes(':memory:')) return value;
+  const file = value.slice('sqlite://'.length);
+  if (path.isAbsolute(file)) return value;
+  return `sqlite://${path.join(cwd, file)}`;
+}
+
 export function loadDotEnv(cwd = process.cwd()) {
   const envPath = path.join(cwd, '.env');
   if (!existsSync(envPath)) return {};
@@ -137,7 +145,7 @@ export async function serve(options = {}) {
   const cwd = options.cwd || process.cwd();
   loadDotEnv(cwd);
   const port = Number(options.port || process.env.PORT || DEFAULT_PORT);
-  const db = options.db || process.env.ENGINE9_DATABASE_CONNECTION || 'sqlite://./engine9.db';
+  const db = resolveDatabase(cwd, options.db || process.env.ENGINE9_DATABASE_CONNECTION || 'sqlite://./engine9.db');
   const accountId = process.env.E9_ACCOUNT_ID || 'local';
   const pluginId = process.env.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
   const staticRoot = options.apiOnly
