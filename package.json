@@ -54,7 +54,7 @@
     "node": ">=22"
   },
   "author": "Engine9",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "@engine9/input-tools": "^2.4.3",
     "@engine9/interfaces": "^1.7.2",

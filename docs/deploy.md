@@ -34,6 +34,47 @@ Public libraries that share the standard:
 The private **server** repository is for people who already have an
 engine9-capable database. A new website uses `e9core`, from this package.
 
+## The project database
+
+The database you deploy here is the **primary database for the project**.
+Setup writes the engine9 tables into that one SQLite file, D1 database, or
+MySQL database. The site's other code uses the same database. An Astro site,
+a Next.js app, or another schema adds its tables there when those names do
+not collide with engine9 tables.
+
+**Table names are immutable. The names are the engine9 standard.**
+`person`, `person_email`, `segment`, `timeline`, `transaction`, and the rest
+of the tables from
+[`@engine9/interfaces`](https://github.com/engine9-io/interfaces) stay under
+those names. `person` stays `person`. Columns on those tables stay as
+published. Other engine9 libraries join on these names. A project-local table
+uses a different name from every published engine9 table (`person`, `event`,
+`message`, `transaction`, `segment`, `plugin`, `timeline`, `input`, `api_key`,
+and the rest of that catalog).
+
+### Choosing a table
+
+Before creating a table, decide in this order:
+
+1. **Use a published interface.** Look through `@engine9/interfaces` for a
+   schema that already describes the thing. An event is
+   `@engine9/interfaces/event`: tables `event` and `person_event`. That
+   package is not in the default stack, so install it when the project needs
+   events (`npx e9core sqlite-ddl --schema @engine9/interfaces/event`, or add
+   the package to the stack). Keep those table names.
+2. **Build an engine9 package when the feature is a primary extension of
+   engine9.** If no interface matches, and other engine9 projects should share
+   the same contract, publish it. A shared schema is an interface
+   (`@engine9/interfaces/<name>`). A deployable integration — workers, inbound
+   transforms, a vendor — is a plugin (`@engine9/plugins/<name>`). The table
+   names you publish there join the standard and stay fixed.
+3. **Prefix tables that belong only to this project.** A blog, a CMS, or
+   another local feature gets tables named for that use case: `content_blog`,
+   `cms_post`, `cms_page`. Those tables live in this same database. The
+   prefix keeps them clear of the engine9 catalog.
+
+The same rule is in the [core README](../README.md#the-project-database).
+
 ## Words used here
 
 | Word | Meaning |

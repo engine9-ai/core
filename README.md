@@ -6,10 +6,15 @@ The same table names, field names, person pipeline, and API-key scopes show up
 in every library that speaks engine9.
 
 `@engine9/core` is the standalone library that creates that database and those
-endpoints. Use the engine9 database as the primary database for a site, or run
-it with another database you already have: point the library at an existing
-SQLite or MySQL connection, or keep a separate engine9 database beside your
-application database. Either way you get the standard tables and the same API.
+endpoints. The database it deploys is the primary database for the project.
+Point it at the SQLite, D1, or MySQL database the project uses.
+`installStandard` creates the engine9 tables there. Astro, Next.js, and other
+application schemas use that same database and add their own tables beside the
+engine9 tables when the names do not collide.
+
+This package is [MIT licensed](./LICENSE). Use, copy, modify, and distribute
+this code as-is. The private `delegate` and `server` repositories are not
+open source.
 
 Other public libraries use the same standard:
 
@@ -22,7 +27,49 @@ Other public libraries use the same standard:
 Many other libraries and plugins follow the same schemas and pipeline slots, including ones that add in MCP servers, messagings, reports, search, etc, etc.
 
 New website: **[docs/deploy.md](docs/deploy.md)** — same platform (recommended)
-vs independent hosts (advanced).
+vs independent hosts (advanced). Read [The project database](#the-project-database)
+before adding tables.
+
+## The project database
+
+The database this package deploys is the primary database for the project.
+One SQLite file, one D1 database, or one MySQL database holds the engine9
+tables and the rest of the project's tables. Application code — an Astro site,
+a Next.js app, or another schema — reads and writes that same database.
+
+**Table names are the engine9 standard, and they are immutable.**
+`installStandard` creates `person`, `person_email`, `person_phone`,
+`person_address`, `segment`, `person_segment`, `timeline`, `transaction`, and
+the other tables published by
+[`@engine9/interfaces`](https://github.com/engine9-io/interfaces). Those names
+are the contract. `person` stays `person`. `event` stays `event`. Columns on
+those tables stay as published. Other engine9 libraries join on these names.
+
+A local schema may live in the same database. Its table names must be
+different from every published engine9 table (`person`, `event`, `message`,
+`transaction`, `segment`, `plugin`, `timeline`, `input`, `api_key`, and the
+rest of the catalog in `@engine9/interfaces`).
+
+### Choosing a table
+
+When a new build needs storage, decide in this order:
+
+1. **Use a published interface.** Look through `@engine9/interfaces` for a
+   schema that already describes the thing. An event is
+   `@engine9/interfaces/event` (`event`, `person_event`). It is not part of
+   the default stack, so install that schema when the project needs it
+   (`e9core sqlite-ddl --schema @engine9/interfaces/event`, or add the package
+   to the stack). Keep the published table names.
+2. **Build an engine9 package when the feature is a primary extension of
+   engine9.** If no interface matches, and other engine9 projects should share
+   the same contract, publish it. A shared schema is an interface
+   (`@engine9/interfaces/<name>`). A deployable integration — workers, inbound
+   transforms, a vendor — is a plugin (`@engine9/plugins/<name>`). The table
+   names you publish there join the standard and stay fixed.
+3. **Prefix tables that belong only to this project.** A blog, a CMS, or
+   another local feature gets tables named for that use case: `content_blog`,
+   `cms_post`, `cms_page`. The prefix keeps them clear of the engine9 catalog
+   in the same database.
 
 ## What the library creates
 
@@ -371,3 +418,7 @@ npm test
 Runs the SQLite-backed suite: SQL round trips, applying the standard interface
 tables, the person pipeline (dedupe, update, read-only), and the API surface
 (auth, scopes, segment gating, modification logs).
+
+## License
+
+[MIT](./LICENSE). Use, copy, modify, and distribute this code as-is.

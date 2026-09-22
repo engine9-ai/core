@@ -5,8 +5,12 @@ This file is the shorter technical reference.
 
 `@engine9/core` is a standalone library. On Cloudflare it creates an
 engine9-standard database in D1 and serves the standard endpoints from a
-Worker. D1 can be the site’s primary database, or the engine9 database beside
-one you already run. The schemas it installs come from the public
+Worker. That D1 database is the project's primary database. Astro, Next.js,
+and other schemas add their tables in the same D1 database when the names do
+not collide with the engine9 tables. Published table names are immutable; they
+are the standard. How to choose a table:
+[docs/deploy.md](../docs/deploy.md#the-project-database). The schemas it
+installs come from the public
 [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) package.
 
 Call `PersonWorker.installStandard()` (or `e9core installStandard` from

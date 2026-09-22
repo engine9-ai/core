@@ -1,5 +1,14 @@
 # Agent Guide
 
+## License
+
+`@engine9/core` is MIT licensed. See [LICENSE](LICENSE). Use, copy, modify, and
+distribute this code as-is. No further permission is required.
+
+`@engine9/interfaces`, `@engine9/id`, `demo-festival`, and `demo-id` are also
+MIT. The private repositories `delegate` and `server` are not open source.
+Do not copy code from those repositories under this license.
+
 ## Deploy docs
 
 First-time deployment setup (id vs core, Cloudflare + D1): [docs/deploy.md](docs/deploy.md).
@@ -51,12 +60,31 @@ the site.
 ## Project
 
 `@engine9/core` is a standalone library that creates an engine9-standard
-database and HTTP endpoints, either as a site's primary database or alongside
-another database. engine9 is the standard (tables, fields, pipeline, scopes)
-as well as the code. Public libraries that share it include
-[`@engine9/interfaces`](../interfaces) and [`@engine9/id`](../id); the festival
-[`demo-festival`](../demo-festival) is a site built on both. The private `server` repo is for
-people who already have an engine9-capable database.
+database and HTTP endpoints. The database it deploys is the project's primary
+database. Astro, Next.js, and other schemas use that same database when their
+table names do not collide with engine9 tables. engine9 is the standard
+(tables, fields, pipeline, scopes) as well as the code. Public libraries that
+share it include [`@engine9/interfaces`](../interfaces) and
+[`@engine9/id`](../id); the festival [`demo-festival`](../demo-festival) is a
+site built on both. The private `server` repo is for people who already have
+an engine9-capable database.
+
+Table names are immutable. The published names are the standard. Keep
+`person`, `event`, and the rest as published in `@engine9/interfaces`.
+
+When a new build needs a table, decide in this order:
+
+1. Use a matching `@engine9/interfaces` schema (an event is
+   `@engine9/interfaces/event`: `event`, `person_event`).
+2. If none matches and the feature is a primary extension of engine9, build
+   an interface (`@engine9/interfaces/<name>`) for a shared schema or a plugin
+   (`@engine9/plugins/<name>`) for a deployable integration. Those table names
+   join the standard and stay fixed.
+3. Otherwise prefix project-local tables with the use case (`content_blog`,
+   `cms_post`, `cms_page`) in the same database.
+
+Human-facing writeup: [docs/deploy.md](docs/deploy.md#the-project-database)
+and [README.md](README.md#the-project-database).
 
 An identity provider is optional. Production defaults to delegate
 ([docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)).
