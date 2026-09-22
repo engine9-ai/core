@@ -39,7 +39,7 @@ async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, un
     },
     auth: auth || { provider: 'google.com', two_factor: false, auth_time: 1700000000 }
   });
-  jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'delegate+jwt' });
+  jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
   jwt.setIssuer(DELEGATE_URL);
   jwt.setAudience(SITE);
   jwt.setSubject(profile?.id || 'prof-api');

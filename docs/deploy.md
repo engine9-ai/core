@@ -20,7 +20,7 @@ Public libraries that share the standard:
 | --- | --- |
 | [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Schemas and transforms core installs into the database |
 | [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/deploy.md) | Browser library. Identity Tokens, and login against these endpoints |
-| [`demo`](https://github.com/engine9-ai/demo) | Festival site (Astro + D1) using both |
+| [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Festival site (Astro + D1) using both |
 
 The private **server** repository is for people who already have an
 engine9-capable database. A new website uses `e9core`, from this package.

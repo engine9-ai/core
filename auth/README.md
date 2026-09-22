@@ -33,7 +33,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
    key ∩ role (`intersectScopes`). Soft **declared roles** with the same
    `requiredAuth` shape (no `person_id`) are documented in
    [`@engine9/id` declared roles](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
-   and demonstrated in [`id-demo`](https://github.com/engine9-ai/id-demo).
+   and demonstrated in [`demo-id`](https://github.com/engine9-ai/demo-id).
 3. **Identity Level** (layer 3) — `requiredAuth.minLevel` and
    `requiredAuth.twoFactor` against the session / Identity Token. Levels are
    not authorization.

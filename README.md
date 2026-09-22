@@ -17,7 +17,7 @@ Other public libraries use the same standard:
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms (`person`, `person_email`, segments, and the rest). `installStandard` deploys these into your database. |
 | [`@engine9/id`](https://github.com/engine9-ai/id)                 | Browser client. Verifies Identity Tokens and, when a site has core, posts them to these endpoints.                                               |
-| [`demo`](https://github.com/engine9-ai/demo)                      | A festival site (Astro, SQLite, optional Cloudflare D1) that uses core and id together.                                                          |
+| [`demo-festival`](https://github.com/engine9-ai/demo-festival)                      | A festival site (Astro, SQLite, optional Cloudflare D1) that uses core and id together.                                                          |
 
 Many other libraries and plugins follow the same schemas and pipeline slots, including that that add in MCP servers, messagings, reports, search, etc, etc.
 
@@ -214,8 +214,8 @@ roles: {
 Soft **declared roles** (same `requiredAuth` shape, no `person_id`) live in
 [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
 for browser personalization. See also
-[`id-demo`](https://github.com/engine9-ai/id-demo) and the festival
-[`demo`](https://github.com/engine9-ai/demo).
+[`demo-id`](https://github.com/engine9-ai/demo-id) and the festival
+[`demo-festival`](https://github.com/engine9-ai/demo-festival).
 
 Legacy `roleSegments: { admin: '<uuid>' }` is still accepted and normalized
 into the UUID-keyed registry.

@@ -551,7 +551,11 @@ export async function verifyDelegateIdentityToken({
     profileId,
     profile
   };
-  const firebaseUid = payload.firebaseUid || payload.firebase_uid;
+  const firebaseUid =
+    payload.firebaseUid ||
+    payload.firebase_uid ||
+    rawAuth.firebase_uid ||
+    rawAuth.firebaseUid;
   if (firebaseUid) delegateUser.firebaseUid = firebaseUid;
   return delegateUser;
 }

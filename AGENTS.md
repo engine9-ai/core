@@ -12,7 +12,7 @@ database and HTTP endpoints, either as a site's primary database or alongside
 another database. engine9 is the standard (tables, fields, pipeline, scopes)
 as well as the code. Public libraries that share it include
 [`@engine9/interfaces`](../interfaces) and [`@engine9/id`](../id); the festival
-[`demo`](../demo) is a site built on both. The private `server` repo is for
+[`demo-festival`](../demo-festival) is a site built on both. The private `server` repo is for
 people who already have an engine9-capable database.
 
 An identity provider is optional. Production defaults to delegate

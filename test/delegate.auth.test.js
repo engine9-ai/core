@@ -43,7 +43,7 @@ async function signDelegateJwt({
     profile,
     auth
   });
-  jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'delegate+jwt' });
+  jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
   jwt.setIssuer(issuer);
   jwt.setAudience(site);
   jwt.setSubject(sub || (profile?.id || `unid:${unid}`));
