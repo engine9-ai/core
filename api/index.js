@@ -55,6 +55,7 @@ import {
 } from '../auth/policy.js';
 import { normalizeRoleRegistry, resolveDelegatePersonId, isDelegateIdentityJwt } from '../auth/delegate.js';
 import { getPersonIdByUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
+import { getStoredOrigins, mergeOrigins, parseOriginList } from './setupPage.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
 
@@ -87,8 +88,8 @@ const SCOPES = {
   PUBLIC: PUBLIC_SCOPE
 };
 
-function json(status, body) {
-  return { status, body };
+function json(status, body, extra = {}) {
+  return { status, body, contentType: 'application/json', ...extra };
 }
 
 function getHeader(headers, name) {
@@ -126,8 +127,43 @@ export function createApi({
     maxBatchSize = 500,
     maxReadLimit = 1000,
     roles: configRoles,
-    roleSegments: configRoleSegments
+    roleSegments: configRoleSegments,
+    allowedOrigins: configAllowedOrigins = []
   } = config;
+
+  const envOrigins = parseOriginList(configAllowedOrigins);
+  let cachedOrigins = envOrigins.slice();
+
+  async function resolveAllowedOrigins() {
+    try {
+      const stored = await getStoredOrigins(worker);
+      cachedOrigins = mergeOrigins(envOrigins, stored);
+    } catch (e) {
+      debug('resolveAllowedOrigins:', e);
+      cachedOrigins = envOrigins.slice();
+    }
+    return cachedOrigins;
+  }
+
+  function corsHeaders(reqHeaders, { includeOrigin = true } = {}) {
+    const requestOrigin = getHeader(reqHeaders, 'Origin') || getHeader(reqHeaders, 'origin');
+    const headers = {
+      'access-control-allow-methods': 'GET, POST, OPTIONS',
+      'access-control-allow-headers': 'Authorization, Content-Type, X-API-Key, X-Engine9-Session',
+      'access-control-max-age': '86400'
+    };
+    if (!includeOrigin || !requestOrigin) return headers;
+    if (cachedOrigins.includes(requestOrigin) || cachedOrigins.includes('*')) {
+      headers['access-control-allow-origin'] = requestOrigin === '*' ? '*' : requestOrigin;
+      headers.vary = 'Origin';
+    }
+    return headers;
+  }
+
+  function withCors(result, reqHeaders) {
+    const headers = { ...(result.headers || {}), ...corsHeaders(reqHeaders) };
+    return { ...result, headers };
+  }
 
   const rolesRegistry =
     delegateAuth?.roleRegistry ||
@@ -330,12 +366,12 @@ export function createApi({
     try {
       const result = await delegateAuth.login(token, {
         returnTo,
-        site: body?.site
+        domain: body?.domain
       });
       return json(200, { session: result.session, token: result.token });
     } catch (e) {
       debug('postAuthLogin error:', e);
-      const status = e.reason === 'invalid_site' ? 400 : e.kind === 'configuration' ? 503 : 401;
+      const status = e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
       return json(status, {
         error: e.userMessage || String(e.message || e),
         reason: e.reason
@@ -433,21 +469,29 @@ export function createApi({
   }
 
   /* Core dispatch on a normalized request:
-     { method, path, query, body, headers } -- path relative to the api root */
+     { method, path, query, body, headers, apiBase? } -- path relative to the api root */
   async function handle(req) {
     const method = (req.method || 'GET').toUpperCase();
     const parts = (req.path || '/').replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
+
+    if (method === 'OPTIONS') {
+      await resolveAllowedOrigins();
+      return withCors(json(204, null), req.headers);
+    }
+
     if (method === 'GET' && (parts[0] === 'ok' || parts.length === 0)) {
       try {
         await worker.ok();
-        return json(200, { ok: true });
+        return withCors(json(200, { ok: true }), req.headers);
       } catch (e) {
-        return json(503, { ok: false, error: String(e.message || e) });
+        return withCors(json(503, { ok: false, error: String(e.message || e) }), req.headers);
       }
     }
     // Everything else requires a valid API key (layer 1)
     const verification = await keyStore.verify(req.original || req);
-    if (!verification.valid) return json(401, { error: `unauthorized: ${verification.reason}` });
+    if (!verification.valid) {
+      return withCors(json(401, { error: `unauthorized: ${verification.reason}` }), req.headers);
+    }
     const apiKey = verification.key;
 
     let session = null;
@@ -469,49 +513,50 @@ export function createApi({
           try {
             session = await sessionFromIdentityToken(bearer);
           } catch (e) {
-            return json(401, {
-              error: e.userMessage || 'invalid identity token',
-              reason: e.reason || 'invalid_identity_token'
-            });
+            return withCors(
+              json(401, {
+                error: e.userMessage || 'invalid identity token',
+                reason: e.reason || 'invalid_identity_token'
+              }),
+              req.headers
+            );
           }
         }
       }
     }
 
+    let result;
     if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
-      return postAuthLogin({ body: req.body, apiKey });
-    }
-    if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
-      return getAuthMe({ session });
-    }
-    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
-      return postAuthLogout();
-    }
-    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'role') {
-      return postAuthRole({
+      result = await postAuthLogin({ body: req.body, apiKey });
+    } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
+      result = await getAuthMe({ session });
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
+      result = await postAuthLogout();
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'role') {
+      result = await postAuthRole({
         body: req.body,
         apiKey,
         headers: req.headers,
         session,
         query: req.query || {}
       });
-    }
-    if (method === 'POST' && parts[0] === 'people') {
-      return postPeople({ body: req.body, apiKey, query: req.query || {}, session });
-    }
-    if (method === 'POST' && parts[0] === 'upsert') {
-      return postUpsert({
+    } else if (method === 'POST' && parts[0] === 'people') {
+      result = await postPeople({ body: req.body, apiKey, query: req.query || {}, session });
+    } else if (method === 'POST' && parts[0] === 'upsert') {
+      result = await postUpsert({
         table: parts[1],
         body: req.body,
         apiKey,
         query: req.query || {},
         session
       });
+    } else if (method === 'GET' && parts[0] === 'read') {
+      result = await getRead({ name: parts[1], query: req.query || {}, apiKey, session });
+    } else {
+      result = json(404, { error: `no route for ${method} /${parts.join('/')}` });
     }
-    if (method === 'GET' && parts[0] === 'read') {
-      return getRead({ name: parts[1], query: req.query || {}, apiKey, session });
-    }
-    return json(404, { error: `no route for ${method} /${parts.join('/')}` });
+    await resolveAllowedOrigins();
+    return withCors(result, req.headers);
   }
 
   /* Cloudflare Workers adapter.  basePath is stripped from the URL. */
@@ -522,7 +567,7 @@ export function createApi({
     let path = url.pathname;
     if (basePath && path.indexOf(basePath) === 0) path = path.slice(basePath.length) || '/';
     let body = null;
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
       try {
         body = await request.json();
       } catch {
@@ -533,36 +578,61 @@ export function createApi({
       }
     }
     const query = Object.fromEntries(url.searchParams.entries());
+    const apiBase = `${url.origin}${basePath || ''}`.replace(/\/$/, '') || url.origin;
     const result = await handle({
       method: request.method,
       path,
       query,
       body,
       headers: request.headers,
-      original: request
+      original: request,
+      apiBase
     });
     // flush batch logs without blocking the response when a ctx is available
     if (ctx?.waitUntil) ctx.waitUntil(logger.flush());
     else await logger.flush();
-    return new Response(JSON.stringify(result.body), {
-      status: result.status,
-      headers: { 'content-type': 'application/json' }
-    });
+    const headers = {
+      'content-type': result.contentType || 'application/json',
+      ...(result.headers || {})
+    };
+    if (result.status === 204) {
+      return new Response(null, { status: 204, headers });
+    }
+    const payload =
+      result.contentType && String(result.contentType).indexOf('text/html') === 0
+        ? result.body
+        : JSON.stringify(result.body);
+    return new Response(payload, { status: result.status, headers });
   }
 
   /* Express adapter: app.use('/api', api.expressHandler()) */
   function expressHandler() {
     return async (req, res) => {
       try {
+        const host = req.get?.('host') || req.headers?.host || 'localhost';
+        const proto = req.protocol || 'http';
+        const base = `${proto}://${host}${req.baseUrl || '/api'}`.replace(/\/$/, '');
         const result = await handle({
           method: req.method,
           path: req.path,
           query: req.query,
           body: req.body,
           headers: req.headers,
-          original: req
+          original: req,
+          apiBase: base
         });
         await logger.flush();
+        for (const [name, value] of Object.entries(result.headers || {})) {
+          res.setHeader(name, value);
+        }
+        if (result.status === 204) {
+          res.status(204).end();
+          return;
+        }
+        if (result.contentType && String(result.contentType).indexOf('text/html') === 0) {
+          res.status(result.status).type('html').send(result.body);
+          return;
+        }
         res.status(result.status).json(result.body);
       } catch (e) {
         debug('api error:', e);
@@ -571,7 +641,7 @@ export function createApi({
     };
   }
 
-  return { handle, handleFetch, expressHandler };
+  return { handle, handleFetch, expressHandler, resolveAllowedOrigins };
 }
 
 export { SCOPES };

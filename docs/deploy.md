@@ -1,15 +1,24 @@
-# Deploy `@engine9/core` on a new website
+# Deploy `@engine9/core` on a website
 
-engine9 is a set of standards for a people database and the endpoints that
+**engine9** is a set of standards for a people database and the endpoints that
 read and write it, and libraries that implement those standards.
-`@engine9/core` is the standalone library that creates that database and API:
-standard tables (`person`, `person_email`, segments), a way to add people, and
-optional login through an **identity provider**.
+`@engine9/core` creates that database and HTTP API for your site: standard
+tables (`person`, `person_email`, segments), a way to add people, and optional
+login through an **identity provider**.
 
-Use it as the site’s primary database, or with a database you already have.
-`npx e9core setup --node` creates a SQLite file. `--db mysql://…` installs the
-same standard tables into MySQL you already run. Cloudflare uses D1 as the
-engine9 database. Your application database can stay beside it.
+If your site today is only HTML and CSS, you are not adding a mysterious second
+“Node host.” You are choosing how the **website** and **engine9** relate:
+
+1. **Content and engine9 on the same platform (recommended)** — one website.
+   Pages and `/api` share one origin. A server that used to only serve HTML
+   becomes a **Node.js** (or Cloudflare) process that serves the pages **and**
+   the engine9 API.
+2. **Content and engine9 independently (advanced)** — HTML stays on one host;
+   the API runs elsewhere. The page points at the API with `ENGINE9_API`, and
+   you allow that page’s origin for CORS.
+
+API keys are created by `npx e9core setup` (or `setup --node`). You do not
+generate them by hand for a normal install.
 
 Local development does not need an identity provider. Production defaults to
 [delegate](identityProviders/delegate.md).
@@ -25,14 +34,28 @@ Public libraries that share the standard:
 The private **server** repository is for people who already have an
 engine9-capable database. A new website uses `e9core`, from this package.
 
-Most sites use **both** public pieces: id in the page, core for the database
-and API.
+## Words used here
+
+| Word | Meaning |
+| --- | --- |
+| **engine9** | The product and standard (tables, fields, pipeline, scopes) — always written lowercase |
+| **Same platform** | HTML/CSS and the engine9 API are one website / one origin |
+| **Independent hosts** | HTML on one host, API on another, linked by page constants + CORS |
+| **Domain** | Host or `host:port` for JWT `aud`, e.g. `www.example.com` (not a full `https://` origin) |
+| **person_id** | The number **your database** assigns (`person.id`) |
+| **API key** | Secret the caller sends. `e9key_…` stays on the server. `e9publickey_…` may be in the browser (`public` scope only) |
+| **Setup wizard** | Local HTML at `/setup` on `e9core serve`. Not part of the production site |
+| **Identity provider** | Optional login service. Production defaults to delegate |
+| **Core Session** | Optional cookie your site sets after login |
+| **Identity Level** | Confidence (0–7), not permission |
+
+The CLI is `e9core`. The private server’s program is `e9` (different tool).
 
 ## id vs core
 
 |                  | **id**                                                  | **core**                                                              |
 | ---------------- | ------------------------------------------------------- | --------------------------------------------------------------------- |
-| Runs             | In the visitor’s browser                                | On your site (Node, or a Cloudflare Worker)                           |
+| Runs             | In the visitor’s browser                                | On your site (same platform) or as a separate API (advanced)          |
 | Stores data      | A token in the browser                                  | People, emails, segments in **your** database                         |
 | Login            | Talks to the identity provider                          | Verifies the token that provider already issued                       |
 | “Roles”          | **Declared roles**: show different copy. Easy to bypass | **Segment roles**: membership in the database. The API can return 403 |
@@ -40,7 +63,16 @@ and API.
 
 You can ship **id first** and add **core** later without renaming form fields.
 
-## Automatic setup
+---
+
+## 1. Content and engine9 on the same platform (recommended)
+
+One process serves your pages and the engine9 API. Signup forms call `/api/people`
+on the **same origin**. You do not set a separate browser “environment variable”
+for the API URL. After setup, open the printed **setup page** and copy the
+same-platform snippet (relative `/api` + public key).
+
+### Cloudflare (local, then production)
 
 You need Node.js 22+ and a Cloudflare account. Log in once:
 
@@ -48,99 +80,125 @@ You need Node.js 22+ and a Cloudflare account. Log in once:
 npx wrangler login
 ```
 
-Then, in an empty project folder:
+In the project folder:
 
 ```bash
 npm install @engine9/core
 npx e9core setup
 ```
 
-That command does the file work for you:
+That command:
 
-- writes `wrangler.jsonc` (including the D1 database id Wrangler returns)
-- creates the people tables and loads them into local D1
-- creates API keys and writes them to `.env`
+- writes `wrangler.jsonc` (including the D1 database id)
+- creates the people tables in local D1
+- creates API keys **and** `E9_SETUP_TOKEN`, writes them to `.env`
 
-Do not hand-edit `wrangler.jsonc` or copy ids into it. Do not add `.dev.vars`. If that file exists, Wrangler prefers it and ignores `.env`.
+Do not hand-edit `wrangler.jsonc` or copy ids into it. Do not add `.dev.vars`.
+If that file exists, Wrangler prefers it and ignores `.env`.
 
-Work on the HTML and CSS. When you want to try the API on your machine:
+Try it on your machine. The wizard runs locally and is not part of the deployed Worker:
 
 ```bash
-npx wrangler dev
+npx e9core serve
 ```
 
-When the same site should go on the internet:
+Choose **Cloudflare**. That page checks the Cloudflare login on this machine, creates the project, starts a local preview, and can deploy. The address it prints looks like `http://127.0.0.1:8787/setup?token=…`.
+
+When the same site should go on the internet, use **Put it on the internet** in the wizard, or:
 
 ```bash
 npx e9core setup --remote
 ```
 
-That loads the tables into production D1, copies the keys from `.env` into Cloudflare secrets, and deploys the Worker.
+That loads production D1, copies secrets from `.env` into Cloudflare, and
+deploys the Worker. Attach a hostname with `--domain www.example.com`.
+
+### Your own servers (Node.js)
+
+If the site is (or should become) a Node process that serves HTML and the API:
+
+```bash
+npm install @engine9/core
+npx e9core setup --node
+npx e9core serve
+```
+
+`setup --node` creates `engine9.db` and `.env` (keys included).
+`serve` is the same-platform local website: static files from `./public` (or
+safe files in the project folder) **and** `/api` on one port. It prints the
+setup URL. Put `index.html` in `./public` (or the project root) so the form and
+API share one origin.
+
+MySQL instead of SQLite:
+
+```bash
+npx e9core setup --node --db mysql://user:pass@host/dbname
+```
+
+For production on your own host, run the same Node app (or mount `createApi` in
+Express/Astro/etc. as in the [README quick start](../README.md#quick-start-node--sqlite-same-platform)).
+Keep `.env` off git.
+
+---
+
+## 2. Content and engine9 independently (advanced)
+
+Use this only when the HTML host cannot run the API (static CDN, separate
+artifact preview, etc.).
+
+1. Stand up engine9 with Cloudflare (`e9core setup` + `wrangler dev` / `--remote`)
+   or Node (`e9core setup --node` + `e9core serve --api-only`).
+2. Open the local wizard (`npx e9core serve`) and choose Cloudflare or your own servers. Independent hosts is under Advanced.
+3. Copy the **independent hosts** snippet into the page:
+   - `ENGINE9_API` — full URL of the API (whatever host and port is actually
+     running; any port is fine if this matches). This is a **constant in your
+     HTML/JS**, not a server environment variable you export in a shell.
+   - `ENGINE9_PUBLIC_KEY` — the public key from setup (`e9publickey_…`)
+   - `ENGINE9_SOURCE` — optional tag for signups
+4. On the setup page, save the **content site’s origin** (scheme + host + port)
+   so the browser may call the API (CORS). Example:
+   `http://localhost:8768` or `https://www.example.com`.
+5. Finish setup so the page stops showing the public key.
+
+Never put `E9_ADMIN_API_KEY` (`e9key_…`) in page JavaScript.
+
+---
+
+## API keys (created by setup)
+
+`npx e9core setup` and `setup --node` write `.env`. You normally do not run a
+separate key command.
+
+| Name in `.env` | What it is |
+| --- | --- |
+| `E9_ADMIN_API_KEY` | Full access. Server and scripts only. Never put this in page JavaScript |
+| `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser (`e9publickey_…`) |
+| `SESSION_SECRET` | HMAC key for a Core Session after login |
+| `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used by the production Worker |
+| `E9_ALLOWED_ORIGINS` | Optional comma-separated origins (independent hosts); setup page can also store origins in the database |
+
+`npx e9core setup --remote` copies these to Cloudflare secrets.
+To replace them: `npx e9core setup --rotate`, then `setup --remote` again.
+
+`public` allows signup. It is not `admin`.
 
 ### Options most people use
 
 | Command | What it does |
 | --- | --- |
-| `npx e9core setup` | Local database and `.env`. No public URL yet |
-| `npx e9core setup --remote` | Production database, secrets, and deploy |
+| `npx e9core setup` | Local Cloudflare database and `.env` |
+| `npx e9core setup --remote` | Production D1, secrets, and deploy |
+| `npx e9core setup --node` | SQLite (or MySQL) + `.env`; then `e9core serve` |
+| `npx e9core serve` | Same-platform local site (HTML + `/api`) |
 | `npx e9core setup --name festival` | Worker name. The database is still called `engine9` |
 | `npx e9core setup --remote --domain www.example.com` | Also attaches that hostname |
-| `npx e9core setup --node` | No Cloudflare. A SQLite file and `.env` only |
 
 Run `setup` again anytime. It keeps the database and the keys you already have.
 Every flag is also printed by `npx e9core setup --help`.
 
-## Words used below
+### Try a signup (same platform)
 
-| Word               | Meaning                                                                                                                          |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| **Site**           | Your public website origin, e.g. `https://www.example.com`                                                                       |
-| **person_id**      | The number **your database** assigns (`person.id`). The identity provider does not assign it                                     |
-| **Segment role**   | A segment UUID plus rules (`requiredAuth.minLevel`, scopes). Membership is a row in `person_segment`                             |
-| **API key**        | A secret the caller sends. `e9key_…` stays on the server. `e9publickey_…` may be in the browser, and only has the `public` scope |
-| **Identity provider** | Optional login service. Production defaults to delegate. Not required to store people locally                                 |
-| **Core Session**   | Optional cookie your site sets after login, so later requests need not re-check the identity provider                           |
-| **Identity Level** | Confidence (0–7), not permission. A role can _require_ a minimum level                                                           |
-
-The CLI in this package is `e9core`. On a new website, run `e9core setup`.
-The private server’s WorkerRunner is a different program, `e9`, and it expects
-a database that is already engine9-capable.
-
-## What gets set up
-
-1. A SQLite database (on Cloudflare, that database is **D1**).
-2. Standard tables and plugin rows.
-3. Two API keys in `.env`: one private, one public.
-4. A small HTTP API (`/api/people`, and later `/api/auth/login`) next to your site.
-5. Optional, and not part of local setup: an identity provider so visitors can log in. Production defaults to delegate.
-
----
-
-## Cloudflare and D1
-
-`npx e9core setup` is this path. D1 is SQLite hosted by Cloudflare. The same
-SQL runs on your machine and in production.
-
-You do **not** need KV, R2, or Durable Objects for a working people API.
-
-### Keys
-
-`setup` writes `.env`. Node, Astro, and `wrangler dev` read it.
-
-| Name in `.env` | What it is |
-| --- | --- |
-| `E9_ADMIN_API_KEY` | Full access. Server and scripts only. Never put this in page JavaScript |
-| `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser |
-| `SESSION_SECRET` | HMAC key for a Core Session. After login, the host checks this token locally and does not call the identity provider again. `openssl rand -hex 32`, or leave the value `setup-keys` wrote. See [auth/README.md](../auth/README.md#local-session-session_secret) |
-
-`npx e9core setup --remote` copies those three values to Cloudflare secrets.
-To replace them: `npx e9core setup --rotate`, then `npx e9core setup --remote`.
-
-`public` allows signup. It is not `admin`.
-
-### Try a signup
-
-With `npx wrangler dev` running, open `.env`, copy `E9_PUBLIC_API_KEY`, and:
+With the API running, prefer the wizard at `/setup`. Example with curl:
 
 ```bash
 curl -X POST http://localhost:8787/api/people \
@@ -162,10 +220,6 @@ When visitors should log in, add an **identity provider**. Production defaults
 to delegate. Steps are in
 [identityProviders/delegate.md](identityProviders/delegate.md).
 
-Segment roles are separate from the provider. A person only has a role after
-a row exists in `person_segment`. Configuring a role does not grant it to
-everyone.
-
 ---
 
 ## More control
@@ -181,16 +235,15 @@ commands below.
 | `--domain <host>` | Adds a custom domain route, then use with `--remote` |
 | `--no-deploy` | With `--remote`, update the database and secrets but do not deploy |
 | `--refresh-schema` | Load tables again (only safe on an empty database) |
-| `--rotate` | Replace the API keys in `.env` |
+| `--rotate` | Replace the API keys and setup token in `.env` |
 | `--db sqlite://./engine9.db` | SQLite file used before the data is copied to D1 |
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
-
-Smaller commands, if you want to run one piece:
 
 ```bash
 npx e9core installStandard --db sqlite://./engine9.db
 npx e9core setup-keys
 npx e9core setup-keys --remote
+npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes public
 ```
 
 `installStandard` fills a database file on your computer. `setup` copies that
@@ -198,28 +251,11 @@ into D1. Tables without the plugin rows from `installStandard` will not
 accept people writes.
 
 The Worker that `setup` points at is
-[`cloudflare/worker.js`](../cloudflare/worker.js). It reads `E9_PLUGIN_ID`
-from the config `setup` wrote. Optional KV and R2 bindings are in
-[`cloudflare/wrangler.toml.example`](../cloudflare/wrangler.toml.example).
-Leave them out until you need them.
-
-## Node (SQLite or MySQL)
-
-Use this when the site is already a Node process, not a Worker.
-
-```bash
-npm install @engine9/core
-npx e9core setup --node
-```
-
-If `knex` or `better-sqlite3` is not installed yet, that command installs them.
-
-MySQL: `npx e9core setup --node --db mysql://user:pass@host/dbname`
-
-Keys are in `.env`. Do not commit that file. Do not add `.dev.vars`.
+[`cloudflare/worker.js`](../cloudflare/worker.js). Optional KV and R2 bindings
+are in [`cloudflare/wrangler.toml.example`](../cloudflare/wrangler.toml.example).
 
 Wire `createApi` into your HTTP app. A short sketch is in the
-[core README quick start](../README.md#quick-start-node--sqlite--no-cloudflare).
+[core README quick start](../README.md#quick-start-node--sqlite-same-platform).
 
 ---
 
@@ -228,6 +264,7 @@ Wire `createApi` into your HTTP app. A short sketch is in the
 | Task                | Call                                        |
 | ------------------- | ------------------------------------------- |
 | Health              | `GET /api/ok`                               |
+| Setup wizard (local) | `GET /setup?token=…` on `e9core serve` only |
 | Signup              | `POST /api/people` with `{ people: [ … ] }` |
 | Who is logged in    | `GET /api/auth/me` (after identity-provider login) |
 | Change segment role | `POST /api/auth/role`                       |

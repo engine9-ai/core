@@ -10,7 +10,8 @@ import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
 import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 
 const UNID = '11111111-2222-8e91-8333-444444444444';
-const SITE = 'https://site.example.com';
+const DOMAIN = 'site.example.com';
+const RETURN_ORIGIN = 'https://site.example.com';
 const DELEGATE_URL = 'https://delegate.engine9.ai';
 
 function memoryKv() {
@@ -41,7 +42,7 @@ async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, un
   });
   jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
   jwt.setIssuer(DELEGATE_URL);
-  jwt.setAudience(SITE);
+  jwt.setAudience(DOMAIN);
   jwt.setSubject(profile?.id || 'prof-api');
   jwt.setIssuedAt();
   jwt.setExpirationTime('1h');
@@ -95,7 +96,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     const delegateAuth = createDelegateAuth({
       worker,
       delegateUrl: DELEGATE_URL,
-      site: SITE,
+      domain: DOMAIN,
       sessionSecret: 'session-secret',
       pluginId,
       roles: {
@@ -142,7 +143,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       method: 'POST',
       path: '/auth/login',
       headers: apiHeaders,
-      body: { delegate_token: loginToken, return_to: `${SITE}/auth/delegate` }
+      body: { delegate_token: loginToken, return_to: `${RETURN_ORIGIN}/auth/delegate` }
     });
     assert.equal(loginCode.status, 200, JSON.stringify(loginCode.body));
     assert.ok(loginCode.body.token);
@@ -193,7 +194,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       method: 'POST',
       path: '/auth/login',
       headers: apiHeaders,
-      body: { delegate_token: jwt, return_to: `${SITE}/callback` }
+      body: { delegate_token: jwt, return_to: `${RETURN_ORIGIN}/callback` }
     });
     assert.equal(loginJwt.status, 200, JSON.stringify(loginJwt.body));
     assert.equal(loginJwt.body.session.level, 2);

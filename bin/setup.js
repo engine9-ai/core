@@ -1,12 +1,21 @@
 /**
- * One-command Site setup.
+ * One-command engine9 database and Worker setup (`npx e9core setup`).
  *
- * Usual path (local Cloudflare, then production):
+ * Recommended (same platform — content + API together):
  *
- *   npx wrangler login
- *   npm install @engine9/core
- *   npx e9core setup
- *   npx e9core setup --remote
+ *   Cloudflare:
+ *     npx wrangler login
+ *     npm install @engine9/core
+ *     npx e9core setup
+ *     npx wrangler dev
+ *
+ *   Node.js:
+ *     npx e9core setup --node
+ *     npx e9core serve
+ *
+ *   Then open the /setup URL that `npx e9core serve` prints.
+ *
+ * Production Cloudflare: npx e9core setup --remote
  *
  * The command writes wrangler.jsonc (including the D1 database id), .env,
  * .gitignore, migrations/0001_engine9.sql, and engine9.db. Do not paste ids
@@ -25,38 +34,49 @@ import { ensureGitignore, setupKeys } from './setupKeys.js';
 
 const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
 
-export const SETUP_HELP = `Automatic setup for a new Site.
+export const SETUP_HELP = `Write the engine9 database, config, and .env for a new project.
 
-Usual path (Cloudflare, on your machine first):
+Recommended: content (HTML/CSS) and engine9 on the same platform.
 
-  npx wrangler login
-  npm install @engine9/core
-  npx e9core setup
-  npx wrangler dev
+  Cloudflare (same platform):
+    npx wrangler login
+    npm install @engine9/core
+    npx e9core setup
+    npx wrangler dev
+    Open the wizard: npx e9core serve  (prints /setup?token=…).
 
-When the same site should go on the internet:
+  Your own servers / Node.js (same platform):
+    npm install @engine9/core
+    npx e9core setup --node
+    npx e9core serve
+    Open the setup URL serve prints. Node serves your pages and /api together.
 
+Production Cloudflare:
   npx e9core setup --remote
+
+Advanced: HTML on one host and the API on another — see docs/deploy.md
+(independent hosts). You will need ENGINE9_API on the page and allowed origins.
 
 Options most people use:
 
   --name <worker>     Worker name. Default: my-site
   --remote            Production database, Cloudflare secrets, and deploy
   --domain <host>     Custom domain. Use together with --remote
-  --node              SQLite file and .env only. No Cloudflare
+  --node              SQLite file and .env only. No Cloudflare (use with serve)
 
 Other flags:
 
   --d1 <database>     D1 name. Default: engine9
   --no-deploy         With --remote, update the database and secrets but do not deploy
   --refresh-schema    Load tables again. Only safe on an empty database
-  --rotate            Replace the API keys in .env
+  --rotate            Replace the API keys and setup token in .env
   --db <url>          sqlite:// file used before the data is copied to D1
                       With --node, mysql://user:pass@host/dbname also works
 
-setup writes wrangler.jsonc, .env, and the database. It keeps a database id
-that is already filled in. It installs knex and better-sqlite3 if they are
-missing. Do not add .dev.vars (Wrangler prefers that file over .env).
+setup writes wrangler.jsonc (Cloudflare path), .env (including API keys and
+E9_SETUP_TOKEN), and the database. It keeps a database id that is already
+filled in. It installs knex and better-sqlite3 if they are missing.
+Do not add .dev.vars (Wrangler prefers that file over .env).
 `;
 
 export function parseDatabaseId(text) {
@@ -219,7 +239,7 @@ function execOk(result, what) {
  *   exec?: (args: string[], cwd: string) => { status: number|null, stdout?: string, stderr?: string }
  * }} options
  */
-export async function setupSite(options = {}) {
+export async function setup(options = {}) {
   const cwd = options.cwd || process.cwd();
   const exec = options.exec || defaultExec;
   const name = options.name || 'my-site';
@@ -243,7 +263,7 @@ export async function setupSite(options = {}) {
 
   if (options.node) {
     const db = options.db || 'sqlite://./engine9.db';
-    notes.push('Node mode: database file and .env only. No Cloudflare project file.');
+    notes.push('Same-platform Node path: database file and .env. Next: npx e9core serve');
     if (!options.skipInstall) {
       const installed = await ensureDatabaseDrivers(cwd, db);
       if (installed.length) notes.push(`Installed ${installed.join(' ')}.`);
@@ -373,6 +393,8 @@ async function withDatabase(cwd, db, name, fn) {
 async function installLocalDatabase({ cwd, db, pluginId, name }) {
   await withDatabase(cwd, db, name, async (worker) => {
     await worker.installStandard();
+    const { SqlApiKeyStore } = await import('../auth/index.js');
+    await new SqlApiKeyStore({ worker }).deploy();
     await worker.query({
       sql: 'INSERT OR IGNORE INTO plugin (id, path, name) VALUES (?, ?, ?)',
       values: [pluginId, 'website', name]

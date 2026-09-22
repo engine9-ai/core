@@ -3,7 +3,7 @@
 Module reference for authentication and authorization on the standard
 endpoints `@engine9/core` serves. The same API-key scopes apply on any
 engine9-capable database, including when the private server’s Task API is
-in use. Product vocabulary: **User**, **Site**, **Identity Token**. The JWT
+in use. Product vocabulary: **User**, **Domain**, **Identity Token**. The JWT
 claim is still `aud`.
 
 Login uses an optional **identity provider**. Production defaults to delegate.
@@ -55,7 +55,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 Default provider implementation. Behavior and vocabulary:
 [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
 
-`verifyDelegateIdentityToken({ token, delegateUrl, site, jwks?, issuer?, fetchImpl? })`
+`verifyDelegateIdentityToken({ token, delegateUrl, domain, jwks?, issuer?, fetchImpl? })`
 verifies the provider JWT and returns the provider user object. Email is
 written onto the person record only when it is verified or the Identity Level
 is at least 2.
@@ -66,7 +66,7 @@ is at least 2.
 createDelegateAuth({
   worker,
   delegateUrl,
-  site,              // Site origin for JWT aud; else returnTo origin on login
+  domain,            // JWT aud (host[:port]); else domainFromUrl(returnTo) on login
   sessionSecret,     // required — HMAC Core Session
   pluginId,
   roles,             // { [segmentUuid]: { name, scopes, requiredAuth } }
@@ -80,7 +80,7 @@ provider JWKS. No shared secret.
 `verify(sessionToken)` returns `personId`, `roles`, `unid`, `email`, `auth`,
 `level`, `profileId`, `exp`.
 
-`verifyIdentityToken(jwt)` is the same JWKS check with constructor `site` /
+`verifyIdentityToken(jwt)` is the same JWKS check with constructor `domain` /
 `delegateUrl`.
 
 ## Local session (`SESSION_SECRET`)
@@ -93,9 +93,9 @@ just logged in.
 
 The env name is **`SESSION_SECRET`**. It is the HMAC-SHA256 key. Anyone who
 knows it can mint a session the host will accept, so production must use an
-unguessable value kept out of git. Each host has its own value. A Site’s
+unguessable value kept out of git. Each host has its own value. One host’s
 secret does not sign the engine9 API’s sessions, and the API’s secret does
-not sign a Site’s cookie.
+not sign another host’s cookie.
 
 Create one (32 random bytes, hex). This is the same generator `e9core
 setup-keys` uses:
@@ -112,7 +112,7 @@ secret. Rotate with `npx e9core setup-keys --rotate`, then `--remote` again.
 
 | Secret | Who holds it | What it does |
 | --- | --- | --- |
-| `SESSION_SECRET` | The Site, or the engine9 API host | Signs that host’s local session |
+| `SESSION_SECRET` | Your Domain’s host, or the engine9 API host | Signs that host’s local session |
 | `E9_ADMIN_API_KEY` / `E9_PUBLIC_API_KEY` | The caller | Authorizes the HTTP API. Empty scopes deny |
 
 Identity Tokens are verified with the provider’s public JWKS
@@ -127,7 +127,7 @@ provider). Requests after that need `SESSION_SECRET`.
 
 | Call | Credential | Delegate? |
 | --- | --- | --- |
-| `POST /auth/login` with `delegate_token` | Identity Token (JWT, `aud` = Site) | Yes. JWKS verify, then map UNID → `person_id` |
+| `POST /auth/login` with `delegate_token` | Identity Token (JWT, `aud` = Domain) | Yes. JWKS verify, then map UNID → `person_id` |
 | `GET /auth/me`, `POST /auth/role`, other routes with `X-Engine9-Session` or the session cookie | Core Session | No. HMAC + `exp` |
 | Same routes with `Authorization: Bearer <jwt>` (three segments, not an API key) | Identity Token | Yes, when `verifyIdentityToken` is configured |
 | `POST /people` and other data routes | API key | No |
@@ -152,7 +152,7 @@ object is:
 
 ```js
 {
-  personId,          // Site person
+  personId,          // person in this database
   roles,             // role_id values (segment UUIDs)
   unid,
   email,             // only when the provider said it was verified, or level >= 2
@@ -199,8 +199,9 @@ that as `Authorization: Bearer`. The HMAC check is local. Delegate is not
 called again until the next login.
 
 That session is not a Core Session. The body is the operator’s Firebase
-`uid`, email, `unid`, and Identity Level, and `exp` is unix seconds. A Site
-session’s body is `personId` and roles, and `exp` is unix milliseconds.
+`uid`, email, `unid`, and Identity Level, and `exp` is unix seconds. By
+contrast, the Core Session `@engine9/core` mints carries `personId` and
+roles, and uses unix milliseconds for `exp`.
 The two tokens do not verify against each other. Give the API host its own
 `SESSION_SECRET`.
 
@@ -225,4 +226,4 @@ All routes except `GET /ok` require an API key.
 | `POST /auth/logout` | API key; `{ loggedOut: true }` |
 | `POST /auth/role` | session/JWT `personId` must match `body.person_id`, or `admin` scope |
 
-Error reasons include `invalid_identity_token` and `invalid_site`.
+Error reasons include `invalid_identity_token` and `invalid_domain`.

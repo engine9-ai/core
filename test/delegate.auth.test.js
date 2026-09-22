@@ -25,7 +25,7 @@ async function signDelegateJwt({
   privateKey,
   kid = 'test-key',
   issuer = 'https://delegate.engine9.ai',
-  site = 'https://site.example.com',
+  domain = 'site.example.com',
   unid = UNID_A,
   level = 2,
   sub,
@@ -41,7 +41,7 @@ async function signDelegateJwt({
   });
   jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
   jwt.setIssuer(issuer);
-  jwt.setAudience(site);
+  jwt.setAudience(domain);
   jwt.setSubject(sub || (profile?.id || `unid:${unid}`));
   jwt.setIssuedAt();
   jwt.setExpirationTime(expires);
@@ -212,7 +212,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
 
     const { privateKey, publicKey } = await generateKeyPair('ES256');
     const fetchImpl = await jwksFetch(publicKey, 'roles-key');
-    const site = 'https://site.example.com';
+    const domain = 'site.example.com';
     const profile = {
       id: 'prof-roles',
       email: 'alice@example.com',
@@ -223,7 +223,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
         privateKey,
         kid: 'roles-key',
         issuer: 'https://delegate.example.test',
-        site,
+        domain,
         sub: profile.id,
         profile,
         auth: { provider: 'google.com', two_factor: twoFactor, auth_time: 1234 }
@@ -232,7 +232,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     const auth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.example.test',
-      site,
+      domain,
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
@@ -243,9 +243,9 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       fetchImpl
     });
 
-    assert.ok(
-      auth.identityUrl({ returnTo: 'https://site.example.com/auth/delegate' }).includes('/identity/authorize')
-    );
+    const authorizeUrl = auth.identityUrl({ returnTo: 'https://site.example.com/auth/delegate' });
+    assert.ok(authorizeUrl.includes('/identity/authorize'));
+    assert.ok(authorizeUrl.includes('domain=site.example.com'));
 
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
@@ -321,7 +321,7 @@ test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on sess
     const auth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.example.test',
-      site: 'https://site.example.com',
+      domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       roleSegments: { vip: vipSegmentId },
@@ -362,7 +362,7 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
     const auth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.example.test',
-      site: 'https://site.example.com',
+      domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       remoteInputId: 'delegate-login',
@@ -435,7 +435,7 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
     const verifiedUser = await verifyDelegateIdentityToken({
       token: jwt,
       delegateUrl: 'https://delegate.engine9.ai',
-      site: 'https://site.example.com',
+      domain: 'site.example.com',
       fetchImpl
     });
     assert.equal(verifiedUser.unid, UNID_A);
@@ -451,10 +451,10 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
       verifyDelegateIdentityToken({
         token: jwt,
         delegateUrl: 'https://delegate.engine9.ai',
-        site: 'https://other.example.com',
+        domain: 'other.example.com',
         fetchImpl
       }),
-      (err) => err.reason === 'invalid_site'
+      (err) => err.reason === 'invalid_domain'
     );
 
     const byUnid = new Map();
@@ -473,7 +473,7 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
     const auth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.engine9.ai',
-      site: 'https://site.example.com',
+      domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       fetchImpl

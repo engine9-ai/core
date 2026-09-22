@@ -1,16 +1,16 @@
 /*
-  Example Cloudflare Worker exposing the Engine9 client API.
+  Example Cloudflare Worker exposing the engine9 client API.
 
   Bindings expected (see wrangler.toml.example):
     DB          -- D1 database (the engine9 database)
     API_KEYS    -- KV namespace for API keys (optional: use SqlApiKeyStore instead)
     LOG_BUCKET  -- R2 bucket for batch modification logs (optional)
 
-  Vars:
-    E9_ACCOUNT_ID  -- account identifier used in logs
-    E9_PLUGIN_ID   -- plugin id (UUID) used for people writes; insert a
-                      plugin row after installStandard (or plugin-table DDL),
-                      or set any stable UUID from getPluginUUID()
+  Vars / secrets:
+    E9_ACCOUNT_ID      -- account identifier used in logs
+    E9_PLUGIN_ID       -- plugin id (UUID) used for people writes
+    E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
+    The setup wizard is not mounted here. It runs only on `e9core serve`.
 */
 import PersonWorker from '@engine9/core/PersonWorker';
 import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';
@@ -38,6 +38,7 @@ export default {
         pluginId: env.E9_PLUGIN_ID,
         defaultRemoteInputId: 'website',
         upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
+        allowedOrigins: env.E9_ALLOWED_ORIGINS || '',
         reads: {
           // add site-specific read definitions here, e.g.:
           // content: { table: 'member_content', segmentId: '<segment uuid>' }

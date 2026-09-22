@@ -167,7 +167,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'api-role-key', typ: 'JWT' })
       .setIssuer('https://delegate.engine9.ai')
-      .setAudience('https://site.example.com')
+      .setAudience('site.example.com')
       .setSubject('prof-role')
       .setIssuedAt()
       .setExpirationTime('1h')
@@ -177,7 +177,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     const delegateAuth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.engine9.ai',
-      site: 'https://site.example.com',
+      domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
       roles: {

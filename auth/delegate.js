@@ -1,17 +1,17 @@
 /*
   Delegate authentication for core deployments (auth layer 3 + role helpers).
 
-  "Delegate" is the shared, cross-organization identity service. A core Site
+  "Delegate" is the shared, cross-organization identity service. A core host
   never talks to the identity provider itself. Preferred path:
 
     1. Browser obtains a delegate-signed Identity Token (JWT, ES256) via
        /identity/authorize or /identity/bridge
-    2. Site verifies the JWT with JWKS (`verifyDelegateIdentityToken`) — no
-       shared secret. Claims: unid, level, profile, auth; aud is the Site origin
+    2. The host verifies the JWT with JWKS (`verifyDelegateIdentityToken`) — no
+       shared secret. Claims: unid, level, profile, auth; aud is the Domain (host[:port])
     3. Maps unid / profile_id → person_id (`resolveDelegatePersonId`) and
        optionally mints a local HMAC Core Session (`createSessionToken`)
 
-  Roles (auth layer 2): role_id === segment_id (UUID). The site supplies a
+  Roles (auth layer 2): role_id === segment_id (UUID). The host supplies a
   UUID-keyed `roles` registry (display name, scopes, requiredAuth including
   minLevel). Session `roles` is an array of those segment UUIDs.
 
@@ -56,9 +56,9 @@ const DELEGATE_LOGIN_ERRORS = {
     kind: 'auth',
     message: 'Your sign-in token is invalid or expired. Please sign in again.'
   },
-  invalid_site: {
+  invalid_domain: {
     kind: 'auth',
-    message: 'This identity token is not valid for this site. Please sign in again.'
+    message: 'This identity token is not valid for this domain. Please sign in again.'
   }
 };
 
@@ -161,7 +161,7 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
 /** Browser URL that starts Identity Token authorize. */
 export function delegateIdentityUrl({
   delegateUrl,
-  site,
+  domain,
   returnTo,
   prompt,
   minLevel,
@@ -172,10 +172,10 @@ export function delegateIdentityUrl({
   responseMode = 'query'
 }) {
   if (!delegateUrl) throw new Error('delegateIdentityUrl requires delegateUrl');
-  if (!site) throw new Error('delegateIdentityUrl requires site (Site origin)');
+  if (!domain) throw new Error('delegateIdentityUrl requires domain (JWT aud / host[:port])');
   if (!returnTo) throw new Error('delegateIdentityUrl requires returnTo');
   const url = new URL('/identity/authorize', delegateUrl);
-  url.searchParams.set('site', site);
+  url.searchParams.set('domain', domain);
   url.searchParams.set('return_to', returnTo);
   if (prompt) url.searchParams.set('prompt', prompt);
   if (minLevel !== undefined) url.searchParams.set('min_level', String(minLevel));
@@ -237,11 +237,27 @@ export function resolveRoleId(registry, roleIdOrName) {
   return match ? match[0] : null;
 }
 
-/** Site origin from an absolute URL, or null when unparseable. */
+/** Full origin from an absolute URL, or null when unparseable. */
 export function siteOriginFromUrl(value) {
   if (!value) return null;
   try {
     return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Login domain for JWT `aud` and DOMAINS_KV keys: host, or host:port when the
+ * URL port is non-empty (same as delegate rootPath).
+ */
+export function domainFromUrl(value) {
+  if (!value) return null;
+  try {
+    const u = new URL(value);
+    const host = u.hostname.toLowerCase();
+    if (!host) return null;
+    return u.port ? `${host}:${u.port}` : host;
   } catch {
     return null;
   }
@@ -293,7 +309,7 @@ async function loadDelegateJwks(delegateUrl, { jwks, fetchImpl = fetch } = {}) {
 
 function mapJoseVerifyError(err) {
   if (err instanceof joseErrors.JWTClaimValidationFailed && err.claim === 'aud') {
-    return createDelegateLoginFailure('invalid_site', { detail: err.message });
+    return createDelegateLoginFailure('invalid_domain', { detail: err.message });
   }
   return createDelegateLoginFailure('invalid_identity_token', {
     detail: err?.message || 'identity token verification failed'
@@ -303,14 +319,14 @@ function mapJoseVerifyError(err) {
 /**
  * Verify a delegate Identity Token (JWT, ES256) via JWKS.
  * Fetches `{delegateUrl}/.well-known/jwks.json` unless `jwks` is passed.
- * Checks alg ES256, iss (default delegateUrl origin), aud === site, exp (±60s).
+ * Checks alg ES256, iss (default delegateUrl origin), aud === domain, exp (±60s).
  *
  * firebaseUid is optional — person resolution only needs unid.
  */
 export async function verifyDelegateIdentityToken({
   token,
   delegateUrl,
-  site,
+  domain,
   jwks,
   issuer,
   fetchImpl = fetch
@@ -325,9 +341,9 @@ export async function verifyDelegateIdentityToken({
       detail: 'verifyDelegateIdentityToken requires delegateUrl'
     });
   }
-  if (!site) {
-    throw createDelegateLoginFailure('invalid_site', {
-      detail: 'verifyDelegateIdentityToken requires site (JWT aud / Site origin)'
+  if (!domain) {
+    throw createDelegateLoginFailure('invalid_domain', {
+      detail: 'verifyDelegateIdentityToken requires domain (JWT aud / host[:port])'
     });
   }
 
@@ -341,7 +357,7 @@ export async function verifyDelegateIdentityToken({
   const verifyOpts = {
     algorithms: ['ES256'],
     issuer: iss,
-    audience: site,
+    audience: domain,
     clockTolerance: 60
   };
 
@@ -546,7 +562,7 @@ export function sessionNeedsRole(session) {
     const auth = createDelegateAuth({
       worker,                      // PersonWorker bound to the deployment DB
       delegateUrl,                 // e.g. https://delegate.engine9.ai
-      site,                        // Site origin for JWT aud (optional; else returnTo origin)
+      domain,                    // JWT aud host[:port] (optional; else domainFromUrl(returnTo))
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes
       remoteInputId: 'delegate',   // input the delegate logins record under
@@ -583,7 +599,7 @@ export function createDelegateAuth({
   roleSegments = {},
   loadRolesOnLogin = true,
   fetchImpl = fetch,
-  site,
+  domain,
   issuer,
   jwks
 }) {
@@ -648,7 +664,7 @@ export function createDelegateAuth({
     return verifyDelegateIdentityToken({
       token,
       delegateUrl,
-      site: opts.site || site,
+      domain: opts.domain || domain,
       jwks: opts.jwks || jwks,
       issuer: opts.issuer || issuer,
       fetchImpl
@@ -684,7 +700,7 @@ export function createDelegateAuth({
   function identityUrl({ returnTo, prompt, minLevel, maxLevel, fields, nonce, state, responseMode } = {}) {
     return delegateIdentityUrl({
       delegateUrl,
-      site: site || siteOriginFromUrl(returnTo),
+      domain: domain || domainFromUrl(returnTo),
       returnTo,
       prompt,
       minLevel,
@@ -697,20 +713,20 @@ export function createDelegateAuth({
   }
 
   /*
-    Login from an Identity Token JWT. aud is `site` (constructor or login
-    option), else the returnTo origin.
+    Login from an Identity Token JWT. aud is `domain` (constructor or login
+    option), else domainFromUrl(returnTo).
   */
-  async function login(token, { person = {}, returnTo, site: siteOverride } = {}) {
+  async function login(token, { person = {}, returnTo, domain: domainOverride } = {}) {
     if (classifyDelegateLoginToken(token) !== 'jwt') {
       throw createDelegateLoginFailure('invalid_identity_token', {
         detail: 'login requires an Identity Token'
       });
     }
-    const jwtSite = siteOverride || site || siteOriginFromUrl(returnTo);
+    const jwtDomain = domainOverride || domain || domainFromUrl(returnTo);
     let delegateUser = await verifyDelegateIdentityToken({
       token,
       delegateUrl,
-      site: jwtSite,
+      domain: jwtDomain,
       jwks,
       issuer,
       fetchImpl
@@ -767,6 +783,7 @@ export default {
   isDelegateIdentityJwt,
   classifyDelegateLoginToken,
   siteOriginFromUrl,
+  domainFromUrl,
   resolveDelegatePersonId,
   createSessionToken,
   verifySessionToken,

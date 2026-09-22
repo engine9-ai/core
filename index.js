@@ -97,6 +97,8 @@ export {
   verifyDelegateIdentityToken,
   isDelegateIdentityJwt,
   classifyDelegateLoginToken,
+  siteOriginFromUrl,
+  domainFromUrl,
   createSessionCookieHeaders,
   resolveDelegatePersonId,
   createSessionToken,

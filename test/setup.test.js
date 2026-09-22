@@ -9,8 +9,8 @@ import {
   findDatabaseId,
   mergeWranglerConfig,
   parseDatabaseId,
-  setupSite,
-} from '../bin/setupSite.js';
+  setup,
+} from '../bin/setup.js';
 
 const DB_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -70,12 +70,12 @@ describe('dumpSqliteFile', () => {
   });
 });
 
-describe('setupSite', () => {
+describe('setup', () => {
   it('writes wrangler.jsonc from the wrangler create output', async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-site-'));
     try {
       const calls = [];
-      const result = await setupSite({
+      const result = await setup({
         cwd,
         name: 'festival',
         skipInstall: true,
@@ -109,7 +109,7 @@ describe('setupSite', () => {
         d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: DB_ID }]
       })}\n`);
       const calls = [];
-      await setupSite({
+      await setup({
         cwd,
         remote: true,
         deploy: false,

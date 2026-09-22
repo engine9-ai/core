@@ -17,11 +17,12 @@ Other public libraries use the same standard:
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms (`person`, `person_email`, segments, and the rest). `installStandard` deploys these into your database. |
 | [`@engine9/id`](https://github.com/engine9-ai/id)                 | Browser client. Verifies Identity Tokens and, when a site has core, posts them to these endpoints.                                               |
-| [`demo-festival`](https://github.com/engine9-ai/demo-festival)                      | A festival site (Astro, SQLite, optional Cloudflare D1) that uses core and id together.                                                          |
+| [`demo-festival`](https://github.com/engine9-ai/demo-festival)    | A festival site (Astro, SQLite, optional Cloudflare D1) that uses core and id together.                                                          |
 
-Many other libraries and plugins follow the same schemas and pipeline slots, including that that add in MCP servers, messagings, reports, search, etc, etc.
+Many other libraries and plugins follow the same schemas and pipeline slots, including ones that add in MCP servers, messagings, reports, search, etc, etc.
 
-New website: **[docs/deploy.md](docs/deploy.md)**.
+New website: **[docs/deploy.md](docs/deploy.md)** — same platform (recommended)
+vs independent hosts (advanced).
 
 ## What the library creates
 
@@ -41,21 +42,23 @@ New website: **[docs/deploy.md](docs/deploy.md)**.
 - **Optional login** — storing people uses an API key. Production login
   defaults to delegate
   ([docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)).
-  The Site verifies an Identity Token, maps that provider’s user id to a
+  The host verifies an Identity Token, maps that provider’s user id to a
   `person_id`, reads roles from `person_segment`, and may mint a Core Session.
 
 A database is engine9-capable when it has these standard tables and plugin
 rows. Core creates that database. Any other library that understands the
 standard can use it afterward, including the private server.
 
-## Quick start (Node + SQLite)
+## Quick start (Node + SQLite, same platform)
 
 ```bash
 npm install @engine9/core
 npx e9core setup --node
+npx e9core serve
 ```
 
-That writes tables and API keys into `engine9.db` and `.env`. The same pieces,
+That writes tables and API keys into `engine9.db` and `.env`, then serves your
+HTML and `/api` together. Open the setup URL it prints. The same pieces,
 one at a time:
 
 ```bash
@@ -235,7 +238,7 @@ The default provider is delegate.
 Optional. People APIs work with an API key alone. Production defaults to
 delegate: [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
 
-After the Site verifies an Identity Token, the Core Session carries `level`,
+After the host verifies an Identity Token, the Core Session carries `level`,
 `profileId`, and `auth` from that provider. Roles may declare `requiredAuth`
 (`minLevel`, `twoFactor`). `resolveAuthContext` enforces it on API routes when
 a role is active. Provider-specific ids and token fields are documented only
@@ -288,12 +291,12 @@ The browser library is [`@engine9/id`](https://github.com/engine9-ai/id).
   `requiredAuth` (`minLevel`, `twoFactor`).
 - Identity **Levels** (0–7) are confidence. A Level 4 User may still lack a
   segment role.
-- **Roles** are Site authorization (`role_id === segment_id`).
+- **Roles** are host authorization (`role_id === segment_id`).
 
 ### When a session helps
 
 A Core Session is an optional HMAC cache of `personId`, `roles`, `level`, and
-`auth` after the Site has verified an Identity Token. The host signs it with
+`auth` after the host has verified an Identity Token. The host signs it with
 `SESSION_SECRET` and delivers it (HttpOnly cookie or `X-Engine9-Session`).
 Later requests check that signature locally. They do not call the identity
 provider again. The browser can instead send the Identity Token as

@@ -99,7 +99,8 @@ export interface DelegateSession {
 
 export function delegateIdentityUrl(options: {
   delegateUrl: string;
-  site: string;
+  /** JWT aud — host or host:port, not a full origin. */
+  domain: string;
   returnTo: string;
   prompt?: string;
   minLevel?: number;
@@ -124,8 +125,11 @@ export function resolveDelegatePersonId(options: {
   person?: Record<string, unknown>;
 }): Promise<number>;
 
-/** Site origin from an absolute URL, or null when unparseable. */
+/** Full origin from an absolute URL, or null when unparseable. */
 export function siteOriginFromUrl(value?: string | null): string | null;
+
+/** Login domain (JWT aud): host or host:port when the URL port is non-empty. */
+export function domainFromUrl(value?: string | null): string | null;
 
 /** True when token looks like a JWT (eyJ header + three segments). */
 export function isDelegateIdentityJwt(token: string | null | undefined): boolean;
@@ -137,13 +141,13 @@ export function classifyDelegateLoginToken(
 
 /**
  * Verify a delegate Identity Token (JWT, ES256) via JWKS.
- * `aud` must equal `site` (Site origin). Issuer defaults to delegateUrl origin.
+ * `aud` must equal `domain` (host[:port]). Issuer defaults to delegateUrl origin.
  */
 export function verifyDelegateIdentityToken(options: {
   token: string;
   delegateUrl: string;
-  /** Site origin — compared to JWT `aud`. */
-  site: string;
+  /** Compared to JWT `aud` — host or host:port, not a full origin. */
+  domain: string;
   jwks?: { keys: Record<string, unknown>[] } | Record<string, unknown>[];
   issuer?: string;
   fetchImpl?: typeof fetch;
@@ -216,11 +220,11 @@ export interface DelegateAuth {
   }): string;
   /**
    * Complete login from an Identity Token JWT. Pass returnTo so JWT aud can
-   * default to the returnTo origin.
+   * default to domainFromUrl(returnTo).
    */
   login(
     identityToken: string,
-    options?: { person?: Record<string, unknown>; returnTo?: string; site?: string }
+    options?: { person?: Record<string, unknown>; returnTo?: string; domain?: string }
   ): Promise<{
     session: DelegateSession;
     token: string;
@@ -228,11 +232,11 @@ export interface DelegateAuth {
   }>;
   /** Verify a Core Session token; null when invalid or expired. Returns level and profileId. */
   verify(token: string | null | undefined): DelegateSession | null;
-  /** Verify a delegate Identity Token using this auth's delegateUrl / site / JWKS. */
+  /** Verify a delegate Identity Token using this auth's delegateUrl / domain / JWKS. */
   verifyIdentityToken(
     token: string,
     options?: {
-      site?: string;
+      domain?: string;
       jwks?: { keys: Record<string, unknown>[] };
       issuer?: string;
     }
@@ -268,8 +272,8 @@ export interface DelegateAuth {
 export function createDelegateAuth(config: {
   worker: unknown;
   delegateUrl: string;
-  /** Site origin for JWT `aud` checks. Defaults to returnTo origin on login(). */
-  site?: string;
+  /** JWT aud (host[:port]). Defaults to domainFromUrl(returnTo) on login(). */
+  domain?: string;
   /** JWT iss; defaults to delegateUrl origin. */
   issuer?: string;
   /** Preloaded JWKS; skips fetch of /.well-known/jwks.json. */
@@ -304,6 +308,7 @@ declare const _default: {
   isDelegateIdentityJwt: typeof isDelegateIdentityJwt;
   classifyDelegateLoginToken: typeof classifyDelegateLoginToken;
   siteOriginFromUrl: typeof siteOriginFromUrl;
+  domainFromUrl: typeof domainFromUrl;
   resolveDelegatePersonId: typeof resolveDelegatePersonId;
   createSessionToken: typeof createSessionToken;
   verifySessionToken: typeof verifySessionToken;

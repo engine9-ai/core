@@ -60,6 +60,8 @@ describe('setupKeys', () => {
       const pub = readEnvValue(env1, 'E9_PUBLIC_API_KEY');
       assert.match(admin, /^e9key_/);
       assert.match(pub, /^e9publickey_/);
+      const setupToken = readEnvValue(env1, 'E9_SETUP_TOKEN');
+      assert.match(setupToken, /^[0-9a-f]{48}$/);
       assert.equal(existsSync(path.join(cwd, '.dev.vars')), false);
       const ignore = readFileSync(path.join(cwd, '.gitignore'), 'utf8');
       assert.match(ignore, /^\.env$/m);

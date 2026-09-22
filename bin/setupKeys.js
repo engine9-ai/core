@@ -1,5 +1,5 @@
 /**
- * Project-local API key setup for a new Site.
+ * Project-local API key setup for a new deployment.
  * Plaintext stays in .env only. Do not write .dev.vars: Wrangler prefers that
  * file and ignores the same names in .env.
  * Only SHA-256 hashes are sent to the database.
@@ -13,6 +13,8 @@ import { generateApiKey, hashApiKey } from '../auth/index.js';
 export const ENV_ADMIN_KEY = 'E9_ADMIN_API_KEY';
 export const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
 export const ENV_SESSION_SECRET = 'SESSION_SECRET';
+export const ENV_SETUP_TOKEN = 'E9_SETUP_TOKEN';
+export const ENV_ALLOWED_ORIGINS = 'E9_ALLOWED_ORIGINS';
 
 const STATE_DIR = '.e9core';
 const STATE_FILE = 'keys.json';
@@ -65,6 +67,20 @@ export function upsertEnv(text, entries) {
   for (const [name, value] of Object.entries(pending)) {
     out.push(`${name}=${quoteEnv(value)}`);
   }
+  out.push('');
+  return out.join('\n');
+}
+
+/** Drop named keys. Keeps comments and other lines. */
+export function removeEnvKeys(text, keys) {
+  const drop = new Set(keys);
+  const lines = text ? String(text).split(/\r?\n/) : [];
+  const out = lines.filter((line) => {
+    const eq = line.indexOf('=');
+    const name = eq > 0 ? line.slice(0, eq).trim() : '';
+    return !name || !drop.has(name);
+  });
+  while (out.length && out[out.length - 1] === '') out.pop();
   out.push('');
   return out.join('\n');
 }
@@ -167,8 +183,10 @@ export async function setupKeys(options = {}) {
   let adminKey = rotate ? '' : readEnvValue(existingEnv, ENV_ADMIN_KEY);
   let publicKey = rotate ? '' : readEnvValue(existingEnv, ENV_PUBLIC_KEY);
   let sessionSecret = rotate ? '' : readEnvValue(existingEnv, ENV_SESSION_SECRET);
+  let setupToken = rotate ? '' : readEnvValue(existingEnv, ENV_SETUP_TOKEN);
+  const allowedOrigins = readEnvValue(existingEnv, ENV_ALLOWED_ORIGINS);
 
-  const created = { admin: false, public: false, session: false };
+  const created = { admin: false, public: false, session: false, setupToken: false };
   const inserts = [];
 
   if (!adminKey) {
@@ -205,12 +223,18 @@ export async function setupKeys(options = {}) {
     sessionSecret = randomBytes(32).toString('hex');
     created.session = true;
   }
+  if (!setupToken) {
+    setupToken = randomBytes(24).toString('hex');
+    created.setupToken = true;
+  }
 
   const entries = {
     [ENV_ADMIN_KEY]: adminKey,
     [ENV_PUBLIC_KEY]: publicKey,
-    [ENV_SESSION_SECRET]: sessionSecret
+    [ENV_SESSION_SECRET]: sessionSecret,
+    [ENV_SETUP_TOKEN]: setupToken
   };
+  if (allowedOrigins) entries[ENV_ALLOWED_ORIGINS] = allowedOrigins;
 
   const envBody = upsertEnv(existingEnv, entries);
   writeFileSync(envPath, envBody);
@@ -224,13 +248,15 @@ export async function setupKeys(options = {}) {
     writeFileSync(
       examplePath,
       [
-        '# Filled locally by: npx e9core setup-keys',
+        '# Filled locally by: npx e9core setup / setup-keys',
         '# wrangler dev and Node both read this file.',
         '# Do NOT add .dev.vars — Wrangler prefers it and ignores these names in .env.',
-        '# Production: npx e9core setup-keys --remote copies these to Cloudflare secrets.',
+        '# Production: npx e9core setup --remote copies these to Cloudflare secrets.',
         `${ENV_ADMIN_KEY}=`,
         `${ENV_PUBLIC_KEY}=`,
         `${ENV_SESSION_SECRET}=`,
+        `${ENV_SETUP_TOKEN}=`,
+        `# ${ENV_ALLOWED_ORIGINS}=http://localhost:8768,https://www.example.com`,
         ''
       ].join('\n')
     );
@@ -300,7 +326,9 @@ export async function setupKeys(options = {}) {
     for (const [name, value] of Object.entries(entries)) {
       wrangler(['secret', 'put', name], cwd, value);
     }
-    notes.push('Saved E9_ADMIN_API_KEY, E9_PUBLIC_API_KEY, and SESSION_SECRET as Cloudflare secrets.');
+    notes.push(
+      'Saved E9_ADMIN_API_KEY, E9_PUBLIC_API_KEY, SESSION_SECRET, and E9_SETUP_TOKEN as Cloudflare secrets.'
+    );
   }
 
   writeState(cwd, state);
@@ -308,7 +336,9 @@ export async function setupKeys(options = {}) {
   return {
     created,
     envPath,
+    setupToken,
+    publicKey,
     notes,
-    reused: !created.admin && !created.public && !created.session
+    reused: !created.admin && !created.public && !created.session && !created.setupToken
   };
 }

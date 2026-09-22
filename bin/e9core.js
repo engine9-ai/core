@@ -18,18 +18,22 @@
           e9 sqlworker createApiKey -a <account_id> --name … --scopes …
 
     e9core setup [--name my-site] [--remote] [--domain example.com] [--node]
-        Automatic Site setup. Writes wrangler.jsonc, creates D1, loads tables,
-        and stores keys in .env. You do not edit those files by hand.
+        Writes wrangler.jsonc (Cloudflare path), the engine9 database, and .env
+        (API keys, SESSION_SECRET, E9_SETUP_TOKEN). Keys are part of setup.
         --remote also loads production D1, saves Cloudflare secrets, and deploys.
-        --node skips Cloudflare and uses a local SQLite file.
+        --node skips Cloudflare (SQLite + .env); then use: e9core serve
         Do not add .dev.vars (Wrangler prefers it over .env).
 
+    e9core serve [--port 8787] [--host 127.0.0.1] [--setup] [--db sqlite://./engine9.db] [--api-only]
+        Local website plus the setup wizard at /setup. Listens on 127.0.0.1.
+        --setup reopens the wizard after it has been finished.
+
     e9core setup-keys [--d1 engine9] [--remote] [--rotate]
-        Create the site admin key, the public form key, and SESSION_SECRET.
+        Create/reuse site keys and E9_SETUP_TOKEN (normally done by setup).
         Writes plaintext to .env only (gitignored). Do not add .dev.vars;
         Wrangler prefers that file and ignores the same names in .env.
         Stores only hashes in local D1. --remote also stores hashes in
-        production D1 and saves the three values as Cloudflare secrets.
+        production D1 and saves the values as Cloudflare secrets.
 
     e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
@@ -53,8 +57,11 @@ import {
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
-import { setupKeys } from './setupKeys.js';
-import { SETUP_HELP, setupSite } from './setupSite.js';
+import { setupKeys, readEnvValue } from './setupKeys.js';
+import { SETUP_HELP, setup } from './setup.js';
+import { serve, parseServeArgs } from './serve.js';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -101,7 +108,7 @@ async function main() {
         console.log(SETUP_HELP);
         break;
       }
-      const result = await setupSite({
+      const result = await setup({
         cwd: process.cwd(),
         name: args.name && args.name !== true ? String(args.name) : undefined,
         d1: args.d1 && args.d1 !== true ? String(args.d1) : undefined,
@@ -114,10 +121,35 @@ async function main() {
         refreshSchema: args['refresh-schema'] === true
       });
       for (const note of result.notes) console.log(note);
-      if (!args.remote && !args.node) {
-        console.log('Local setup is done. Front-end work can use .env.');
-        console.log('When you want it on the internet: npx e9core setup --remote');
+      const envPath = path.join(process.cwd(), '.env');
+      const setupToken = existsSync(envPath)
+        ? readEnvValue(readFileSync(envPath, 'utf8'), 'E9_SETUP_TOKEN')
+        : '';
+      if (args.node) {
+        console.log('Local Node setup is done. Start the same-platform site with:');
+        console.log('  npx e9core serve');
+        if (setupToken) {
+          console.log(`Then open the wizard printed by: npx e9core serve`);
+        }
+      } else if (!args.remote) {
+        console.log('Local Cloudflare setup is done. Open the wizard with:');
+        console.log('  npx e9core serve');
+        console.log('Choose Cloudflare there to preview and deploy.');
       }
+      break;
+    }
+    case 'serve': {
+      const serveArgs = parseServeArgs(process.argv.slice(3));
+      const result = await serve({
+        cwd: process.cwd(),
+        port: serveArgs.port && serveArgs.port !== true ? Number(serveArgs.port) : undefined,
+        host: serveArgs.host && serveArgs.host !== true ? String(serveArgs.host) : undefined,
+        db: serveArgs.db && serveArgs.db !== true ? String(serveArgs.db) : undefined,
+        apiOnly: serveArgs['api-only'] === true,
+        reopenSetup: serveArgs.setup === true,
+        staticRoot: serveArgs.root && serveArgs.root !== true ? String(serveArgs.root) : undefined
+      });
+      for (const note of result.notes) console.log(note);
       break;
     }
     case 'setup-keys': {
@@ -141,6 +173,7 @@ async function main() {
           if (result.created.admin) console.log('  E9_ADMIN_API_KEY — server only');
           if (result.created.public) console.log('  E9_PUBLIC_API_KEY — signup forms / browser');
           if (result.created.session) console.log('  SESSION_SECRET — signs the login cookie');
+          if (result.created.setupToken) console.log('  E9_SETUP_TOKEN — local wizard only');
         }
         for (const note of result.notes) console.log(note);
         if (!args.remote) {
@@ -231,7 +264,7 @@ async function main() {
     }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
-      console.log('Other commands: e9core <setup-keys|create-api-key|sqlite-ddl|installStandard>');
+      console.log('Other commands: e9core <serve|setup-keys|create-api-key|sqlite-ddl|installStandard>');
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }
