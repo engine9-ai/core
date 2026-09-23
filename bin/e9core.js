@@ -44,8 +44,9 @@
         migration files.
 
     e9core installStandard --db sqlite://./engine9.db [--stack ...]
-        Live-install a stack (default @engine9/interfaces/stacks/standard)
-        into the database: plugin rows + create/alter tables.
+        Live-install published person interfaces (default), or an opt-in stack
+        with --stack (e.g. @engine9/interfaces/stacks/standard): plugin rows +
+        create/alter tables.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 */

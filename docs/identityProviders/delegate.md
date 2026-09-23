@@ -19,7 +19,9 @@ Core setup without a provider: [../deploy.md](../deploy.md).
 | Word | Meaning |
 | --- | --- |
 | **User** | The person delegate knows |
-| **UNID** | Delegate’s id for that User. Core stores the link UNID → `person_id`. Delegate does not assign `person_id` |
+| **UNID** | Delegate’s browser id. It stays on delegate. Core never sees it |
+| **Pseudonym** | This Domain’s id for that browser. Core stores Pseudonym → `person_id` |
+| **Subject** | `sub` when a Profile is shared. The same User on two browsers has one subject on this Domain, so core treats them as one person |
 | **Profile** | Fields the User agreed to share (`given_name`, `email`, …) |
 | **Identity Token** | Short-lived JWT delegate signs. The host verifies it |
 | **Domain** | Host or `host:port` for your site. The token `aud` claim must equal it (not a full `https://` origin) |
@@ -65,8 +67,8 @@ const auth = createDelegateAuth({
 ## What core does with the token
 
 `createDelegateAuth` verifies the JWT (ES256, JWKS, `iss`, `aud` = domain,
-`exp`), maps the **UNID** to a `person_id`, reads segment roles, and may mint
-a Core Session.
+`exp`), maps the **Pseudonym** (and `sub`, when a Profile is shared) to a
+`person_id`, reads segment roles, and may mint a Core Session.
 
 ```js
 const { session, token } = await auth.login(identityToken, {
@@ -78,10 +80,12 @@ Verification steps:
 
 1. Fetch `{delegateUrl}/.well-known/jwks.json` (cached in memory).
 2. Verify ES256, `iss`, `aud === domain`, `exp`.
-3. Read `unid`, `level`, `profile`, and `auth` from the token.
+3. Read `pseudonym`, `sub`, `level`, `profile`, and `auth` from the token.
 
-Person resolution uses the UNID only. Email is copied onto the person record
-only when it is verified or the Identity Level is at least 2.
+Person resolution uses the Pseudonym. When `sub` differs from the Pseudonym,
+that subject is a second delegate id for the same person, so a second browser
+joins the first. Email is copied onto the person record only when it is
+verified or the Identity Level is at least 2.
 
 ## Login request fields
 
@@ -92,7 +96,7 @@ only when it is verified or the Identity Level is at least 2.
 | `delegate_token` | Identity Token |
 | `domain` | Optional override for JWT `aud` (host[:port]); else derived from `return_to` |
 
-`GET /auth/me` includes `personId`, `roles`, `level`, and `unid`.
+`GET /auth/me` includes `personId`, `roles`, `level`, and `pseudonym`.
 
 Send visitors to `/identity/authorize` (`auth.identityUrl`).
 
@@ -103,8 +107,8 @@ D1 remains the source of truth.
 
 | Key | Value |
 | --- | --- |
-| `unid:<unid>` | `person_id` |
-| `person:<person_id>` | `unid` |
+| `delegate:<pseudonym or subject>` | `person_id` |
+| `person:<person_id>` | primary delegate id |
 
 Wire format: [id protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
 Browser library: [id deploy](https://github.com/engine9-ai/id/blob/main/docs/deploy.md).

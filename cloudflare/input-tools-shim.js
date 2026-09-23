@@ -4,8 +4,10 @@
   The real @engine9/input-tools index imports server-only dependencies
   (@aws-sdk/client-s3, archiver, unzipper, googleapis) that cannot ship in a
   Worker bundle.  The interface transforms used by the client only need the
-  small portable pieces below, which are implemented in @engine9/core
-  without those dependencies.
+  small portable pieces below. Most are implemented in @engine9/core.
+  mergeIntoQueue is re-exported from @engine9/input-tools/mergeIntoQueue.js,
+  which has no heavy dependencies. Five interface upsert transforms import it
+  from the package root, and wrangler aliases that root to this shim.
 
   Alias it in wrangler.toml (see cloudflare/README.md):
 
@@ -33,3 +35,6 @@ export {
   collectInvalidUnicodeValues,
   cleanUnicodeValues
 } from '@engine9/input-tools/checkUnicode.js';
+// Portable; no AWS, archiver, or googleapis. Interface upsert transforms
+// import mergeIntoQueue from the package root.
+export { mergeIntoQueue, keyFromFields } from '@engine9/input-tools/mergeIntoQueue.js';

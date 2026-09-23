@@ -7,8 +7,8 @@
     1. Browser obtains a delegate-signed Identity Token (JWT, ES256) via
        /identity/authorize or /identity/bridge
     2. The host verifies the JWT with JWKS (`verifyDelegateIdentityToken`) — no
-       shared secret. Claims: unid, level, profile, auth; aud is the Domain (host[:port])
-    3. Maps unid / profile_id → person_id (`resolveDelegatePersonId`) and
+       shared secret. Claims: pseudonym, sub, level, profile, auth; aud is the Domain (host[:port])
+    3. Maps pseudonym / sub → person_id (`resolveDelegatePersonId`) and
        optionally mints a local HMAC Core Session (`createSessionToken`)
 
   Roles (auth layer 2): role_id === segment_id (UUID). The host supplies a
@@ -321,7 +321,8 @@ function mapJoseVerifyError(err) {
  * Fetches `{delegateUrl}/.well-known/jwks.json` unless `jwks` is passed.
  * Checks alg ES256, iss (default delegateUrl origin), aud === domain, exp (±60s).
  *
- * firebaseUid is optional — person resolution only needs unid.
+ * firebaseUid is optional and present only for an Engine9 API host.
+ * Person resolution uses pseudonym, plus sub when a Profile was shared.
  */
 export async function verifyDelegateIdentityToken({
   token,
@@ -388,9 +389,10 @@ export async function verifyDelegateIdentityToken({
     }
   }
 
-  if (!payload?.unid) {
+  const pseudonym = typeof payload?.pseudonym === 'string' ? payload.pseudonym : '';
+  if (!pseudonym) {
     throw createDelegateLoginFailure('invalid_identity_token', {
-      detail: 'identity token missing unid'
+      detail: 'identity token missing pseudonym'
     });
   }
 
@@ -399,7 +401,7 @@ export async function verifyDelegateIdentityToken({
   const emailVerified = profile?.email_verified === true;
   const email = emailVerified && profile?.email ? String(profile.email) : undefined;
   const sub = typeof payload.sub === 'string' ? payload.sub : undefined;
-  const profileId = sub && !sub.startsWith('unid:') ? sub : undefined;
+  const subject = sub && sub !== pseudonym ? sub : undefined;
   const level = typeof payload.level === 'number' ? payload.level : undefined;
   const amr = Array.isArray(rawAuth.amr) ? rawAuth.amr : [];
   const signInSecondFactor =
@@ -410,7 +412,8 @@ export async function verifyDelegateIdentityToken({
       : undefined);
 
   const delegateUser = {
-    unid: payload.unid,
+    pseudonym,
+    subject,
     email,
     emailVerified,
     auth: {
@@ -420,7 +423,7 @@ export async function verifyDelegateIdentityToken({
       authTime: rawAuth.auth_time ?? rawAuth.authTime
     },
     level,
-    profileId,
+    profileId: subject,
     profile
   };
   const firebaseUid =
@@ -434,9 +437,11 @@ export async function verifyDelegateIdentityToken({
 
 
 /*
-  Run a delegate identity through the normal inbound person pipeline so the
-  unid is recognized/deduped via id_type "delegate" (person_id_delegate on
-  SQLite/D1). Email (when delegate provides one) rides along so a delegate
+  Run a delegate identity through the normal inbound person pipeline so
+  the Pseudonym (this browser on this Domain) and, when a Profile was shared,
+  the subject (`sub`) are recognized/deduped via id_type "delegate"
+  (person_id_delegate on SQLite/D1). The same subject on two browsers resolves
+  to one person. Email (when delegate provides one) rides along so a delegate
   login merges with a person already known by email. Returns the person_id.
 */
 export async function resolveDelegatePersonId({
@@ -448,8 +453,11 @@ export async function resolveDelegatePersonId({
   person = {}
 }) {
   if (!worker) throw new Error('resolveDelegatePersonId requires a worker (PersonWorker)');
-  if (!delegateUser?.unid) throw new Error('resolveDelegatePersonId requires delegateUser.unid');
-  const record = { delegate_id: delegateUser.unid, ...person };
+  if (!delegateUser?.pseudonym) throw new Error('resolveDelegatePersonId requires delegateUser.pseudonym');
+  const record = { ...person, delegate_id: delegateUser.pseudonym };
+  if (delegateUser.subject && delegateUser.subject !== delegateUser.pseudonym) {
+    record.delegate_subject = delegateUser.subject;
+  }
   // Only copy email onto the person record when Delegate has confirmed it
   // (emailVerified === true) or the Identity Token is at least Level 2
   // (Contact Confirmed). Unverified Level 0/1 emails must not merge people
@@ -532,7 +540,7 @@ export function createSessionCookieHeaders(
    Session shape helpers (pure -- no worker or secrets required).
 
    A delegate session payload is:
-     { personId, roles: [role_id...], unid, email?, auth: { signInProvider?,
+     { personId, roles: [role_id...], pseudonym, email?, auth: { signInProvider?,
        twoFactor?, signInSecondFactor?, authTime? }, exp }
 
    `roles` is an array of role_id values (segment UUIDs). Helpers below only
@@ -651,7 +659,7 @@ export function createDelegateAuth({
     return {
       personId: payload.personId,
       roles: Array.isArray(payload.roles) ? payload.roles : [],
-      unid: payload.unid,
+      pseudonym: payload.pseudonym,
       email: payload.email,
       auth: payload.auth || {},
       exp: payload.exp,
@@ -681,10 +689,10 @@ export function createDelegateAuth({
     const nextRoles = await grantRole(personId, roleId, { exclusive });
     const nextSession = session
       ? { ...session, personId, roles: nextRoles }
-      : { personId, roles: nextRoles, unid: session?.unid, email: session?.email, auth: session?.auth || {} };
+      : { personId, roles: nextRoles, pseudonym: session?.pseudonym, email: session?.email, auth: session?.auth || {} };
     // Prefer full session fields when provided
     if (session) {
-      nextSession.unid = session.unid;
+      nextSession.pseudonym = session.pseudonym;
       nextSession.email = session.email;
       nextSession.auth = session.auth || {};
       nextSession.level = session.level;
@@ -748,7 +756,7 @@ export function createDelegateAuth({
     const session = {
       personId,
       roles: sessionRoles,
-      unid: delegateUser.unid,
+      pseudonym: delegateUser.pseudonym,
       email: delegateUser.email,
       auth: {
         signInProvider: delegateUser.auth?.signInProvider,

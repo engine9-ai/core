@@ -111,7 +111,10 @@ one piece at a time.
      and `node:buffer`)
    - the `[alias]` mapping `@engine9/input-tools` to
      `@engine9/core/cloudflare/input-tools-shim`, which keeps Node-only
-     dependencies (AWS SDK, archiver, googleapis) out of the Worker bundle
+     dependencies (AWS SDK, archiver, googleapis) out of the Worker bundle.
+     The shim re-exports the portable helpers those transforms import from
+     the package root, including `mergeIntoQueue` from
+     `@engine9/input-tools/mergeIntoQueue.js` (no heavy dependencies).
 
 6. **Deploy**
 

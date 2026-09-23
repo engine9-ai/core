@@ -25,7 +25,7 @@
     3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
 
   Identity: X-Engine9-Session (HMAC Core Session) and/or Authorization Bearer JWT
-  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches unid → person_id.
+  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches pseudonym → person_id.
 
   Usage:
     const api = createApi({
@@ -318,7 +318,10 @@ export function createApi({
     let personId = null;
     if (kvEnv?.PERSON_ID_DELEGATE_KV) {
       try {
-        const cached = await getPersonIdByUnid(kvEnv, delegateUser.unid);
+        const cached = await getPersonIdByUnid(kvEnv, delegateUser.pseudonym)
+          || (delegateUser.subject
+            ? await getPersonIdByUnid(kvEnv, delegateUser.subject)
+            : null);
         const n = cached != null ? parseInt(cached, 10) : NaN;
         if (Number.isInteger(n)) personId = n;
       } catch {
@@ -335,7 +338,7 @@ export function createApi({
       });
       if (kvEnv?.PERSON_ID_DELEGATE_KV) {
         try {
-          await setDelegatePersonId(kvEnv, delegateUser.unid, personId);
+          await setDelegatePersonId(kvEnv, delegateUser.pseudonym, personId, delegateUser.subject);
         } catch {
           /* cache write is best-effort */
         }
@@ -345,7 +348,7 @@ export function createApi({
     return {
       personId,
       roles,
-      unid: delegateUser.unid,
+      pseudonym: delegateUser.pseudonym,
       email: delegateUser.email,
       auth: delegateUser.auth || {},
       level: delegateUser.level,
@@ -387,7 +390,7 @@ export function createApi({
       personId: session.personId,
       roles: session.roles || [],
       level: session.level ?? null,
-      unid: session.unid,
+      pseudonym: session.pseudonym,
       profileId: session.profileId ?? null,
       auth: session.auth || {}
     };

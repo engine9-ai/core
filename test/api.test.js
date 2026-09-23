@@ -160,7 +160,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     jwk.alg = 'ES256';
     jwk.use = 'sig';
     const identityJwt = await new SignJWT({
-      unid: '11111111-2222-8e91-8333-444444444444',
+      pseudonym: '11111111-2222-8e91-8333-444444444444',
       level: 2,
       profile: { id: 'prof-role', email: 'role@example.com', email_verified: true },
       auth: { provider: 'google.com', two_factor: false, auth_time: 1700000000 }

@@ -39,5 +39,5 @@ export async function applyInterface(worker, pluginPath) {
 
 export async function applyStandardStack(worker) {
   const plugins = asPluginWorker(worker);
-  return plugins.installStandard();
+  return plugins.installStandard({ path: '@engine9/interfaces/stacks/standard' });
 }

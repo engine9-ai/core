@@ -29,12 +29,11 @@ function memoryKv() {
   };
 }
 
-async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, unid = UNID, profile, auth }) {
+async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, pseudonym = UNID, profile, auth }) {
   const jwt = new SignJWT({
-    unid,
+    pseudonym,
     level,
     profile: profile || {
-      id: 'prof-api',
       email: 'api@example.com',
       email_verified: true
     },
@@ -84,10 +83,10 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     let nextPersonId = 1;
     worker.processPeople = async ({ batch }) => {
       const personIds = (batch || []).map((row) => {
-        const unid = row.delegate_id;
-        if (unid && peopleByUnid.has(unid)) return peopleByUnid.get(unid);
+        const pseudonym = row.delegate_id;
+        if (pseudonym && peopleByUnid.has(pseudonym)) return peopleByUnid.get(pseudonym);
         const id = nextPersonId++;
-        if (unid) peopleByUnid.set(unid, id);
+        if (pseudonym) peopleByUnid.set(pseudonym, id);
         return id;
       });
       return { personIds, records: personIds.length, recordsWithPersonIds: personIds.length };
@@ -148,7 +147,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(loginCode.status, 200, JSON.stringify(loginCode.body));
     assert.ok(loginCode.body.token);
     assert.ok(loginCode.body.session.personId > 0);
-    assert.equal(loginCode.body.session.unid, UNID);
+    assert.equal(loginCode.body.session.pseudonym, UNID);
     assert.equal(loginCode.body.session.level, 2);
     assert.equal(loginCode.body.session.profileId, 'prof-login');
     const personId = loginCode.body.session.personId;
@@ -161,7 +160,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     });
     assert.equal(meSession.status, 200, JSON.stringify(meSession.body));
     assert.equal(meSession.body.personId, personId);
-    assert.equal(meSession.body.unid, UNID);
+    assert.equal(meSession.body.pseudonym, UNID);
     assert.equal(meSession.body.level, 2);
     assert.equal(meSession.body.profileId, 'prof-login');
     assert.ok(meSession.body.auth);
@@ -184,11 +183,11 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     });
     assert.equal(meJwt.status, 200, JSON.stringify(meJwt.body));
     assert.equal(meJwt.body.personId, personId);
-    assert.equal(meJwt.body.unid, UNID);
+    assert.equal(meJwt.body.pseudonym, UNID);
     assert.equal(meJwt.body.level, 2);
     assert.equal(meJwt.body.profileId, 'prof-api');
     assert.equal(meJwt.body.profile?.email, 'api@example.com');
-    assert.equal(await kv.get(`unid:${UNID}`), String(personId));
+    assert.equal(await kv.get(`delegate:${UNID}`), String(personId));
 
     const loginJwt = await api.handle({
       method: 'POST',

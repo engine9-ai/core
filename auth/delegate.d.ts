@@ -17,8 +17,11 @@ export interface DelegateAuthState {
 
 /** Identity payload from an Identity Token. */
 export interface DelegateUser {
-  unid: string;
-  /** Optional — JWT path does not require it; person resolution uses unid. */
+  /** This Domain's Pseudonym for the browser. Not the UNID. */
+  pseudonym: string;
+  /** `sub` when a Profile was shared. Same across browsers on this Domain. */
+  subject?: string;
+  /** Optional — present when the Domain is an Engine9 API host. */
   firebaseUid?: string;
   email?: string;
   emailVerified?: boolean;
@@ -86,13 +89,13 @@ export interface DelegateSession {
   personId: number;
   /** role_id values — each equals a segment_id UUID from the site role registry. */
   roles: string[];
-  unid: string;
+  pseudonym: string;
   email?: string;
   auth: CredentialLevel;
   exp?: number;
   /** Identity Level from the Identity Token. */
   level?: number;
-  /** Profile id (`sub` when it is not `unid:<unid>`). */
+  /** This Domain's Profile subject (`sub` when it differs from `pseudonym`). */
   profileId?: string;
   profile?: Record<string, unknown>;
 }
@@ -114,7 +117,8 @@ export function delegateIdentityUrl(options: {
 export function resolveDelegatePersonId(options: {
   worker: unknown;
   delegateUser: {
-    unid: string;
+    pseudonym: string;
+    subject?: string;
     email?: string;
     emailVerified?: boolean;
     level?: number;

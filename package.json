@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
@@ -51,7 +51,7 @@
     "test:id-large": "E9_LARGE_ID_TEST=1 node --test --test-concurrency=1 test/id.large.test.js"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=18"
   },
   "author": "Engine9",
   "license": "MIT",

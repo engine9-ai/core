@@ -115,7 +115,7 @@ same-platform snippet (relative `/api` + public key).
 
 ### Cloudflare (local, then production)
 
-You need Node.js 22+ and a Cloudflare account. Log in once:
+You need Node.js 18+ and a Cloudflare account. Log in once:
 
 ```bash
 npx wrangler login
