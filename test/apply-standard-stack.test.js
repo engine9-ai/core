@@ -19,7 +19,8 @@ test('installStandard bootstraps a SQLite database for the person pipeline', asy
       'person_phone',
       'person_address',
       'segment',
-      'person_segment'
+      'person_segment',
+      'api_key'
     ]) {
       assert.ok(tables.indexOf(t) >= 0, `expected table ${t}, got ${tables.join(',')}`);
     }
