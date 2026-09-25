@@ -86,6 +86,32 @@ When a new build needs a table, decide in this order:
 Human-facing writeup: [docs/deploy.md](docs/deploy.md#the-project-database)
 and [README.md](README.md#the-project-database).
 
+## Applying schema SQL to D1
+
+`modified_at` columns get an `AFTER UPDATE` trigger (`getPostCreateStatements`
+in [lib/sql/dialects/SQLite.js](lib/sql/dialects/SQLite.js)). `dumpSqliteFile`
+([bin/setup.js](bin/setup.js)) and `e9core sqlite-ddl` both emit those
+triggers. `npx e9core setup` writes `migrations/0001_engine9.sql` and loads it
+with `wrangler d1 execute <database> --file` (`--local` or `--remote`). That
+command uses D1's import API. Use it for any SQL this package generates.
+
+`wrangler d1 migrations apply` is a different request. It does not concatenate
+migration files. For each file it appends
+`INSERT INTO "d1_migrations" (name) values ('…')` and posts that one string to
+D1 `/query`. `/query` treats the `;` inside `CREATE TRIGGER … begin … end` as
+the end of the statement, so the ledger insert arrives as a fragment and the
+call fails with `incomplete input: SQLITE_ERROR [code: 7500]`. The same bytes
+through `execute --file` succeed. A migration with no trigger can still use
+`migrations apply`. To record a ledger row for an engine9 schema file, import
+the file, then insert the name in a separate statement.
+
+Do not explain that 7500 as wrangler bundling several migrations into one
+request, and do not rewrite the trigger so `migrations apply` might accept it.
+The open reports are
+[workers-sdk#15314](https://github.com/cloudflare/workers-sdk/issues/15314)
+and
+[workers-sdk#15690](https://github.com/cloudflare/workers-sdk/issues/15690).
+
 ## Interfaces
 
 `@engine9/interfaces` is a peer of this package. A site installs both, as

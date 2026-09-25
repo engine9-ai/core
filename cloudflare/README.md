@@ -15,9 +15,9 @@ installs come from the public
 
 Call `PersonWorker.installStandard()` (or `e9core installStandard` from
 [`bin/e9core.js`](../bin/e9core.js)) to deploy plugin rows and tables, or
-generate SQL for one interface with `e9core sqlite-ddl --schema …` and apply
-it as a wrangler migration. Then serve the people, upsert, and read API from
-a Worker.
+generate SQL for one interface with `e9core sqlite-ddl --schema …` and load
+it with `wrangler d1 execute --file`. Then serve the people, upsert, and read
+API from a Worker.
 
 > These `e9core …` commands are this package’s CLI. The private server’s
 > WorkerRunner is `e9`, for databases that are already engine9-capable.
@@ -74,11 +74,16 @@ one piece at a time.
    npx e9core installStandard --db sqlite://./engine9.db
    ```
 
-   Or print SQLite DDL for one interface and apply it as a wrangler migration:
+   Or print SQLite DDL for one interface and load it with D1's import API.
+   `sqlite-ddl` emits `modified_at` triggers. `wrangler d1 migrations apply`
+   posts the file to `/query` and then appends a `d1_migrations` insert, and
+   `/query` rejects the statement that follows a trigger
+   (`incomplete input: SQLITE_ERROR [code: 7500]`). See
+   [Applying schema SQL to D1](../AGENTS.md#applying-schema-sql-to-d1).
 
    ```bash
    npx e9core sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
-   wrangler d1 migrations apply engine9 --remote
+   wrangler d1 execute engine9 --remote --file migrations/0001_plugin.sql
    ```
 
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations

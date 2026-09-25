@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",

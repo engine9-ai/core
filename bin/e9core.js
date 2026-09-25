@@ -40,8 +40,9 @@
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
     e9core sqlite-ddl --schema @engine9/interfaces/person
-        Print the SQLite/D1 create statements for a schema -- useful for D1
-        migration files.
+        Print the SQLite/D1 create statements for a schema. Load the file
+        with wrangler d1 execute --file. migrations apply posts to /query
+        and fails on the modified_at triggers this prints.
 
     e9core installStandard --db sqlite://./engine9.db [--stack ...]
         Live-install published person interfaces (default), or an opt-in stack

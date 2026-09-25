@@ -128,7 +128,12 @@ export function sqlLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-/** Schema + rows, without PRAGMA/BEGIN lines D1 rejects. */
+/**
+ * Schema + rows, without PRAGMA/BEGIN lines D1 rejects.
+ * Includes modified_at triggers. Load with `wrangler d1 execute --file`
+ * (D1 import). `wrangler d1 migrations apply` posts to /query and appends a
+ * d1_migrations insert, which /query rejects after a trigger body.
+ */
 export function dumpSqliteFile(filePath) {
   const db = new DatabaseSync(filePath, { readOnly: true });
   try {
