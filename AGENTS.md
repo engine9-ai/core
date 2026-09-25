@@ -86,6 +86,30 @@ When a new build needs a table, decide in this order:
 Human-facing writeup: [docs/deploy.md](docs/deploy.md#the-project-database)
 and [README.md](README.md#the-project-database).
 
+## Interfaces
+
+`@engine9/interfaces` is a peer of this package. A site installs both, as
+siblings. The copy the site installed is the one core reads.
+
+When you deploy or set up a site, install both:
+
+```
+npm install @engine9/core @engine9/interfaces
+```
+
+Interfaces publishes on its own. When schemas or transforms change, upgrade
+interfaces in the site, rebuild the plugin registry, and redeploy:
+
+```
+npm install @engine9/interfaces@latest
+npx e9core build-plugins
+```
+
+Leave `@engine9/core`'s version alone when only interfaces changed. In this
+repository, tests use the sibling checkout (`file:../interfaces` in
+devDependencies). Keep that path. The peer range in package.json is what a
+deployed site must satisfy.
+
 An identity provider is optional. Production defaults to delegate
 ([docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)).
 Local development does not require one.

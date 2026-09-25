@@ -46,7 +46,7 @@ The usual path writes `wrangler.jsonc` for you, including the D1 database id:
 
 ```bash
 npx wrangler login
-npm install @engine9/core
+npm install @engine9/core @engine9/interfaces
 npx e9core setup
 npx e9core setup --remote
 ```
@@ -57,7 +57,7 @@ one piece at a time.
 1. **Install the library**
 
    ```bash
-   npm install @engine9/core
+   npm install @engine9/core @engine9/interfaces
    ```
 
 2. **Create the D1 database**

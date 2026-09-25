@@ -19,10 +19,15 @@ Other libraries that speak it:
 
 | Library | What it is |
 | --- | --- |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms. `installStandard` deploys them into your database |
+| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms, installed beside core. `installStandard` deploys them into your database |
 | [`@engine9/id`](https://github.com/engine9-ai/id) | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login` |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production) |
 | [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
+
+`@engine9/interfaces` is a peer of this package. Install both in the site.
+Interfaces publishes on its own; upgrade it, run `npx e9core build-plugins`,
+and redeploy. A core release is for changes to core. Details:
+[docs/deploy.md](docs/deploy.md#interfaces).
 
 ## Pick a platform
 
@@ -50,7 +55,7 @@ npx wrangler login
 In your project folder:
 
 ```bash
-npm install @engine9/core
+npm install @engine9/core @engine9/interfaces
 npx e9core setup
 npx e9core serve
 ```
@@ -85,7 +90,7 @@ Technical notes (bundler aliases, KV caches, R2 logs):
 ## Install on your own server (Node.js)
 
 ```bash
-npm install @engine9/core
+npm install @engine9/core @engine9/interfaces
 npx e9core setup --node
 npx e9core serve
 ```
@@ -417,9 +422,11 @@ inlines `ui.console.json5`. Choose plugins in `package.json`:
 
 `plugins` lists exact plugins (stack includes and the core person interfaces
 are added). `pluginPackages` includes every plugin in the listed packages.
-With neither setting, the build has every interface in `@engine9/interfaces`,
-which is also `@engine9/core/plugins/interfaces` and the default for the CLI
-and the example Worker.
+With neither setting, the build has every interface in the installed
+`@engine9/interfaces`. That registry is what the site deploys. Rebuild it
+after upgrading interfaces ([docs/deploy.md](docs/deploy.md#interfaces)).
+`@engine9/core/plugins/interfaces` is the registry core's own tests and the
+CLI use when the site has not built one yet.
 
 ```js
 import plugins from './engine9.plugins.js';

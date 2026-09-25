@@ -27,12 +27,36 @@ Public libraries that share the standard:
 
 | Library | Role |
 | --- | --- |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Schemas and transforms core installs into the database |
+| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Schemas and transforms. Install this beside core; see [Interfaces](#interfaces) |
 | [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/deploy.md) | Browser library. Identity Tokens, and login against these endpoints |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Festival site (Astro + D1) using both |
 
 The private **server** repository is for people who already have an
 engine9-capable database. A new website uses `e9core`, from this package.
+
+## Interfaces
+
+`@engine9/interfaces` is a separate package. Install it in the same project
+as `@engine9/core`. Core lists it as a peer, so the site chooses the
+interfaces version and upgrades it on its own schedule.
+
+```bash
+npm install @engine9/core @engine9/interfaces
+```
+
+`installStandard` and `e9core sqlite-ddl` read the interfaces package that
+this install resolved. When you upgrade interfaces, install the new version,
+rebuild the plugin registry, and redeploy:
+
+```bash
+npm install @engine9/interfaces@latest
+npx e9core build-plugins
+```
+
+`build-plugins` writes `engine9.plugins.js` from the interfaces package in
+this project. The Worker and the CLI load that registry. Ship the new file
+with the deploy. Leave the `@engine9/core` version as it is when only
+interfaces changed.
 
 ## The project database
 
@@ -127,7 +151,7 @@ npx wrangler login
 In the project folder:
 
 ```bash
-npm install @engine9/core
+npm install @engine9/core @engine9/interfaces
 npx e9core setup
 ```
 
@@ -162,7 +186,7 @@ deploys the Worker. Attach a hostname with `--domain www.example.com`.
 If the site is (or should become) a Node process that serves HTML and the API:
 
 ```bash
-npm install @engine9/core
+npm install @engine9/core @engine9/interfaces
 npx e9core setup --node
 npx e9core serve
 ```
