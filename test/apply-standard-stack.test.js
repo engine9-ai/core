@@ -20,11 +20,12 @@ test('installStandard bootstraps a SQLite database for the person pipeline', asy
       'person_address',
       'segment',
       'person_segment',
+      'source_code_dictionary',
       'api_key'
     ]) {
       assert.ok(tables.indexOf(t) >= 0, `expected table ${t}, got ${tables.join(',')}`);
     }
-    for (const t of ['timeline', 'source_code_dictionary', 'transaction']) {
+    for (const t of ['timeline', 'transaction']) {
       assert.ok(tables.indexOf(t) < 0, `did not expect table ${t} from no-arg installStandard`);
     }
     const { data: pluginRows } = await worker.query('select path from plugin order by path');
