@@ -88,11 +88,23 @@ and [README.md](README.md#the-project-database).
 
 ## Applying schema SQL to D1
 
-`modified_at` columns get an `AFTER UPDATE` trigger (`getPostCreateStatements`
-in [lib/sql/dialects/SQLite.js](lib/sql/dialects/SQLite.js)). `dumpSqliteFile`
-([bin/setup.js](bin/setup.js)) and `e9core sqlite-ddl` both emit those
-triggers. `npx e9core setup` writes `migrations/0001_engine9.sql` and loads it
-with `wrangler d1 execute <database> --file` (`--local` or `--remote`). That
+Database triggers are an anti-pattern here. They are hard to see, hard to
+change, and they do not belong in business logic. Do not add one.
+
+The only trigger is a SQLite stand-in for a column default. MySQL keeps
+`modified_at` current with `ON UPDATE CURRENT_TIMESTAMP` on the column.
+SQLite has no such clause, so `getPostCreateStatements` in
+[lib/sql/dialects/SQLite.js](lib/sql/dialects/SQLite.js) emits one
+`AFTER UPDATE` trigger per `modified_at` column. Its body is the only
+`begin`/`end` block this package writes. `BEGIN` elsewhere is a transaction
+(`BEGIN` / `BEGIN TRANSACTION`), which `dumpSqliteFile` strips because D1
+rejects those lines. Upserts already omit `modified_at`; the database fills
+it. Do not put other rules in that trigger or copy it for a new behavior.
+
+`dumpSqliteFile` ([bin/setup.js](bin/setup.js)) and `e9core sqlite-ddl` both
+emit that trigger when the schema has `modified_at`. `npx e9core setup`
+writes `migrations/0001_engine9.sql` and loads it with
+`wrangler d1 execute <database> --file` (`--local` or `--remote`). That
 command uses D1's import API. Use it for any SQL this package generates.
 
 `wrangler d1 migrations apply` is a different request. It does not concatenate
