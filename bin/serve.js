@@ -166,6 +166,15 @@ export async function serve(options = {}) {
     worker,
     keyStore,
     logger,
+    // `e9core setup` writes SESSION_SECRET to .env; that turns on /auth/* with
+    // the default identity provider. The JWT aud defaults to the request Host.
+    delegate: process.env.SESSION_SECRET
+      ? {
+          sessionSecret: process.env.SESSION_SECRET,
+          delegateUrl: process.env.DELEGATE_URL,
+          domain: process.env.E9_DOMAIN
+        }
+      : null,
     config: {
       pluginId,
       defaultRemoteInputId: 'website',

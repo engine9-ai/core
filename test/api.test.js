@@ -160,15 +160,15 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     jwk.alg = 'ES256';
     jwk.use = 'sig';
     const identityJwt = await new SignJWT({
-      pseudonym: '11111111-2222-8e91-8333-444444444444',
+      domain_profile: `site.example.com:${'1'.repeat(64)}`,
       level: 2,
-      profile: { id: 'prof-role', email: 'role@example.com', email_verified: true },
+      profile: { email: 'role@example.com', email_verified: true },
       auth: { provider: 'google.com', two_factor: false, auth_time: 1700000000 }
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'api-role-key', typ: 'JWT' })
       .setIssuer('https://delegate.engine9.ai')
       .setAudience('site.example.com')
-      .setSubject('prof-role')
+      .setSubject(`site.example.com:${'a'.repeat(64)}`)
       .setIssuedAt()
       .setExpirationTime('1h')
       .sign(privateKey);

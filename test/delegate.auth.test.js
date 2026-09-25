@@ -26,15 +26,17 @@ async function signDelegateJwt({
   kid = 'test-key',
   issuer = 'https://delegate.engine9.ai',
   domain = 'site.example.com',
-  pseudonym = UNID_A,
+  sub = domainUnidOf(domain, 'a'),
+  domainProfile = `${domain}:anonymous`,
+  mergedFrom,
   level = 2,
-  sub,
   profile,
   auth = { provider: 'google.com', two_factor: true, auth_time: 1234 },
   expires = '1h'
 }) {
   const jwt = new SignJWT({
-    pseudonym,
+    domain_profile: domainProfile,
+    merged_from: mergedFrom,
     level,
     profile,
     auth
@@ -42,15 +44,20 @@ async function signDelegateJwt({
   jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
   jwt.setIssuer(issuer);
   jwt.setAudience(domain);
-  jwt.setSubject(sub || profile?.id || pseudonym);
+  jwt.setSubject(sub);
   jwt.setIssuedAt();
   jwt.setExpirationTime(expires);
   jwt.setJti(`jti-${crypto.randomUUID()}`);
   return jwt.sign(privateKey);
 }
 
-const UNID_A = '11111111-2222-8e91-8333-444444444444';
-const UNID_B = '55555555-6666-8e91-8777-888888888888';
+function domainUnidOf(domain, hexChar) {
+  return `${domain}:${hexChar.repeat(64)}`;
+}
+
+const UNID_A = domainUnidOf('site.example.com', 'a');
+const UNID_B = domainUnidOf('site.example.com', 'b');
+const PROFILE_A = domainUnidOf('site.example.com', '9');
 
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -63,7 +70,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const personId = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: UNID_A, email: 'alice@example.com', emailVerified: true },
+      delegateUser: { domainUnid: UNID_A, email: 'alice@example.com', emailVerified: true },
       person: { given_name: 'Alice', family_name: 'Anderson' }
     });
     assert.ok(personId, 'a person_id was assigned');
@@ -76,7 +83,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const again = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: UNID_A, email: 'alice@example.com', emailVerified: true }
+      delegateUser: { domainUnid: UNID_A, email: 'alice@example.com', emailVerified: true }
     });
     assert.equal(again, personId, 'repeat delegate login resolves to the same person');
     const { data: people } = await worker.query('select id from person');
@@ -87,7 +94,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const merged = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: UNID_B, email: 'alice@example.com', level: 2 }
+      delegateUser: { domainUnid: UNID_B, email: 'alice@example.com', level: 2 }
     });
     assert.equal(merged, personId, 'same email merges a new delegate id into the existing person');
     const { data: delegateIds2 } = await worker.query('select person_id from person_id_delegate');
@@ -98,7 +105,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const other = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: 'aaaaaaaa-bbbb-8e91-8ccc-dddddddddddd', email: 'bob@example.com', emailVerified: true }
+      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'c'), email: 'bob@example.com', emailVerified: true }
     });
     assert.notEqual(other, personId);
 
@@ -106,7 +113,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
       worker,
       pluginId,
       delegateUser: {
-        pseudonym: 'cccccccc-dddd-8e91-8eee-ffffffffffff',
+        domainUnid: domainUnidOf('site.example.com', 'd'),
         email: 'unverified-unique@example.com',
         emailVerified: false,
         level: 0
@@ -121,14 +128,23 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const browserOne = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: 'browser-one', subject: 'subject-shared' }
+      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'e') }
     });
-    const browserTwo = await resolveDelegatePersonId({
+    const mergedBrowser = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { pseudonym: 'browser-two', subject: 'subject-shared' }
+      delegateUser: {
+        domainUnid: domainUnidOf('site.example.com', 'f'),
+        mergedFrom: domainUnidOf('site.example.com', 'e')
+      }
     });
-    assert.equal(browserTwo, browserOne, 'same subject on two browsers is one person');
+    assert.equal(mergedBrowser, browserOne, 'merged_from links the earlier Domain UNID to the same person');
+    const afterMerge = await resolveDelegatePersonId({
+      worker,
+      pluginId,
+      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'f') }
+    });
+    assert.equal(afterMerge, browserOne, 'the canonical Domain UNID now resolves on its own');
   } finally {
     await worker.destroy();
   }
@@ -137,12 +153,12 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
 test('delegate session tokens: sign, verify, tamper, expire', () => {
   const secret = 'session-secret';
   const token = createSessionToken(
-    { personId: 42, pseudonym: UNID_A, auth: { signInProvider: 'google.com', twoFactor: false } },
+    { personId: 42, domainUnid: UNID_A, auth: { signInProvider: 'google.com', twoFactor: false } },
     { secret, ttlSeconds: 60 }
   );
   const payload = verifySessionToken(token, { secret });
   assert.equal(payload.personId, 42);
-  assert.equal(payload.pseudonym, UNID_A);
+  assert.equal(payload.domainUnid, UNID_A);
   assert.equal(payload.auth.signInProvider, 'google.com');
   assert.ok(payload.exp > Date.now());
 
@@ -236,7 +252,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
         kid: 'roles-key',
         issuer: 'https://delegate.example.test',
         domain,
-        sub: profile.id,
+        domainProfile: `${domain}:${'1'.repeat(64)}`,
         profile,
         auth: { provider: 'google.com', two_factor: twoFactor, auth_time: 1234 }
       });
@@ -262,7 +278,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
     assert.deepEqual(session.roles, []);
-    assert.equal(session.pseudonym, UNID_A);
+    assert.equal(session.domainUnid, UNID_A);
     assert.equal(session.auth.signInProvider, 'google.com');
     assert.equal(session.auth.twoFactor, true, 'credential level travels into the session');
     assert.equal(sessionNeedsRole(session), true);
@@ -420,7 +436,7 @@ test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
   assert.match(cookie, /Secure/);
 });
 
-test('createDelegateAuth: login() with JWT creates session with level/profileId', async () => {
+test('createDelegateAuth: login() with JWT creates session with level/domainProfile', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await applyStandardStack(worker);
@@ -435,8 +451,8 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
 
     const jwt = await signDelegateJwt({
       privateKey,
-      profile: { id: 'prof-1', email: 'alice@example.com', email_verified: true, display_name: 'Alice' },
-      sub: 'prof-1'
+      profile: { email: 'alice@example.com', email_verified: true, display_name: 'Alice' },
+      domainProfile: PROFILE_A
     });
 
     const fetchImpl = async (url) => {
@@ -450,12 +466,12 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
       domain: 'site.example.com',
       fetchImpl
     });
-    assert.equal(verifiedUser.pseudonym, UNID_A);
+    assert.equal(verifiedUser.domainUnid, UNID_A);
     assert.equal(verifiedUser.level, 2);
-    assert.equal(verifiedUser.profileId, 'prof-1');
+    assert.equal(verifiedUser.domainProfile, PROFILE_A);
+    assert.equal(verifiedUser.mergedFrom, undefined);
     assert.equal(verifiedUser.email, 'alice@example.com');
     assert.equal(verifiedUser.emailVerified, true);
-    assert.equal(verifiedUser.firebaseUid, undefined, 'JWT path does not require firebaseUid');
     assert.equal(verifiedUser.auth.signInProvider, 'google.com');
     assert.equal(verifiedUser.auth.twoFactor, true);
 
@@ -469,14 +485,33 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
       (err) => err.reason === 'invalid_domain'
     );
 
+    const foreignSub = await signDelegateJwt({ privateKey, sub: domainUnidOf('other.example.com', 'a') });
+    await assert.rejects(
+      verifyDelegateIdentityToken({
+        token: foreignSub,
+        delegateUrl: 'https://delegate.engine9.ai',
+        domain: 'site.example.com',
+        fetchImpl
+      }),
+      (err) => err.reason === 'invalid_identity_token'
+    );
+
+    const withMerge = await verifyDelegateIdentityToken({
+      token: await signDelegateJwt({ privateKey, mergedFrom: UNID_B }),
+      delegateUrl: 'https://delegate.engine9.ai',
+      domain: 'site.example.com',
+      fetchImpl
+    });
+    assert.equal(withMerge.mergedFrom, UNID_B);
+
     const byUnid = new Map();
     let nextPersonId = 1;
     worker.processPeople = async ({ batch }) => {
       const personIds = (batch || []).map((row) => {
-        const pseudonym = row.delegate_id;
-        if (pseudonym && byUnid.has(pseudonym)) return byUnid.get(pseudonym);
+        const domainUnid = row.delegate_id;
+        if (domainUnid && byUnid.has(domainUnid)) return byUnid.get(domainUnid);
         const id = nextPersonId++;
-        if (pseudonym) byUnid.set(pseudonym, id);
+        if (domainUnid) byUnid.set(domainUnid, id);
         return id;
       });
       return { personIds, records: personIds.length, recordsWithPersonIds: personIds.length };
@@ -495,23 +530,23 @@ test('createDelegateAuth: login() with JWT creates session with level/profileId'
       returnTo: 'https://site.example.com/auth/delegate'
     });
     assert.ok(session.personId > 0);
-    assert.equal(session.pseudonym, UNID_A);
+    assert.equal(session.domainUnid, UNID_A);
     assert.equal(session.level, 2);
-    assert.equal(session.profileId, 'prof-1');
+    assert.equal(session.domainProfile, PROFILE_A);
     assert.equal(session.email, 'alice@example.com');
     assert.equal(session.auth.signInProvider, 'google.com');
     assert.equal(session.auth.twoFactor, true);
-    assert.equal(delegateUser.firebaseUid, undefined, 'JWT path does not require firebaseUid');
+    assert.equal(delegateUser.domainUnid, UNID_A);
     assert.equal(delegateUser.emailVerified, true);
 
     const verified = auth.verify(token);
     assert.equal(verified.personId, session.personId);
     assert.equal(verified.level, 2);
-    assert.equal(verified.profileId, 'prof-1');
+    assert.equal(verified.domainProfile, PROFILE_A);
 
     const again = await auth.verifyIdentityToken(jwt);
-    assert.equal(again.pseudonym, UNID_A);
-    assert.equal(again.profileId, 'prof-1');
+    assert.equal(again.domainUnid, UNID_A);
+    assert.equal(again.domainProfile, PROFILE_A);
   } finally {
     await worker.destroy();
   }

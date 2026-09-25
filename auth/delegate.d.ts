@@ -17,22 +17,19 @@ export interface DelegateAuthState {
 
 /** Identity payload from an Identity Token. */
 export interface DelegateUser {
-  /** This Domain's Pseudonym for the browser. Not the UNID. */
-  pseudonym: string;
-  /** `sub` when a Profile was shared. Same across browsers on this Domain. */
-  subject?: string;
-  /** Optional — present when the Domain is an Engine9 API host. */
-  firebaseUid?: string;
+  /** Domain UNID (`domain:hex`, JWT `sub`): this person on this Domain. Not the UNID. */
+  domainUnid: string;
+  /** Domain Profile (`domain:hex` or `domain:anonymous`): the acting Profile. */
+  domainProfile?: string;
+  /** Earlier Domain UNID for the same person, after Delegate merged a browser's UNID. */
+  mergedFrom?: string;
   email?: string;
   emailVerified?: boolean;
   auth: DelegateAuthState;
   returnTo?: string;
   createdAt?: string;
   level?: number;
-  profileId?: string;
   profile?: Record<string, unknown>;
-  /** Copied onto profileId when the token uses this name. */
-  profile_id?: string;
 }
 
 /** Credential level carried inside a local session (auth layer 3). */
@@ -89,14 +86,15 @@ export interface DelegateSession {
   personId: number;
   /** role_id values — each equals a segment_id UUID from the site role registry. */
   roles: string[];
-  pseudonym: string;
+  /** Domain UNID from the Identity Token `sub`. */
+  domainUnid: string;
+  /** Domain Profile from the Identity Token. */
+  domainProfile?: string;
   email?: string;
   auth: CredentialLevel;
   exp?: number;
   /** Identity Level from the Identity Token. */
   level?: number;
-  /** This Domain's Profile subject (`sub` when it differs from `pseudonym`). */
-  profileId?: string;
   profile?: Record<string, unknown>;
 }
 
@@ -117,8 +115,8 @@ export function delegateIdentityUrl(options: {
 export function resolveDelegatePersonId(options: {
   worker: unknown;
   delegateUser: {
-    pseudonym: string;
-    subject?: string;
+    domainUnid: string;
+    mergedFrom?: string;
     email?: string;
     emailVerified?: boolean;
     level?: number;
@@ -223,24 +221,32 @@ export interface DelegateAuth {
     responseMode?: string;
   }): string;
   /**
-   * Complete login from an Identity Token JWT. Pass returnTo so JWT aud can
-   * default to domainFromUrl(returnTo).
+   * Complete login from an Identity Token JWT. JWT aud is `options.domain`,
+   * else the configured domain, else domainFromUrl(returnTo), else
+   * `fallbackDomain` (createApi passes the request's Origin/Host).
    */
   login(
     identityToken: string,
-    options?: { person?: Record<string, unknown>; returnTo?: string; domain?: string }
+    options?: {
+      person?: Record<string, unknown>;
+      returnTo?: string;
+      domain?: string;
+      fallbackDomain?: string;
+    }
   ): Promise<{
     session: DelegateSession;
     token: string;
     delegateUser: DelegateUser;
   }>;
-  /** Verify a Core Session token; null when invalid or expired. Returns level and profileId. */
+  /** Verify a Core Session token; null when invalid or expired. Returns level and domainProfile. */
   verify(token: string | null | undefined): DelegateSession | null;
   /** Verify a delegate Identity Token using this auth's delegateUrl / domain / JWKS. */
   verifyIdentityToken(
     token: string,
     options?: {
       domain?: string;
+      /** Used only when neither `domain` nor the configured domain is set. */
+      fallbackDomain?: string;
       jwks?: { keys: Record<string, unknown>[] };
       issuer?: string;
     }
@@ -276,7 +282,11 @@ export interface DelegateAuth {
 export function createDelegateAuth(config: {
   worker: unknown;
   delegateUrl: string;
-  /** JWT aud (host[:port]). Defaults to domainFromUrl(returnTo) on login(). */
+  /**
+   * JWT aud (host[:port]). Optional: when unset, login() uses
+   * domainFromUrl(returnTo), then the request's own Origin/Host via createApi.
+   * Set it when the API is served on a different host than the pages.
+   */
   domain?: string;
   /** JWT iss; defaults to delegateUrl origin. */
   issuer?: string;

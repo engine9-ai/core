@@ -77,8 +77,8 @@ createDelegateAuth({
 `login(token)` accepts an Identity Token (JWT). Verification uses the
 provider JWKS. No shared secret.
 
-`verify(sessionToken)` returns `personId`, `roles`, `pseudonym`, `email`, `auth`,
-`level`, `profileId`, `exp`.
+`verify(sessionToken)` returns `personId`, `roles`, `domainUnid`, `domainProfile`,
+`email`, `auth`, `level`, `exp`.
 
 `verifyIdentityToken(jwt)` is the same JWKS check with constructor `domain` /
 `delegateUrl`.
@@ -154,11 +154,11 @@ object is:
 {
   personId,          // person in this database
   roles,             // role_id values (segment UUIDs)
-  pseudonym,
+  domainUnid,        // the provider's id for this person on this Domain (token `sub`)
+  domainProfile,     // which Profile is acting (token `domain_profile`)
   email,             // only when the provider said it was verified, or level >= 2
   auth,              // { signInProvider, twoFactor, signInSecondFactor, authTime }
   level,             // Identity Level from the provider
-  profileId,
   exp                // unix milliseconds
 }
 ```
@@ -198,10 +198,11 @@ same env name for the same job. After it verifies an Identity Token
 that as `Authorization: Bearer`. The HMAC check is local. Delegate is not
 called again until the next login.
 
-That session is not a Core Session. The body is the operator’s Firebase
-`uid`, email, `pseudonym`, and Identity Level, and `exp` is unix seconds. By
-contrast, the Core Session `@engine9/core` mints carries `personId` and
-roles, and uses unix milliseconds for `exp`.
+That session is not a Core Session. The body is the operator uid (the
+Identity Token `sub` for the API host's domain), email, `domainProfile`, and
+Identity Level (at least 3), and `exp` is unix seconds. By contrast, the Core Session
+`@engine9/core` mints carries `personId` and roles, and uses unix milliseconds
+for `exp`.
 The two tokens do not verify against each other. Give the API host its own
 `SESSION_SECRET`.
 
@@ -215,14 +216,14 @@ All routes except `GET /ok` require an API key.
 
 - `Authorization: Bearer <jwt>` (3 segments, not an API key) resolves a
   session when `delegateAuth.verifyIdentityToken` exists.
-- Optional `kvEnv` (`{ PERSON_ID_DELEGATE_KV }`): `getPersonIdByUnid` before
-  SQL, `setDelegatePersonId` after resolve.
+- Optional `kvEnv` (`{ PERSON_ID_DELEGATE_KV }`): `getPersonIdByDomainUnid`
+  before SQL, `setDelegatePersonId` after resolve.
 - Keep `X-Engine9-Session` for HMAC sessions.
 
 | Route | Notes |
 | --- | --- |
 | `POST /auth/login` | API key; body `delegate_token` |
-| `GET /auth/me` | session or JWT → `{ personId, roles, level, pseudonym, profileId, profile?, auth }` |
+| `GET /auth/me` | session or JWT → `{ personId, roles, level, domainUnid, domainProfile, profile?, auth }` |
 | `POST /auth/logout` | API key; `{ loggedOut: true }` |
 | `POST /auth/role` | session/JWT `personId` must match `body.person_id`, or `admin` scope |
 

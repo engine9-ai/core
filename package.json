@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
@@ -21,6 +21,10 @@
     "./PluginWorker": "./lib/PluginWorker.js",
     "./pluginSettings": "./lib/pluginSettings.js",
     "./pluginPaths": "./lib/pluginPaths.js",
+    "./pluginRegistry": "./lib/pluginRegistry.js",
+    "./plugins/interfaces": "./lib/plugins/interfaces.js",
+    "./plugins/site": "./lib/plugins/site.js",
+    "./plugins/build": "./bin/buildPlugins.js",
     "./stackMetadata": "./lib/stackMetadata.js",
     "./PersonWorker": "./lib/PersonWorker.js",
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
@@ -47,7 +51,8 @@
     "e9core": "./bin/e9core.js"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "build:plugins": "node bin/e9core.js build-plugins --packages @engine9/interfaces --out lib/plugins/interfaces.js",
+    "test": "node --import ./test/setup-plugins.js --test --test-concurrency=1 test/*.test.js",
     "test:id-large": "E9_LARGE_ID_TEST=1 node --test --test-concurrency=1 test/id.large.test.js"
   },
   "engines": {
@@ -57,7 +62,7 @@
   "license": "MIT",
   "dependencies": {
     "@engine9/input-tools": "^2.4.3",
-    "@engine9/interfaces": "^1.7.2",
+    "@engine9/interfaces": "^1.7.3",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
@@ -85,6 +90,7 @@
   },
   "devDependencies": {
     "better-sqlite3": "^11.7.0",
+    "esbuild": "^0.28.2",
     "knex": "^3.1.0",
     "mysql2": "^3.11.0"
   }

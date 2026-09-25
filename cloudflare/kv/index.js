@@ -6,14 +6,14 @@
  * they read `person_id_delegate` and `person_segment` directly from SQL.
  *
  * Pass the Worker `env` as `kvEnv` to `createApi` so Identity Token
- * requests can cache pseudonym / subject → person_id (`PERSON_ID_DELEGATE_KV`) at the edge.
+ * requests can cache Domain UNID → person_id (`PERSON_ID_DELEGATE_KV`) at the edge.
  * Import helpers from `@engine9/core/cloudflare/kv`.
  */
 
 export {
   setDelegatePersonId,
-  getPersonIdByUnid,
-  getUnidByPersonId,
+  getPersonIdByDomainUnid,
+  getDomainUnidByPersonId,
   deleteDelegatePersonId,
 } from './personIdDelegate.js';
 

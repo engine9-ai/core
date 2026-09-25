@@ -25,7 +25,7 @@
     3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
 
   Identity: X-Engine9-Session (HMAC Core Session) and/or Authorization Bearer JWT
-  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches pseudonym → person_id.
+  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches Domain UNID → person_id.
 
   Usage:
     const api = createApi({
@@ -53,8 +53,16 @@ import {
   ADMIN_SCOPE,
   PUBLIC_SCOPE
 } from '../auth/policy.js';
-import { normalizeRoleRegistry, resolveDelegatePersonId, isDelegateIdentityJwt } from '../auth/delegate.js';
-import { getPersonIdByUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
+import {
+  createDelegateAuth,
+  normalizeRoleRegistry,
+  resolveDelegatePersonId,
+  isDelegateIdentityJwt,
+  domainFromUrl
+} from '../auth/delegate.js';
+
+export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
+import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
 import { getStoredOrigins, mergeOrigins, parseOriginList } from './setupPage.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
@@ -98,21 +106,53 @@ function getHeader(headers, name) {
   return headers[name.toLowerCase()] || headers[name] || null;
 }
 
+/*
+  Domain (JWT `aud`, host[:port]) implied by the request itself, used when the
+  login body and createDelegateAuth do not name one. `@engine9/id` sets `aud`
+  to the page's Domain, so the page `Origin` comes first; on a same-platform
+  site that equals the API `Host`.
+*/
+export function requestDomain(headers) {
+  const origin = getHeader(headers, 'Origin') || getHeader(headers, 'origin');
+  const fromOrigin = origin && origin !== 'null' ? domainFromUrl(origin) : null;
+  if (fromOrigin) return fromOrigin;
+  const forwardedHost = getHeader(headers, 'X-Forwarded-Host') || getHeader(headers, 'x-forwarded-host');
+  const host = String(forwardedHost || getHeader(headers, 'Host') || getHeader(headers, 'host') || '')
+    .split(',')[0]
+    .trim();
+  if (!host) return undefined;
+  // Normalizes case and drops an explicit default port (`:443`).
+  return domainFromUrl(`https://${host}`) || undefined;
+}
+
 /**
  * @param {{
  *   worker: object,
  *   keyStore: object,
  *   logger?: object,
  *   delegateAuth?: object | null,
+ *   delegate?: {
+ *     sessionSecret?: string,
+ *     delegateUrl?: string,
+ *     domain?: string,
+ *     sessionTtlSeconds?: number,
+ *     fetchImpl?: typeof fetch
+ *   } | null,
  *   kvEnv?: object | null,
  *   config?: Record<string, unknown>
  * }} opts
+ *
+ * Login (`/auth/*`) is on when `delegateAuth` is passed, or when
+ * `delegate.sessionSecret` is set — then createApi builds the default
+ * delegate provider itself using `config.pluginId` and `config.roles`.
+ * Without either, `/auth/*` answers 501 and every other route still works.
  */
 export function createApi({
   worker,
   keyStore,
   logger = new NullLogger(),
   delegateAuth = null,
+  delegate = null,
   kvEnv = null,
   config = {}
 }) {
@@ -130,6 +170,20 @@ export function createApi({
     roleSegments: configRoleSegments,
     allowedOrigins: configAllowedOrigins = []
   } = config;
+
+  if (!delegateAuth && delegate?.sessionSecret) {
+    delegateAuth = createDelegateAuth({
+      worker,
+      delegateUrl: delegate.delegateUrl || DEFAULT_DELEGATE_URL,
+      domain: delegate.domain || undefined,
+      sessionSecret: delegate.sessionSecret,
+      sessionTtlSeconds: delegate.sessionTtlSeconds,
+      pluginId,
+      roles: configRoles,
+      roleSegments: configRoleSegments,
+      ...(delegate.fetchImpl ? { fetchImpl: delegate.fetchImpl } : {})
+    });
+  }
 
   const envOrigins = parseOriginList(configAllowedOrigins);
   let cachedOrigins = envOrigins.slice();
@@ -184,14 +238,18 @@ export function createApi({
     });
   }
 
-  function requireScope(ctx, scope) {
+  function requireAnyScope(ctx, scopes) {
     if (!ctx.authSatisfied) {
       return json(403, { error: 'delegate credential level does not meet role requiredAuth' });
     }
-    if (!scopesAllow(ctx.scopes, scope)) {
-      return json(403, { error: `missing scope ${scope}` });
+    if (!scopes.some((scope) => scopesAllow(ctx.scopes, scope))) {
+      return json(403, { error: `missing scope ${scopes.join(' or ')}` });
     }
     return null;
+  }
+
+  function requireScope(ctx, scope) {
+    return requireAnyScope(ctx, [scope]);
   }
 
   async function logModification(entry) {
@@ -206,7 +264,9 @@ export function createApi({
 
   async function postPeople({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
-    const denied = requireScope(ctx, SCOPES.PEOPLE_WRITE);
+    // `public` (e9publickey_) is the signup-form scope; it may add people and
+    // nothing else. `people:write` is the server-side equivalent.
+    const denied = requireAnyScope(ctx, [SCOPES.PEOPLE_WRITE, SCOPES.PUBLIC]);
     if (denied) return denied;
     const people = body?.people || body?.batch;
     if (!Array.isArray(people) || people.length === 0) {
@@ -313,15 +373,14 @@ export function createApi({
     }
   }
 
-  async function sessionFromIdentityToken(jwt) {
-    const delegateUser = await delegateAuth.verifyIdentityToken(jwt);
+  async function sessionFromIdentityToken(jwt, headers) {
+    const delegateUser = await delegateAuth.verifyIdentityToken(jwt, {
+      fallbackDomain: requestDomain(headers)
+    });
     let personId = null;
-    if (kvEnv?.PERSON_ID_DELEGATE_KV) {
+    if (kvEnv?.PERSON_ID_DELEGATE_KV && !delegateUser.mergedFrom) {
       try {
-        const cached = await getPersonIdByUnid(kvEnv, delegateUser.pseudonym)
-          || (delegateUser.subject
-            ? await getPersonIdByUnid(kvEnv, delegateUser.subject)
-            : null);
+        const cached = await getPersonIdByDomainUnid(kvEnv, delegateUser.domainUnid);
         const n = cached != null ? parseInt(cached, 10) : NaN;
         if (Number.isInteger(n)) personId = n;
       } catch {
@@ -338,7 +397,7 @@ export function createApi({
       });
       if (kvEnv?.PERSON_ID_DELEGATE_KV) {
         try {
-          await setDelegatePersonId(kvEnv, delegateUser.pseudonym, personId, delegateUser.subject);
+          await setDelegatePersonId(kvEnv, delegateUser.domainUnid, personId);
         } catch {
           /* cache write is best-effort */
         }
@@ -348,18 +407,21 @@ export function createApi({
     return {
       personId,
       roles,
-      pseudonym: delegateUser.pseudonym,
+      domainUnid: delegateUser.domainUnid,
+      domainProfile: delegateUser.domainProfile,
       email: delegateUser.email,
       auth: delegateUser.auth || {},
       level: delegateUser.level,
-      profileId: delegateUser.profileId,
       profile: delegateUser.profile
     };
   }
 
-  async function postAuthLogin({ body }) {
+  async function postAuthLogin({ body, headers }) {
     if (!delegateAuth) {
-      return json(501, { error: 'login requires delegateAuth on createApi' });
+      return json(501, {
+        error:
+          'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi'
+      });
     }
     const token = body?.delegate_token;
     if (!token) {
@@ -369,7 +431,8 @@ export function createApi({
     try {
       const result = await delegateAuth.login(token, {
         returnTo,
-        domain: body?.domain
+        domain: body?.domain,
+        fallbackDomain: requestDomain(headers)
       });
       return json(200, { session: result.session, token: result.token });
     } catch (e) {
@@ -390,8 +453,8 @@ export function createApi({
       personId: session.personId,
       roles: session.roles || [],
       level: session.level ?? null,
-      pseudonym: session.pseudonym,
-      profileId: session.profileId ?? null,
+      domainUnid: session.domainUnid,
+      domainProfile: session.domainProfile ?? null,
       auth: session.auth || {}
     };
     if (session.profile) me.profile = session.profile;
@@ -514,7 +577,7 @@ export function createApi({
           typeof delegateAuth.verifyIdentityToken === 'function'
         ) {
           try {
-            session = await sessionFromIdentityToken(bearer);
+            session = await sessionFromIdentityToken(bearer, req.headers);
           } catch (e) {
             return withCors(
               json(401, {
@@ -530,7 +593,7 @@ export function createApi({
 
     let result;
     if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
-      result = await postAuthLogin({ body: req.body, apiKey });
+      result = await postAuthLogin({ body: req.body, apiKey, headers: req.headers });
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {

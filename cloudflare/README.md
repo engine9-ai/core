@@ -109,12 +109,75 @@ one piece at a time.
 
    - `compatibility_flags = ["nodejs_compat"]` (the library uses `node:crypto`
      and `node:buffer`)
-   - the `[alias]` mapping `@engine9/input-tools` to
-     `@engine9/core/cloudflare/input-tools-shim`, which keeps Node-only
-     dependencies (AWS SDK, archiver, googleapis) out of the Worker bundle.
-     The shim re-exports the portable helpers those transforms import from
-     the package root, including `mergeIntoQueue` from
-     `@engine9/input-tools/mergeIntoQueue.js` (no heavy dependencies).
+   - the bundler aliases below. `astro dev` runs SSR in Node and will not
+     show a missing alias; the failure appears in `wrangler dev` / a workerd
+     bundle. Copy the same map into Vite `resolve.alias` when Astro bundles
+     the Worker.
+
+   The Worker reads these bindings and variables:
+
+   | Name | Kind | Purpose |
+   | --- | --- | --- |
+   | `DB` | D1 binding | The project database |
+   | `E9_PLUGIN_ID` | var | Written by setup; identifies this site's rows |
+   | `SESSION_SECRET` | secret | Copied by `setup --remote`; turns on `/api/auth/*` (login) |
+   | `DELEGATE_URL` | var, optional | Your own delegate. Default `https://delegate.engine9.ai` |
+   | `E9_DOMAIN` | var, optional | JWT `aud` when pages and `/api` are on different hosts |
+   | `E9_ALLOWED_ORIGINS` | var, optional | Browser origins allowed to call the API (CORS) |
+   | `PERSON_ID_DELEGATE_KV`, `PERSON_SEGMENT_VK` | KV, optional | Caches below |
+
+### Bundler aliases
+
+| Specifier | Target | Why |
+| --- | --- | --- |
+| `@engine9/input-tools` | `@engine9/core/cloudflare/input-tools-shim` | The package root pulls AWS SDK, archiver, and googleapis. Interface transforms import `mergeIntoQueue` from that root. The shim re-exports the portable helpers, including `mergeIntoQueue` from `@engine9/input-tools/mergeIntoQueue.js`. |
+| `knex` | `@engine9/core/cloudflare/unavailable-module` | Optional peer for SQLWorker's Node connection modes. D1 does not use it. |
+| `mysql2` | `@engine9/core/cloudflare/unavailable-module` | Same. The MySQL dialect imports it. |
+| `mysql2/promise` | `@engine9/core/cloudflare/unavailable-module` | Same. Knex loads this entry. |
+| `better-sqlite3` | `@engine9/core/cloudflare/unavailable-module` | Same. Node SQLite only. |
+| `i18n-iso-countries` | `i18n-iso-countries/index.js` | `@engine9/interfaces/person_address` imports the package root. That root is the Node build, which `require()`s every locale while the module is evaluated. `index.js` is the browser build (`"browser": "index"` in that package). |
+
+`npx e9core setup` writes these aliases into `wrangler.jsonc`.
+
+### Plugins
+
+The Worker runs only plugins compiled into the bundle. This is a deliberate
+trade: workerd has no filesystem and no `node_modules`, so core does not load
+plugin code at run time. Adding or changing a plugin needs a rebuild and a
+deploy. See [Plugins are compiled into the build](../README.md#plugins-are-compiled-into-the-build).
+
+`worker.js` passes `@engine9/core/plugins/site` as the plugin registry. By
+default that is every interface in `@engine9/interfaces`. To pick a
+different set, list the plugins in `package.json` under `engine9.plugins`
+and generate the registry:
+
+```bash
+npx e9core build-plugins            # writes engine9.plugins.js
+npx e9core build-plugins --check    # CI: fail if it is out of date
+```
+
+Then alias the site entry to it. `npx e9core setup` adds this alias when
+`engine9.plugins.js` exists:
+
+```toml
+[alias]
+"@engine9/core/plugins/site" = "./engine9.plugins.js"
+```
+
+A Worker that tries to install or run a plugin outside the bundle gets
+`PLUGIN_NOT_IN_BUILD`.
+
+```toml
+[alias]
+"@engine9/input-tools" = "@engine9/core/cloudflare/input-tools-shim"
+"knex" = "@engine9/core/cloudflare/unavailable-module"
+"mysql2" = "@engine9/core/cloudflare/unavailable-module"
+"mysql2/promise" = "@engine9/core/cloudflare/unavailable-module"
+"better-sqlite3" = "@engine9/core/cloudflare/unavailable-module"
+"i18n-iso-countries" = "i18n-iso-countries/index.js"
+```
+
+Vite (Astro `vite.resolve.alias`) uses the same keys. Match the package root only — a prefix alias also rewrites `@engine9/input-tools/checkUnicode.js` and `i18n-iso-countries/langs/en.json`, which must keep resolving to the real packages. In Vite, an exact match is `{ find: /^i18n-iso-countries$/, replacement: ... }`. Point that replacement at `i18n-iso-countries/index.js` if the bare specifier still resolves to the Node entry.
 
 6. **Deploy**
 

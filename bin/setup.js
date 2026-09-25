@@ -33,6 +33,16 @@ import { getPluginUUID } from '../lib/utilities.js';
 import { ensureGitignore, setupKeys } from './setupKeys.js';
 
 const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
+const PLUGINS_MODULE = 'engine9.plugins.js';
+/* Same table as cloudflare/README.md "Bundler aliases". */
+const WORKER_ALIASES = {
+  '@engine9/input-tools': '@engine9/core/cloudflare/input-tools-shim',
+  knex: '@engine9/core/cloudflare/unavailable-module',
+  mysql2: '@engine9/core/cloudflare/unavailable-module',
+  'mysql2/promise': '@engine9/core/cloudflare/unavailable-module',
+  'better-sqlite3': '@engine9/core/cloudflare/unavailable-module',
+  'i18n-iso-countries': 'i18n-iso-countries/index.js'
+};
 
 export const SETUP_HELP = `Write the engine9 database, config, and .env for a new project.
 
@@ -160,7 +170,8 @@ export function mergeWranglerConfig(existing, patch) {
   cfg.compatibility_flags = [...flags];
   cfg.alias = {
     ...(cfg.alias || {}),
-    '@engine9/input-tools': '@engine9/core/cloudflare/input-tools-shim'
+    ...WORKER_ALIASES,
+    ...(patch.pluginsModule ? { '@engine9/core/plugins/site': patch.pluginsModule } : {})
   };
   const databases = Array.isArray(cfg.d1_databases) ? [...cfg.d1_databases] : [];
   const index = databases.findIndex((db) => db.binding === 'DB' || db.database_name === patch.databaseName);
@@ -327,7 +338,8 @@ export async function setup(options = {}) {
     databaseId,
     accountId,
     pluginId,
-    domain: options.domain || ''
+    domain: options.domain || '',
+    pluginsModule: existsSync(path.join(cwd, PLUGINS_MODULE)) ? `./${PLUGINS_MODULE}` : ''
   });
   writeFileSync(wranglerPath, `${JSON.stringify(cfg, null, 2)}\n`);
 
@@ -386,9 +398,11 @@ export async function setup(options = {}) {
 async function withDatabase(cwd, db, name, fn) {
   await ensureDatabaseDrivers(cwd, db);
   const { default: PluginWorker } = await import('../lib/PluginWorker.js');
+  const { default: plugins } = await import('../lib/plugins/interfaces.js');
   const worker = new PluginWorker({
     accountId: name,
-    auth: { database_connection: db }
+    auth: { database_connection: db },
+    plugins
   });
   try {
     return await fn(worker);

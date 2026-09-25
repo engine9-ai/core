@@ -70,6 +70,11 @@ web_modules/
 .env.*
 !.env.example
 
+# Local SQLite database (setup --node / serve)
+engine9.db
+engine9.db-shm
+engine9.db-wal
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

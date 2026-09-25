@@ -52,7 +52,16 @@ new_classes = ["PersonIdentifierDO"]
 E9_ACCOUNT_ID = "my-account"
 E9_PLUGIN_ID = "<uuid of the website plugin row>"
 
-# Replace the heavy @engine9/input-tools package with the portable shim
-# (only needed because some interface transforms import it)
+# Workers bundler aliases. Same list as cloudflare/README.md.
+# Astro/Vite SSR still resolves Node entries unless these are set there too.
 [alias]
 "@engine9/input-tools" = "@engine9/core/cloudflare/input-tools-shim"
+"knex" = "@engine9/core/cloudflare/unavailable-module"
+"mysql2" = "@engine9/core/cloudflare/unavailable-module"
+"mysql2/promise" = "@engine9/core/cloudflare/unavailable-module"
+"better-sqlite3" = "@engine9/core/cloudflare/unavailable-module"
+# Package root is the Node build, which require()s every locale at import.
+"i18n-iso-countries" = "i18n-iso-countries/index.js"
+# Plugins compiled into the Worker. Omit to bundle every @engine9/interfaces
+# plugin. Generate with: npx e9core build-plugins
+# "@engine9/core/plugins/site" = "./engine9.plugins.js"

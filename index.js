@@ -7,7 +7,6 @@ export { default as SQLWorker } from './lib/SQLWorker.js';
 export { default as SchemaWorker } from './lib/SchemaWorker.js';
 export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/PluginWorker.js';
 export {
-  attachCompiledPluginSettings,
   listAccountPluginSettings,
   normalizePluginSettings,
   publicSettingDefinition,
@@ -17,12 +16,20 @@ export {
   validateSettingValue
 } from './lib/pluginSettings.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
+export { loadStackMetadata, DEFAULT_STACK_PATH } from './lib/stackMetadata.js';
 export {
-  loadStackMetadata,
-  DEFAULT_STACK_PATH,
-  DEFAULT_GITHUB_INTERFACES_BASE,
-  githubStackJsonUrl
-} from './lib/stackMetadata.js';
+  PLUGIN_NOT_IN_BUILD,
+  PluginNotInBuildError,
+  createPluginRegistry,
+  asPluginRegistry,
+  composePluginRegistries,
+  setDefaultPluginRegistry,
+  getDefaultPluginRegistry,
+  pluginRegistryFor,
+  compileRegistryPlugin,
+  loadRegistrySchema,
+  loadRegistryConsole
+} from './lib/pluginRegistry.js';
 export {
   buildInboundTransforms,
   describeInboundTransforms,

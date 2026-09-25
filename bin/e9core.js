@@ -48,9 +48,20 @@
         with --stack (e.g. @engine9/interfaces/stacks/standard): plugin rows +
         create/alter tables.
 
+    e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
+        Write the plugin registry module the Worker (or server) is built with.
+        Reads "engine9.plugins" / "engine9.pluginPackages" from package.json.
+        --check exits non-zero when the file is out of date (for CI).
+
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
+
+  These commands use every interface in @engine9/interfaces. Plugins outside
+  that package run only in a build that includes them (build-plugins).
 */
 import PluginWorker from '../lib/PluginWorker.js';
+import { loadRegistrySchema, setDefaultPluginRegistry } from '../lib/pluginRegistry.js';
+import interfacePlugins from '../lib/plugins/interfaces.js';
+import { buildPlugins } from './buildPlugins.js';
 import {
   generateApiKey, hashApiKey,
   assertValidKeyScopes,
@@ -96,13 +107,16 @@ function getPluginWorker(args) {
   });
 }
 
-async function loadSchemaModule(name) {
-  if (typeof name === 'object') return name;
-  const schemaMod = await import(`${name}/schema.js`);
-  return schemaMod.default;
+function listArg(value) {
+  if (!value || value === true) return undefined;
+  return String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 async function main() {
+  const plugins = setDefaultPluginRegistry(interfacePlugins);
   const args = parseArgs(process.argv.slice(2));
   const [command] = args._;
   switch (command) {
@@ -264,9 +278,11 @@ async function main() {
         console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
         process.exit(1);
       }
-      const schema = await loadSchemaModule(args.schema);
-      if (!schema) {
-        console.error(`Unknown schema ${args.schema}`);
+      let schema;
+      try {
+        schema = await loadRegistrySchema(plugins, String(args.schema));
+      } catch (e) {
+        console.error(e.message);
         process.exit(1);
       }
       const standard = standardizeSchema(schema, sqliteDialect);
@@ -292,9 +308,22 @@ async function main() {
       }
       break;
     }
+    case 'build-plugins': {
+      const result = buildPlugins({
+        cwd: process.cwd(),
+        out: args.out && args.out !== true ? String(args.out) : undefined,
+        plugins: listArg(args.plugins),
+        packages: listArg(args.packages),
+        check: args.check === true
+      });
+      const rel = path.relative(process.cwd(), result.out);
+      if (args.check) console.log(`${rel} is current (${result.count} plugins).`);
+      else console.log(`${result.changed ? 'Wrote' : 'Unchanged'} ${rel} (${result.count} plugins).`);
+      break;
+    }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
-      console.log('Other commands: e9core <serve|setup-keys|create-api-key|sqlite-ddl|installStandard>');
+      console.log('Other commands: e9core <serve|setup-keys|create-api-key|sqlite-ddl|installStandard|build-plugins>');
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }

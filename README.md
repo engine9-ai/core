@@ -1,41 +1,234 @@
 # @engine9/core
 
-engine9 is a set of standards for a people database and the HTTP endpoints
-that read and write it, and a set of libraries that implement those standards.
-The same table names, field names, person pipeline, and API-key scopes show up
-in every library that speaks engine9.
+`@engine9/core` gives a website a **people database** and the **HTTP API**
+that reads and writes it. Install it, run one setup command, and you have:
 
-`@engine9/core` is the standalone library that creates that database and those
-endpoints. The database it deploys is the primary database for the project.
-Point it at the SQLite, D1, or MySQL database the project uses.
-`installStandard` creates the engine9 tables there. Astro, Next.js, and other
-application schemas use that same database and add their own tables beside the
-engine9 tables when the names do not collide.
+- standard tables (`person`, `person_email`, `segment`, `timeline`, …) in the
+  database you already use — SQLite, Cloudflare D1, or MySQL
+- `/api/people` for signup forms, plus upserts and segment-gated reads
+- API keys (hashed, scoped, rotatable)
+- optional **login** through [delegate](https://delegate.engine9.ai), the
+  default identity provider, with `@engine9/id` in the browser
 
-This package is [MIT licensed](./LICENSE). Use, copy, modify, and distribute
-this code as-is. The private `delegate` and `server` repositories are not
-open source.
+It runs on **Cloudflare Workers** (D1) or on **any Node.js server** (SQLite or
+MySQL). Same code, same tables, same API. This package is
+[MIT licensed](./LICENSE).
 
-Other public libraries use the same standard:
+engine9 is the standard those tables, fields, pipeline, and scopes follow.
+Other libraries that speak it:
 
-| Library                                                           | What it is                                                                                                                                       |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms (`person`, `person_email`, segments, and the rest). `installStandard` deploys these into your database. |
-| [`@engine9/id`](https://github.com/engine9-ai/id)                 | Browser client. Verifies Identity Tokens and, when a site has core, posts them to these endpoints.                                               |
-| [`demo-festival`](https://github.com/engine9-ai/demo-festival)    | A festival site (Astro, SQLite, optional Cloudflare D1) that uses core and id together.                                                          |
+| Library | What it is |
+| --- | --- |
+| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms. `installStandard` deploys them into your database |
+| [`@engine9/id`](https://github.com/engine9-ai/id) | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login` |
+| [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production) |
+| [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
 
-Many other libraries and plugins follow the same schemas and pipeline slots, including ones that add in MCP servers, messagings, reports, search, etc, etc.
+## Pick a platform
 
-New website: **[docs/deploy.md](docs/deploy.md)** — same platform (recommended)
-vs independent hosts (advanced). Read [The project database](#the-project-database)
-before adding tables.
+| Your production site will run on… | Database | Start here |
+| --- | --- | --- |
+| **Cloudflare** (Workers + D1) | D1 | [Install on Cloudflare](#install-on-cloudflare) |
+| **Your own server** — a VPS, Docker, Render, Fly, Heroku, or a Node process behind nginx | SQLite file or MySQL | [Install on your own server](#install-on-your-own-server-nodejs) |
+
+Either way the local setup runs on your development machine first. You need
+Node.js 18 or newer. Setup writes tables, API keys, and a `.env` for you; you
+do not create keys or copy ids into config files by hand.
+
+If you only want a login button and Level-based content on a static page,
+and no database, you do not need this package. Use
+[`@engine9/id`](https://github.com/engine9-ai/id) alone.
+
+## Install on Cloudflare
+
+You need a Cloudflare account. Log in once:
+
+```bash
+npx wrangler login
+```
+
+In your project folder:
+
+```bash
+npm install @engine9/core
+npx e9core setup
+npx e9core serve
+```
+
+- `setup` writes `wrangler.jsonc` (Worker entry, D1 binding, database id),
+  creates the tables in local D1, and writes `.env` with API keys,
+  `SESSION_SECRET`, and a one-time setup token.
+- `serve` starts a local site and prints a `/setup?token=…` URL. Open it. The
+  wizard checks your Cloudflare login, starts a local preview, lets you try a
+  signup, and can deploy production.
+
+Deploy production from the wizard, or:
+
+```bash
+npx e9core setup --remote                          # production D1 + secrets + deploy
+npx e9core setup --remote --domain www.example.com # also attach a hostname
+```
+
+`--remote` creates the production D1 database, copies `.env` values to
+Cloudflare secrets (including `SESSION_SECRET`, which turns on login), and
+runs `wrangler deploy`. The Worker it deploys is
+[`cloudflare/worker.js`](cloudflare/worker.js): pages and `/api` on one
+hostname, wizard not included.
+
+Do not hand-edit `wrangler.jsonc` and do not add a `.dev.vars` file (Wrangler
+prefers it and would ignore `.env`). Running `setup` again is safe; it keeps
+the database and keys you already have.
+
+Technical notes (bundler aliases, KV caches, R2 logs):
+[cloudflare/README.md](cloudflare/README.md).
+
+## Install on your own server (Node.js)
+
+```bash
+npm install @engine9/core
+npx e9core setup --node
+npx e9core serve
+```
+
+- `setup --node` creates `engine9.db` (SQLite) and `.env` with API keys and
+  `SESSION_SECRET`. Nothing Cloudflare-related is touched.
+- `serve` serves your HTML from `./public` (or safe files in the project
+  folder) and the API at `/api` on one port (default 8787), and prints the
+  `/setup?token=…` wizard URL.
+
+MySQL instead of SQLite:
+
+```bash
+npx e9core setup --node --db mysql://user:pass@host/dbname
+```
+
+For production, run the same thing under your process manager
+(`ENGINE9_DATABASE_CONNECTION` and the `.env` values as environment
+variables), or mount the API inside the app you already have:
+
+```js
+import express from "express";
+import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from "@engine9/core";
+
+const worker = new PersonWorker({
+  accountId: "my-site",
+  auth: { database_connection: process.env.ENGINE9_DATABASE_CONNECTION }, // sqlite://… or mysql://…
+});
+
+const api = createApi({
+  worker,
+  keyStore: new SqlApiKeyStore({ worker }),
+  logger: new JsonlFileLogger({ directory: "./logs" }),
+  // Login with delegate. Leave out `delegate` to run the people API alone.
+  delegate: { sessionSecret: process.env.SESSION_SECRET },
+  config: {
+    pluginId: process.env.E9_PLUGIN_ID,
+    upsertTables: ["person_email", "person_phone", "person_address", "person_segment"],
+    roles: {
+      // "<segment-uuid>": { name: "Member", scopes: ["data:read"], requiredAuth: { minLevel: 1 } },
+    },
+    reads: {
+      // content: { table: "member_content", segmentId: "<segment uuid>" },
+    },
+  },
+});
+
+const app = express();
+app.use(express.static("public"));
+app.use("/api", express.json(), api.expressHandler());
+app.listen(8787);
+```
+
+`api.handleFetch(request)` is the same thing for any `fetch`-style runtime.
+Keep `.env` out of git; `setup` adds it to `.gitignore`.
+
+Already have a database? Install only the tables:
+
+```bash
+npx e9core installStandard --db mysql://user:pass@host/dbname
+```
+
+## Try it
+
+With `serve` (or the Worker) running:
+
+```bash
+curl http://localhost:8787/api/ok
+
+curl -X POST http://localhost:8787/api/people \
+  -H "Authorization: Bearer PASTE_E9_PUBLIC_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"people":[{"given_name":"Alex","family_name":"Rivera","email":"alex@example.com","email_type":"Personal"}]}'
+```
+
+`E9_PUBLIC_API_KEY` (`e9publickey_…`) is in `.env`. It may appear in page
+JavaScript; it only allows signups and login. `E9_ADMIN_API_KEY` (`e9key_…`)
+never leaves the server.
+
+A plain HTML form that posts to `/api/people` on the same origin is the
+whole integration for signups. The setup page shows a copy-paste snippet.
+
+## Add login
+
+Login is optional. Saving people needs only the API key. When visitors
+should log in, the browser talks to **delegate** and core verifies the
+result. No OAuth client id, no callback route to write.
+
+**Server:** already done if `SESSION_SECRET` is set. `e9core setup` writes it
+to `.env`; `setup --remote` copies it to Cloudflare. The shipped Worker and
+`e9core serve` turn on `/auth/*` when they see it. Your own `createApi` call
+passes `delegate: { sessionSecret }` as above.
+
+**Delegate:** ask the operator of your delegate to allow your **Domain**
+(`www.example.com`, or `localhost:8787` while testing). `localhost:3000`–`3003`
+are pre-allowed on the public delegate.
+
+**Browser:** add [`@engine9/id`](https://github.com/engine9-ai/id) and point
+it at your API with the public key.
+
+```html
+<script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
+<script>
+  const id = engine9Id.mount({
+    core: { apiUrl: "/api", publicApiKey: "PASTE_E9_PUBLIC_API_KEY" },
+  });
+  // After a visitor logs in, exchange the Identity Token for a Core Session.
+  id.onChange(async (identity) => {
+    if (identity && identity.level >= 1) {
+      const { session } = await id.core.login();
+      console.log("person_id", session.personId, "roles", session.roles);
+    }
+  });
+</script>
+
+<button data-e9-login>Log in</button>
+<p data-e9-min-level="1" hidden>Welcome, <span data-e9-profile="given_name">member</span></p>
+```
+
+What happens: delegate issues an Identity Token for your Domain; `id`
+verifies it in the browser and shows or hides `data-e9-*` content by
+**Identity Level** (soft, for layout); `id.core.login()` posts the token to
+`/api/auth/login`; core verifies the signature against delegate's public
+keys, maps the token's Domain UNID to a `person_id` in your database, reads
+segment **roles**, and returns a Core Session. From then on `id.core.fetch()`
+sends that session and core can refuse requests with a real 403.
+
+Core takes the token's Domain (JWT `aud`) from the request itself: the page
+`Origin`, else the API `Host`. That is right whenever pages and `/api` share a
+hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
+(or `delegate.domain` in `createApi`).
+
+Roles are segments. Add them in `config.roles` keyed by segment UUID, with
+`scopes` and an optional `requiredAuth.minLevel`. Details:
+[docs/identityProviders/delegate.md](docs/identityProviders/delegate.md) and
+[auth/README.md](auth/README.md).
 
 ## The project database
 
-The database this package deploys is the primary database for the project.
+The database this package deploys is the **primary database for the project**.
 One SQLite file, one D1 database, or one MySQL database holds the engine9
-tables and the rest of the project's tables. Application code — an Astro site,
-a Next.js app, or another schema — reads and writes that same database.
+tables and the rest of the project's tables. Application code (an Astro site,
+a Next.js app, another schema) reads and writes that same database.
 
 **Table names are the engine9 standard, and they are immutable.**
 `installStandard` creates `person`, `person_email`, `person_phone`,
@@ -45,8 +238,8 @@ the other tables published by
 are the contract. `person` stays `person`. `event` stays `event`. Columns on
 those tables stay as published. Other engine9 libraries join on these names.
 
-A local schema may live in the same database. Its table names must be
-different from every published engine9 table (`person`, `event`, `message`,
+A local schema may live in the same database. Its table names must differ
+from every published engine9 table (`person`, `event`, `message`,
 `transaction`, `segment`, `plugin`, `timeline`, `input`, `api_key`, and the
 rest of the catalog in `@engine9/interfaces`).
 
@@ -63,361 +256,215 @@ When a new build needs storage, decide in this order:
 2. **Build an engine9 package when the feature is a primary extension of
    engine9.** If no interface matches, and other engine9 projects should share
    the same contract, publish it. A shared schema is an interface
-   (`@engine9/interfaces/<name>`). A deployable integration — workers, inbound
-   transforms, a vendor — is a plugin (`@engine9/plugins/<name>`). The table
+   (`@engine9/interfaces/<name>`). A deployable integration (workers, inbound
+   transforms, a vendor) is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
 3. **Prefix tables that belong only to this project.** A blog, a CMS, or
    another local feature gets tables named for that use case: `content_blog`,
    `cms_post`, `cms_page`. The prefix keeps them clear of the engine9 catalog
    in the same database.
 
-## What the library creates
+## What is in `.env`
 
-- **A standard database** — `PersonWorker.installStandard()` or
-  `e9core installStandard --db …` loads stack include/exclude metadata
-  (local `@engine9/interfaces` or GitHub `stack.json`) and deploys plugin rows
-  and tables on D1, SQLite, or MySQL. Pass `{ path }` for a different stack.
-- **HTTP endpoints** — people writes, allowlisted upserts, segment-gated reads,
-  and optional login. See [Endpoints](#endpoints).
-- **API keys** — SHA-256 hashed at rest, scoped, revocable, rotatable
-  (`@engine9/core/auth`, `SQLWorker.createApiKey`, `e9core create-api-key`).
-  `SqlApiKeyStore` uses the `api_key` table. `KVApiKeyStore` is an optional
-  Cloudflare store.
-- **The inbound people pipeline** — the same normalize → identify → assign →
-  upsert chain used anywhere an engine9-capable database accepts people
-  (`PersonWorker.processPeople`, `POST /people`).
-- **Optional login** — storing people uses an API key. Production login
-  defaults to delegate
-  ([docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)).
-  The host verifies an Identity Token, maps that provider’s user id to a
-  `person_id`, reads roles from `person_segment`, and may mint a Core Session.
+| Name | What it is |
+| --- | --- |
+| `E9_ADMIN_API_KEY` | Full access (`e9key_…`). Server and scripts only |
+| `E9_PUBLIC_API_KEY` | Signup forms and login (`e9publickey_…`). Safe in the browser |
+| `SESSION_SECRET` | HMAC key for Core Sessions. Present = login on |
+| `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used in production |
+| `E9_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call the API from another host (CORS) |
+| `E9_DOMAIN` | Optional. JWT `aud` when the API host differs from the page host |
+| `DELEGATE_URL` | Optional. Your own delegate deployment. Default `https://delegate.engine9.ai` |
 
-A database is engine9-capable when it has these standard tables and plugin
-rows. Core creates that database. Any other library that understands the
-standard can use it afterward, including the private server.
+`npx e9core setup --rotate` replaces the keys and secret; run `setup --remote`
+again afterwards on Cloudflare. `setup --remote` copies the two keys, the
+secret, and the setup token. The optional values are plain configuration: on
+Node they are environment variables; on Cloudflare put them under `vars` in
+`wrangler.jsonc`.
 
-## Quick start (Node + SQLite, same platform)
+## Reference
 
-```bash
-npm install @engine9/core
-npx e9core setup --node
-npx e9core serve
-```
-
-That writes tables and API keys into `engine9.db` and `.env`, then serves your
-HTML and `/api` together. Open the setup URL it prints. The same pieces,
-one at a time:
-
-```bash
-npx e9core installStandard --db sqlite://./engine9.db
-npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes admin
-npx e9core create-api-key --db sqlite://./engine9.db --name public --scopes public
-```
-
-`installStandard` creates tables and plugin rows.
-`e9core sqlite-ddl --schema @engine9/interfaces/person` prints one schema’s
-SQL if you prefer to apply it yourself.
-
-```js
-import {
-  PersonWorker,
-  SqlApiKeyStore,
-  JsonlFileLogger,
-  createApi,
-} from "@engine9/core";
-
-const worker = new PersonWorker({
-  accountId: "my-account",
-  auth: { database_connection: "sqlite://./engine9.db" }, // mysql://… also works
-});
-const api = createApi({
-  worker,
-  keyStore: new SqlApiKeyStore({ worker }),
-  logger: new JsonlFileLogger({ directory: "./logs" }),
-  config: {
-    pluginId: "<uuid of the website plugin row>",
-    upsertTables: [
-      "person_email",
-      "person_phone",
-      "person_address",
-      "person_segment",
-    ],
-    reads: {
-      content: { table: "member_content", segmentId: "<segment uuid>" },
-    },
-  },
-});
-
-// Express
-app.use("/api", express.json(), api.expressHandler());
-
-// Rotate: const { key } = await new SqlApiKeyStore({ worker }).rotate({ id });
-```
-
-Cloudflare (D1 as the engine9 database): `npx e9core setup`, then
-`npx e9core setup --remote`. Details in [docs/deploy.md](docs/deploy.md) and
-[cloudflare/README.md](cloudflare/README.md).
-
-To install the standard tables into a database you already run:
-
-```bash
-npx e9core installStandard --db mysql://user:pass@host/dbname
-```
-
-## The `e9core` CLI
+### The `e9core` CLI
 
 `@engine9/core` publishes npm `bin.e9core` → [`bin/e9core.js`](bin/e9core.js).
-Commands run against a DB URL (`--db` or `ENGINE9_DATABASE_CONNECTION`):
-`setup`, `installStandard`, `create-api-key`, `sqlite-ddl`. There is no
-account directory.
 
-People who already have an engine9-capable database and a checkout of the
-private server use a different program, `e9`, for account-scoped workers
-(`e9 personworker installStandard -a <account_id>`).
+| Command | What it does |
+| --- | --- |
+| `npx e9core setup` | Local Cloudflare project: `wrangler.jsonc`, local D1 tables, `.env` |
+| `npx e9core setup --remote [--domain host]` | Production D1, secrets, deploy |
+| `npx e9core setup --node [--db url]` | SQLite (or MySQL) tables and `.env`, no Wrangler |
+| `npx e9core serve [--api-only] [--setup]` | Local site + `/api`; `--setup` reopens the wizard |
+| `npx e9core installStandard --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
+| `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
+| `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
+| `npx e9core sqlite-ddl --schema @engine9/interfaces/person` | Print one schema's SQL |
+| `npx e9core build-plugins [--check]` | Write the site's plugin registry (see below) |
 
-```bash
-# This library — SQLite file, D1 local file, or MySQL
-npx e9core installStandard --db sqlite://./engine9.db
-npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes admin
+Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
+`npx e9core setup --help` lists every flag. People with an existing
+engine9-capable database and the private server use a different program,
+`e9`.
 
-# Private server, on a database that is already engine9-capable
-e9 personworker installStandard -a <account_id>
-e9 sqlworker createApiKey -a <account_id> --name website --scopes admin
-```
-
-## Authentication
+### Authentication
 
 Three layers. API keys are the generic auth for non-session callers (signup
-and payment forms, inbound people, and other HTTP APIs). Scopes decide access.
-The private server’s Task API uses the same keys. These routes authenticate
-with an API key; that server’s MCP login is a different credential.
+and payment forms, inbound people, other HTTP APIs). Scopes decide access.
 
 ```
 Request
-  → 1. API key          (required on core APIs except GET /ok)
+  → 1. API key          (required on every route except GET /ok)
   → 2. Role             (role_id === segment_id UUID)
-  → 3. Identity Level   (credential level on the signed session, when login is on)
+  → 3. Identity Level   (on the Core Session or Identity Token, when login is on)
   → handler
 ```
 
-### Layer 1 — API key
+**Layer 1 — API key.** `Authorization: Bearer e9key_…` or `X-API-Key: e9key_…`.
+Keys are SHA-256 hashed at rest (`SqlApiKeyStore` in the `api_key` table;
+`KVApiKeyStore` is an optional Cloudflare store). Fields: `scopes` (required,
+non-empty), `default_role_id`, `active`, `expires_at`. `store.rotate()`
+creates a new key and revokes the old one.
 
-- Every core API request except `GET /ok` needs a valid key:
-  `Authorization: Bearer e9key_…` or `X-API-Key: e9key_…`.
-- Keys are SHA-256 hashed at rest (`SqlApiKeyStore` / `KVApiKeyStore`).
-- Fields: `scopes` (required, non-empty), `default_role_id` (segment UUID used
-  when no role is specified), `active`, `expires_at`.
-- **Store:** `SqlApiKeyStore` in the engine9 database. `KVApiKeyStore` is
-  optional and Cloudflare-only.
-- **Cycle:** `store.rotate({ id })` (SQL) or `store.rotate({ keyHash })` (KV)
-  creates a new key and revokes the old one.
-- **Rate / volume:** not built in — hook on `apiKey.id` after `verify()`.
+| Scope | Surface | Allows |
+| --- | --- | --- |
+| `people:write` | `POST /people` | Inbound people pipeline |
+| `tables:write` | `POST /upsert/:table` | Allowlisted table upserts |
+| `data:read` | `GET /read/:name` | Configured reads |
+| `tasks:read`, `tasks:schedule` | Private server Task API | Flows and task runs on an engine9-capable database |
+| `admin` | Any | All scopes |
+| `public` | Signup forms, `/auth/*` | Public ingest and login; keys use the `e9publickey_` prefix |
 
-### Scopes
+Empty scopes deny every check. Constants: `SCOPES` from `@engine9/core`.
 
-| Scope            | Surface                 | Allows                                            |
-| ---------------- | ----------------------- | ------------------------------------------------- |
-| `people:write`   | `POST /people`          | Inbound people pipeline                           |
-| `tables:write`   | `POST /upsert/:table`   | Allowlisted table upserts                         |
-| `data:read`      | `GET /read/:name`       | Configured reads                                  |
-| `tasks:read`     | Private server Task API | List/read flows; check run status                 |
-| `tasks:schedule` | Private server Task API | Schedule work on an engine9-capable database      |
-| `admin`          | Any                     | All scopes                                        |
-| `public`         | Inbound / forms         | Public ingest; keys use the `e9publickey_` prefix |
-
-Keys must list scopes at creation. Empty scopes deny every check. Prefix
-follows scope: `public` → `e9publickey_…`, otherwise `e9key_…`. Constants:
-`SCOPES` from `@engine9/core` (`PEOPLE_WRITE`, `TABLES_WRITE`, `DATA_READ`,
-`TASKS_READ`, `TASKS_SCHEDULE`, `ADMIN`, `PUBLIC`).
-
-`SQLWorker.createApiKey` deploys the `api_key` table if needed, then creates
-the hashed key. The plaintext value is returned once.
-
-```bash
-npx e9core create-api-key --db sqlite://./engine9.db \
-  --name partner-tasks --scopes tasks:read,tasks:schedule
-
-npx e9core create-api-key --db sqlite://./engine9.db \
-  --name site-admin --scopes admin
-```
-
-On a database that also runs the private server, key management goes through
-that repo’s `apiKey` tools so plaintext is not stored in task output.
-
-### Layer 2 — Role (`role_id` = `segment_id`)
-
-Roles are segments. Session and APIs use the segment UUID as `role_id`.
+**Layer 2 — Role (`role_id` = `segment_id`).** Roles are segments.
 
 ```js
 roles: {
   '<segment-uuid>': {
-    name: 'Admin',          // public display name
-    scopes: ['admin'],      // or a concrete list: people:write, data:read, …
-    requiredAuth: {         // optional identity-provider gate
-      twoFactor: false,
-      minLevel: 2
-    }
+    name: 'Admin',
+    scopes: ['admin'],                        // or people:write, data:read, …
+    requiredAuth: { minLevel: 2, twoFactor: false }
   }
 }
 ```
 
-Soft **declared roles** (same `requiredAuth` shape, no `person_id`) live in
+Effective scopes are the intersection of the key and the active role; the
+key is always the ceiling; `admin` on one side means that side does not
+constrain. `POST /auth/role` (or `auth.changeRole`) switches roles. Legacy
+`roleSegments: { admin: '<uuid>' }` is still accepted. Soft **declared
+roles** with the same `requiredAuth` shape live in
 [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
-for browser personalization. See also
-[`demo-id`](https://github.com/engine9-ai/demo-id) and the festival
-[`demo-festival`](https://github.com/engine9-ai/demo-festival).
+for browser-only personalization.
 
-Legacy `roleSegments: { admin: '<uuid>' }` is still accepted and normalized
-into the UUID-keyed registry.
-
-**Scope resolution** (the key is always the ceiling):
-
-- No key scopes → deny
-- No role, or a role with empty scopes → key scopes only
-- Both set → intersection; `admin` on one side means that side does not constrain
-
-`auth.changeRole({ personId, roleId, exclusive?, session? })` and
-`POST /auth/role` change the role. Role change expects an identity provider.
-The default provider is delegate.
-
-### Layer 3 — Identity provider
-
-Optional. People APIs work with an API key alone. Production defaults to
-delegate: [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
-
-After the host verifies an Identity Token, the Core Session carries `level`,
-`profileId`, and `auth` from that provider. Roles may declare `requiredAuth`
-(`minLevel`, `twoFactor`). `resolveAuthContext` enforces it on API routes when
-a role is active. Provider-specific ids and token fields are documented only
-in that provider’s file.
-
-Policy helper: `resolveAuthContext` from `@engine9/core/auth` (or
-`@engine9/core/auth/policy`). See [auth/README.md](auth/README.md).
-
-## Endpoints
-
-| Endpoint              | Purpose                                                                                                                     | Scope                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `GET /ok`             | health check (no auth)                                                                                                      | —                                   |
-| `POST /people`        | run `{ people: [...] }` through the inbound person pipeline and upsert                                                      | `people:write`                      |
-| `POST /upsert/:table` | upsert `{ rows: [...] }` into an allowlisted person-related table                                                           | `tables:write`                      |
-| `GET /read/:name`     | read a configured table, optionally gated by `person_segment` (`?person_id=`)                                               | `data:read`                         |
-| `POST /auth/login`    | exchange an identity-provider token for a Core Session                                                                      | API key                             |
-| `GET /auth/me`        | current User (`personId`, `roles`, `level`, profile)                                                                        | API key + session or Identity Token |
-| `POST /auth/logout`   | `{ loggedOut: true }` (cookie clear is the host's job)                                                                      | API key                             |
-| `POST /auth/role`     | change role (`{ role_id, person_id?, exclusive?, session_token? }`); session or token must match `person_id` unless `admin` | API key                             |
-
-Keys are passed as `Authorization: Bearer e9key_...` or `X-API-Key: e9key_...`.
-Effective scopes are the intersection of the active role and the API key.
-Empty key scopes deny every check. `admin` grants every scope. Roles with
-empty scopes do not constrain the key.
-
-A Core Session is an HMAC token the **host** delivers (`Cookie` via
-`createSessionCookieHeaders`, or `X-Engine9-Session`). An Identity Token JWT
-may be sent as `Authorization: Bearer` (three segments, not `e9key_` /
-`e9publickey_`) together with `X-API-Key`.
-
-The same keys authorize the private server’s Task API (`tasks:read`,
-`tasks:schedule`) when that database is engine9-capable and the server is in use.
-
-## Identity provider
-
-Storing people (`POST /people`) needs an API key. An identity provider is
-optional, including for local development.
-
-Production defaults to **delegate**. Provider-specific setup (token fields,
-UNID) lives in
+**Layer 3 — Identity provider.** Optional. Production defaults to delegate:
 [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
-The browser library is [`@engine9/id`](https://github.com/engine9-ai/id).
+After core verifies an Identity Token, the Core Session carries `level`,
+`domainProfile`, and `auth`. `resolveAuthContext` (from `@engine9/core/auth`)
+enforces `requiredAuth` when a role is active. Identity **Levels** (0–7) are
+confidence, not permission: a Level 4 User may still have no role.
 
-### Authentication and authorization
+A **Core Session** is an HMAC token the host delivers (`Cookie` via
+`createSessionCookieHeaders`, or `X-Engine9-Session`). It is a cache of the
+verified identity plus `personId` and `roles`, so later requests skip the
+provider. The browser can instead send the Identity Token as
+`Authorization: Bearer` on each request together with `X-API-Key`. Full
+account: [auth/README.md](auth/README.md).
 
-- **Authentication** answers who is present: an API key for the caller and,
-  when login is on, an Identity Token or Core Session for the User.
-- **Authorization** answers what they may do: key scopes ∩ role scopes, plus
-  `requiredAuth` (`minLevel`, `twoFactor`).
-- Identity **Levels** (0–7) are confidence. A Level 4 User may still lack a
-  segment role.
-- **Roles** are host authorization (`role_id === segment_id`).
+### Endpoints
 
-### When a session helps
+| Endpoint | Purpose | Needs |
+| --- | --- | --- |
+| `GET /ok` | Health check | nothing |
+| `POST /people` | `{ people: [...] }` through the inbound person pipeline | `people:write` or `public` |
+| `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
+| `GET /read/:name` | Configured read, optionally gated by `person_segment` (`?person_id=`) | `data:read` |
+| `POST /auth/login` | `{ delegate_token }` → `{ session, token }` | API key; 501 until `SESSION_SECRET` / `delegate` is set |
+| `GET /auth/me` | `{ personId, roles, level, domainUnid, domainProfile, profile? }` | API key + session or Identity Token |
+| `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
+| `POST /auth/role` | `{ role_id, person_id?, exclusive? }` | API key + session/token matching `person_id`, or `admin` |
 
-A Core Session is an optional HMAC cache of `personId`, `roles`, `level`, and
-`auth` after the host has verified an Identity Token. The host signs it with
-`SESSION_SECRET` and delivers it (HttpOnly cookie or `X-Engine9-Session`).
-Later requests check that signature locally. They do not call the identity
-provider again. The browser can instead send the Identity Token as
-`Authorization: Bearer` on each request. Mint a session when you want fewer
-provider lookups.
+Everything under `/api` in the shipped Worker and `serve`.
 
-`openssl rand -hex 32` creates the secret. `e9core setup-keys` writes the
-same kind of value. How the token is built, and which calls still hit Delegate:
-[auth/README.md](auth/README.md#local-session-session_secret).
-
-### Roles `minLevel`
-
-`requiredAuth.minLevel` is a number. `meetsRequiredAuth` requires
-`credentialLevel.level >= minLevel` (session `level`, else `auth.level`) and
-still enforces `twoFactor` when that flag is true.
-
-### `/auth/*` endpoints
-
-Every route except `GET /ok` requires an API key. Request body field names for
-the default provider are in
-[docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
-
-| Endpoint            | What it does                                                         |
-| ------------------- | -------------------------------------------------------------------- |
-| `POST /auth/login`  | Exchange an identity-provider token for `{ session, token }`         |
-| `GET /auth/me`      | Current User, or 401                                                 |
-| `POST /auth/logout` | `{ loggedOut: true }` — the host clears its cookie                   |
-| `POST /auth/role`   | `{ role_id, person_id? }` plus a session or token, or an `admin` key |
-
-`POST /auth/role` rejects a bare `person_id` unless the session `personId`
-matches or the key or role has the `admin` scope.
-
-## Plugin paths
+### Plugin paths
 
 `@engine9/core/pluginPaths` treats plugin rows, stack `include` / `exclude`
-lists, and `stacks[]` as **package identity only** — paths like
-`@engine9/interfaces/person`. The loader (this process, or the private server
-on an engine9-capable database) resolves that identity to a module. The load
-location is never part of `plugin.path`.
+lists, and `stacks[]` as **package identity only** (`@engine9/interfaces/person`).
+The plugin registry maps that identity to a module compiled into the build.
+Legacy `local$@engine9/...` strings are accepted and normalized.
 
-Legacy `local$@engine9/...` strings are accepted as an input alias and
-normalized by stripping `local$`.
+### Plugins are compiled into the build
 
-## Package layout
+Core runs only plugins that were compiled into the build. It does not search
+`node_modules`, read plugin files, or `import()` a path built at runtime. This
+lets the same code run in pre-compiled runtimes such as Cloudflare workerd,
+which have no filesystem. The cost: adding or changing a plugin means a
+rebuild and a redeploy.
+
+Which plugins run is still decided per account at run time. The inbound
+weaver reads the `plugin` rows and picks the steps, then looks each plugin up
+in the registry instead of loading it from disk.
+
+`npx e9core build-plugins` writes `engine9.plugins.js` with a literal
+`import()` of each plugin's `index.js`, `schema.js`, and `settings.js`, and
+inlines `ui.console.json5`. Choose plugins in `package.json`:
+
+```json
+{
+  "engine9": {
+    "plugins": ["@engine9/interfaces/event", "@engine9/interfaces/stacks/standard"]
+  }
+}
+```
+
+`plugins` lists exact plugins (stack includes and the core person interfaces
+are added). `pluginPackages` includes every plugin in the listed packages.
+With neither setting, the build has every interface in `@engine9/interfaces`,
+which is also `@engine9/core/plugins/interfaces` and the default for the CLI
+and the example Worker.
+
+```js
+import plugins from './engine9.plugins.js';
+import { setDefaultPluginRegistry } from '@engine9/core/pluginRegistry';
+
+const worker = new PersonWorker({ d1: env.DB, plugins });
+// or once at startup:
+setDefaultPluginRegistry(plugins);
+```
+
+Installing or running a plugin that is not in the build fails with
+`PLUGIN_NOT_IN_BUILD`. `install({ source })` is rejected. Loading plugin code
+at run time is supported only by the private server's `runtime-plugins`
+deployment on Node.
+
+### Package layout
 
 - `lib/utilities.js` — shared environment-agnostic utilities
 - `lib/sql/shared.js` — canonical table upsert logic
 - `lib/sql/dialects/` — MySQL and SQLite dialects (SQLite serves D1)
 - `lib/sql/sqliteDDL.js` — native SQLite/D1 DDL generation (no knex needed)
-- `lib/sql/standardizeSchema.js` — dialect-aware column standardization used by SchemaWorker and `e9core sqlite-ddl`
-- `lib/SQLWorker.js` — query, upsert, and DDL over D1, better-sqlite3, or mysql2; API-key helpers wrap `SqlApiKeyStore`
+- `lib/sql/standardizeSchema.js` — dialect-aware column standardization
+- `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy interface schemas
 - `lib/PluginWorker.js` — plugin rows, stack install, `installStandard`, `bootstrapAccount`
-- `lib/pluginPaths.js` — plugin-path matcher (package identity; legacy `local$` alias)
-- `lib/stackMetadata.js` — `loadStackMetadata`: stack include/exclude (local package or GitHub)
-- `lib/PersonWorker.js` — inbound person pipeline (`processPeople`) plus `installStandard`
-- `lib/peoplePipeline/` — shared inbound transform chain. See [lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)
+- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity and the build-time registry
+- `lib/plugins/interfaces.js` — generated registry of every `@engine9/interfaces` plugin (`npm run build:plugins`)
+- `lib/PersonWorker.js`, `lib/peoplePipeline/` — inbound person pipeline. See [lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)
 - `lib/id/` — person identifier stores (compact SQLite, legacy MySQL, Durable Objects)
-- `auth/` — API key creation and verification, SQL and KV stores, policy and HMAC helpers. See [auth/README.md](auth/README.md)
+- `auth/` — API keys, policy, HMAC helpers. See [auth/README.md](auth/README.md)
 - `auth/delegate.js` — default identity provider. See [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)
+- `api/` — framework-agnostic endpoint handlers (`handleFetch`, `expressHandler`)
 - `logging/` — JSONL file logger and batch logger (R2 sink included)
-- `api/` — framework-agnostic endpoint handlers (fetch and Express adapters)
-- `cloudflare/` — Worker example, wrangler config, input-tools shim. See [cloudflare/README.md](cloudflare/README.md)
-- `bin/e9core.js` — `setup`, `create-api-key`, `sqlite-ddl`, `installStandard`
+- `cloudflare/` — Worker, wrangler example, input-tools shim. See [cloudflare/README.md](cloudflare/README.md)
+- `bin/` — the `e9core` CLI, `serve`, and the setup wizard
 
-## Tests
+### Tests
 
 ```bash
 npm test
 ```
 
-Runs the SQLite-backed suite: SQL round trips, applying the standard interface
-tables, the person pipeline (dedupe, update, read-only), and the API surface
-(auth, scopes, segment gating, modification logs).
+Runs the SQLite-backed suite: SQL round trips, the standard interface tables,
+the person pipeline, the API surface (auth, scopes, segment gating, logs),
+and a workerd-style bundle of the Worker entry.
 
 ## License
 

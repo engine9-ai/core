@@ -61,7 +61,10 @@ Before creating a table, decide in this order:
    `@engine9/interfaces/event`: tables `event` and `person_event`. That
    package is not in the default stack, so install it when the project needs
    events (`npx e9core sqlite-ddl --schema @engine9/interfaces/event`, or add
-   the package to the stack). Keep those table names.
+   the package to the stack). Keep those table names. The Worker runs only
+   the plugins compiled into it; every `@engine9/interfaces` plugin is
+   included unless the site narrows the set with `npx e9core build-plugins`
+   ([details](../README.md#plugins-are-compiled-into-the-build)).
 2. **Build an engine9 package when the feature is a primary extension of
    engine9.** If no interface matches, and other engine9 projects should share
    the same contract, publish it. A shared schema is an interface
@@ -177,7 +180,7 @@ npx e9core setup --node --db mysql://user:pass@host/dbname
 ```
 
 For production on your own host, run the same Node app (or mount `createApi` in
-Express/Astro/etc. as in the [README quick start](../README.md#quick-start-node--sqlite-same-platform)).
+Express/Astro/etc. as in the [README quick start](../README.md#install-on-your-own-server-nodejs)).
 Keep `.env` off git.
 
 ---
@@ -258,8 +261,11 @@ Field names are `given_name`, `family_name`, `email`, and `email_type`
 Skip this while you are building the page. Saving people only needs the API key.
 
 When visitors should log in, add an **identity provider**. Production defaults
-to delegate. Steps are in
-[identityProviders/delegate.md](identityProviders/delegate.md).
+to delegate, and the server side is already done: the Worker and `e9core serve`
+turn on `/api/auth/*` because setup wrote `SESSION_SECRET`. What remains is
+allowing your Domain on delegate and adding `@engine9/id` to the page. Steps
+are in [identityProviders/delegate.md](identityProviders/delegate.md) and the
+[README](../README.md#add-login).
 
 ---
 
@@ -296,7 +302,7 @@ The Worker that `setup` points at is
 are in [`cloudflare/wrangler.toml.example`](../cloudflare/wrangler.toml.example).
 
 Wire `createApi` into your HTTP app. A short sketch is in the
-[core README quick start](../README.md#quick-start-node--sqlite-same-platform).
+[core README quick start](../README.md#install-on-your-own-server-nodejs).
 
 ---
 
