@@ -34,6 +34,7 @@ import { ensureGitignore, setupKeys } from './setupKeys.js';
 
 const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
 const PLUGINS_MODULE = 'engine9.plugins.js';
+const PLUGINS_BUILD_COMMAND = 'npx e9core build-plugins';
 /* Same table as cloudflare/README.md "Bundler aliases". */
 const WORKER_ALIASES = {
   '@engine9/input-tools': '@engine9/core/cloudflare/input-tools-shim',
@@ -173,10 +174,23 @@ export function mergeWranglerConfig(existing, patch) {
   const flags = new Set(cfg.compatibility_flags || []);
   flags.add('nodejs_compat');
   cfg.compatibility_flags = [...flags];
+  /*
+    Plugins: wrangler regenerates ./engine9.plugins.js from package.json
+    "engine9.pluginPackages" on every dev/deploy, and the Worker imports it
+    through the plugins/site alias. Nothing to run or check in by hand.
+  */
   cfg.alias = {
     ...(cfg.alias || {}),
     ...WORKER_ALIASES,
-    ...(patch.pluginsModule ? { '@engine9/core/plugins/site': patch.pluginsModule } : {})
+    '@engine9/core/plugins/site': `./${PLUGINS_MODULE}`
+  };
+  const existingBuild = cfg.build && typeof cfg.build === 'object' ? cfg.build : {};
+  const command = String(existingBuild.command || '').trim();
+  cfg.build = {
+    ...existingBuild,
+    command: command.includes(PLUGINS_BUILD_COMMAND)
+      ? command
+      : [PLUGINS_BUILD_COMMAND, command].filter(Boolean).join(' && ')
   };
   const databases = Array.isArray(cfg.d1_databases) ? [...cfg.d1_databases] : [];
   const index = databases.findIndex((db) => db.binding === 'DB' || db.database_name === patch.databaseName);
@@ -281,7 +295,16 @@ export async function setup(options = {}) {
   const gitignore = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf8') : '';
   writeFileSync(
     gitignorePath,
-    ensureGitignore(gitignore, ['.env', '.env.*', '!.env.example', '.dev.vars', '.e9core', 'engine9.db', '.wrangler'])
+    ensureGitignore(gitignore, [
+      '.env',
+      '.env.*',
+      '!.env.example',
+      '.dev.vars',
+      '.e9core',
+      'engine9.db',
+      '.wrangler',
+      PLUGINS_MODULE
+    ])
   );
 
   if (options.node) {
@@ -343,8 +366,7 @@ export async function setup(options = {}) {
     databaseId,
     accountId,
     pluginId,
-    domain: options.domain || '',
-    pluginsModule: existsSync(path.join(cwd, PLUGINS_MODULE)) ? `./${PLUGINS_MODULE}` : ''
+    domain: options.domain || ''
   });
   writeFileSync(wranglerPath, `${JSON.stringify(cfg, null, 2)}\n`);
 
@@ -403,11 +425,11 @@ export async function setup(options = {}) {
 async function withDatabase(cwd, db, name, fn) {
   await ensureDatabaseDrivers(cwd, db);
   const { default: PluginWorker } = await import('../lib/PluginWorker.js');
-  const { default: plugins } = await import('../lib/plugins/interfaces.js');
+  const { createNodePluginRegistry } = await import('./nodePluginRegistry.js');
   const worker = new PluginWorker({
     accountId: name,
     auth: { database_connection: db },
-    plugins
+    plugins: createNodePluginRegistry({ cwd })
   });
   try {
     return await fn(worker);

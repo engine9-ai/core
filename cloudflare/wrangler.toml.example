@@ -62,6 +62,10 @@ E9_PLUGIN_ID = "<uuid of the website plugin row>"
 "better-sqlite3" = "@engine9/core/cloudflare/unavailable-module"
 # Package root is the Node build, which require()s every locale at import.
 "i18n-iso-countries" = "i18n-iso-countries/index.js"
-# Plugins compiled into the Worker. Omit to bundle every @engine9/interfaces
-# plugin. Generate with: npx e9core build-plugins
-# "@engine9/core/plugins/site" = "./engine9.plugins.js"
+# Plugins compiled into the Worker: every plugin in package.json
+# "engine9.pluginPackages" (default @engine9/interfaces). wrangler's build
+# step below writes this file on every dev/deploy; e9core setup adds both.
+"@engine9/core/plugins/site" = "./engine9.plugins.js"
+
+[build]
+command = "npx e9core build-plugins"

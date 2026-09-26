@@ -96,7 +96,9 @@ async function openWorker(ctx) {
   }
   const { default: PluginWorker } = await import('../lib/PluginWorker.js');
   const { SqlApiKeyStore } = await import('../auth/index.js');
+  const { ensureNodePluginRegistry } = await import('./nodePluginRegistry.js');
   const cwd = ctx.cwd || process.cwd();
+  ensureNodePluginRegistry({ cwd });
   let db = ctx.db || 'sqlite://./engine9.db';
   if (db.startsWith('sqlite://') && !db.includes(':memory:')) {
     const file = db.slice('sqlite://'.length);

@@ -49,15 +49,18 @@ describe('mergeWranglerConfig', () => {
     assert.ok(cfg.compatibility_flags.includes('nodejs_compat'));
   });
 
-  it('writes the Worker aliases and points plugins/site at the site registry', () => {
+  it('writes the Worker aliases and has wrangler build the plugin registry', () => {
     const base = { name: 'my-site', databaseName: 'engine9', databaseId: DB_ID, accountId: 'a', pluginId: 'p' };
     const plain = mergeWranglerConfig({}, base);
     assert.equal(plain.alias['@engine9/input-tools'], '@engine9/core/cloudflare/input-tools-shim');
     assert.equal(plain.alias.knex, '@engine9/core/cloudflare/unavailable-module');
     assert.equal(plain.alias['i18n-iso-countries'], 'i18n-iso-countries/index.js');
-    assert.equal(plain.alias['@engine9/core/plugins/site'], undefined);
-    const site = mergeWranglerConfig({}, { ...base, pluginsModule: './engine9.plugins.js' });
-    assert.equal(site.alias['@engine9/core/plugins/site'], './engine9.plugins.js');
+    assert.equal(plain.alias['@engine9/core/plugins/site'], './engine9.plugins.js');
+    assert.equal(plain.build.command, 'npx e9core build-plugins');
+    const astro = mergeWranglerConfig({ build: { command: 'npm run build', watch_dir: 'src' } }, base);
+    assert.equal(astro.build.command, 'npx e9core build-plugins && npm run build');
+    assert.equal(astro.build.watch_dir, 'src');
+    assert.equal(mergeWranglerConfig(astro, base).build.command, 'npx e9core build-plugins && npm run build');
   });
 });
 

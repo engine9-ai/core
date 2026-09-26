@@ -1,11 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadStackMetadata, DEFAULT_STACK_PATH } from '../lib/stackMetadata.js';
-import { asPluginRegistry } from '../lib/pluginRegistry.js';
-import interfacePlugins from '../lib/plugins/interfaces.js';
+import { getDefaultPluginRegistry } from '../lib/pluginRegistry.js';
 import { include as standardInclude } from '@engine9/interfaces/stacks/standard/index.js';
 
-const registry = asPluginRegistry(interfacePlugins);
+const registry = getDefaultPluginRegistry();
 
 test('loadStackMetadata reads the stack from the plugin registry', async () => {
   const metadata = await loadStackMetadata(DEFAULT_STACK_PATH, { registry });

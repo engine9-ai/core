@@ -18,8 +18,11 @@ export {
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export { loadStackMetadata, DEFAULT_STACK_PATH } from './lib/stackMetadata.js';
 export {
-  PLUGIN_NOT_IN_BUILD,
-  PluginNotInBuildError,
+  PLUGIN_CONFIG_INVALID,
+  PLUGIN_PACKAGE_NOT_DECLARED,
+  PLUGIN_NOT_FOUND,
+  PLUGIN_IMPORT_FAILED,
+  PluginLoadError,
   createPluginRegistry,
   asPluginRegistry,
   composePluginRegistries,

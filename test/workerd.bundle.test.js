@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import esbuild from 'esbuild';
+import { buildPlugins } from '../bin/buildPlugins.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -27,10 +28,14 @@ const rootAliases = {
   mysql2: unavailableModule,
   'mysql2/promise': unavailableModule,
   'better-sqlite3': unavailableModule,
-  'i18n-iso-countries': require.resolve('i18n-iso-countries/index.js')
+  // Resolved from where @engine9/interfaces resolves it (a sibling checkout keeps its own node_modules).
+  'i18n-iso-countries': createRequire(require.resolve('@engine9/interfaces/package.json')).resolve(
+    'i18n-iso-countries/index.js'
+  )
 };
 
-function resolveSelf(specifier) {
+function resolveSelf(specifier, aliases = {}) {
+  if (aliases[specifier]) return aliases[specifier];
   if (specifier !== '@engine9/core' && !specifier.startsWith('@engine9/core/')) return null;
   const key = specifier === '@engine9/core' ? '.' : `.${specifier.slice('@engine9/core'.length)}`;
   const exp = packageJson.exports[key];
@@ -40,11 +45,12 @@ function resolveSelf(specifier) {
   return path.join(root, target);
 }
 
-const selfPackage = {
+/** @param {Record<string, string>} aliases extra specifier → absolute file (e.g. the site plugin registry) */
+const selfPackage = (aliases = {}) => ({
   name: 'self-package',
   setup(build) {
     build.onResolve({ filter: /^@engine9\/core(\/|$)/ }, (args) => {
-      const resolved = resolveSelf(args.path);
+      const resolved = resolveSelf(args.path, aliases);
       if (!resolved) return { errors: [{ text: `No export for ${args.path}` }] };
       return { path: resolved };
     });
@@ -53,13 +59,14 @@ const selfPackage = {
       build.onResolve({ filter: new RegExp(`^${escaped}$`) }, () => ({ path: target }));
     }
   }
-};
+});
 
 async function bundleWorkerd(entry) {
   const dir = await mkdtemp(path.join(tmpdir(), 'e9-workerd-'));
   const outfile = path.join(dir, 'worker.cjs');
   const shared = {
     absWorkingDir: root,
+    nodePaths: [path.join(root, 'node_modules')],
     bundle: true,
     /*
       CJS so Node can evaluate debug's require("tty") inside the bundle.
@@ -73,7 +80,7 @@ async function bundleWorkerd(entry) {
     splitting: false,
     logLevel: 'silent',
     conditions: ['workerd', 'worker', 'import', 'default'],
-    plugins: [selfPackage],
+    plugins: [selfPackage(entry.aliases)],
     define: {
       'import.meta.url': 'undefined',
       'import.meta.dirname': 'undefined'
@@ -149,7 +156,12 @@ test('package entry evaluates with no import.meta.url', async () => {
 });
 
 test('bundled plugin registry compiles plugins, transforms, and schemas with no filesystem', async () => {
+  // What wrangler's build step produces for a site whose plugins are every interface.
+  const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-registry-'));
+  const registryFile = path.join(siteDir, 'engine9.plugins.js');
+  buildPlugins({ cwd: root, packages: ['@engine9/interfaces'], out: registryFile });
   const built = await bundleWorkerd({
+    aliases: { '@engine9/core/plugins/site': registryFile },
     contents: `
       import PersonWorker from '@engine9/core/PersonWorker';
       import plugins from '@engine9/core/plugins/site';
@@ -160,8 +172,8 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
         const step = await worker.resolveTransform({ path: '@engine9/interfaces/person_email:transforms:extractEmailHashes' });
         const schema = await loadRegistrySchema(asPluginRegistry(plugins), '@engine9/interfaces/person_email');
         const errors = {};
-        try { await worker.compilePlugin({ path: '@engine9/plugins/e9email' }); } catch (e) { errors.notInBuild = e.code; }
-        try { await worker.compilePlugin({ path: '@engine9/interfaces/person', source: '/tmp/person' }); } catch (e) { errors.source = e.message; }
+        try { await worker.compilePlugin({ path: '@engine9/plugins/e9email' }); } catch (e) { errors.notDeclared = e.code; }
+        try { await worker.compilePlugin({ path: '@engine9/interfaces/persn' }); } catch (e) { errors.notFound = e.message; }
         return {
           personPath: person.path,
           inbound: person.metadata?.inbound,
@@ -182,9 +194,10 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
     assert.equal(out.transform, 'function');
     assert.ok(out.tables.includes('person_email'));
     assert.ok(out.paths.includes('@engine9/interfaces/event'));
-    assert.equal(out.errors.notInBuild, 'PLUGIN_NOT_IN_BUILD');
-    assert.match(out.errors.source, /only runs pre-compiled plugins/);
+    assert.equal(out.errors.notDeclared, 'PLUGIN_PACKAGE_NOT_DECLARED');
+    assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/interfaces\/person/);
   } finally {
     await rm(built.dir, { recursive: true, force: true });
+    await rm(siteDir, { recursive: true, force: true });
   }
 });

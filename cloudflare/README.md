@@ -146,31 +146,30 @@ one piece at a time.
 
 ### Plugins
 
-The Worker runs only plugins compiled into the bundle. This is a deliberate
-trade: workerd has no filesystem and no `node_modules`, so core does not load
-plugin code at run time. Adding or changing a plugin needs a rebuild and a
-deploy. See [Plugins are compiled into the build](../README.md#plugins-are-compiled-into-the-build).
+The Worker runs the plugins compiled into the bundle: every plugin in the
+packages listed in `package.json` `engine9.pluginPackages` (default
+`@engine9/interfaces`). workerd has no filesystem, so the discovery that Node
+does at startup runs at build time instead: `e9core build-plugins` writes
+`engine9.plugins.js` with a literal `import()` per plugin. See
+[How plugins are loaded](../README.md#how-plugins-are-loaded).
 
-`worker.js` passes `@engine9/core/plugins/site` as the plugin registry. By
-default that is every interface in `@engine9/interfaces`. To pick a
-different set, list the plugins in `package.json` under `engine9.plugins`
-and generate the registry:
+`npx e9core setup` wires this so nothing is run by hand. It puts the command
+in wrangler's build step and aliases the Worker's registry import to the file:
 
-```bash
-npx e9core build-plugins            # writes engine9.plugins.js
-npx e9core build-plugins --check    # CI: fail if it is out of date
+```jsonc
+{
+  "build": { "command": "npx e9core build-plugins" },
+  "alias": { "@engine9/core/plugins/site": "./engine9.plugins.js" }
+}
 ```
 
-Then alias the site entry to it. `npx e9core setup` adds this alias when
-`engine9.plugins.js` exists:
-
-```toml
-[alias]
-"@engine9/core/plugins/site" = "./engine9.plugins.js"
-```
-
-A Worker that tries to install or run a plugin outside the bundle gets
-`PLUGIN_NOT_IN_BUILD`.
+Every `wrangler dev` and `wrangler deploy` regenerates the file; it is
+gitignored. `npx e9core build-plugins --check` fails in CI when a committed
+copy is out of date. Without the alias the Worker has no registry and the
+first plugin use fails with `PLUGIN_CONFIG_INVALID`; a plugin outside the
+listed packages is `PLUGIN_PACKAGE_NOT_DECLARED`, and a missing one is
+`PLUGIN_NOT_FOUND`. `dynamicPluginPackages` (Node-only disk loading) cannot
+be bundled; `build-plugins` refuses it.
 
 ```toml
 [alias]

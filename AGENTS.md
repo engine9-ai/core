@@ -136,14 +136,33 @@ npm install @engine9/core @engine9/interfaces
 ```
 
 Interfaces publishes on its own. When schemas or transforms change, upgrade
-interfaces in the site, rebuild the plugin registry, and redeploy:
+interfaces in the site and redeploy:
 
 ```
 npm install @engine9/interfaces@latest
-npx e9core build-plugins
+npx wrangler deploy
 ```
 
-Leave `@engine9/core`'s version alone when only interfaces changed. In this
+Leave `@engine9/core`'s version alone when only interfaces changed.
+
+## Plugins
+
+Plugins are every `index.js` directory and `*.plugin.js` file inside the
+packages listed in `package.json` `engine9.pluginPackages`; Node imports them
+from `node_modules` when the process starts, Cloudflare compiles them into the
+bundle when it deploys.
+
+- `lib/pluginRegistry.js` is the registry interface and the error codes
+  (`PLUGIN_CONFIG_INVALID`, `PLUGIN_PACKAGE_NOT_DECLARED`, `PLUGIN_NOT_FOUND`,
+  `PLUGIN_IMPORT_FAILED`). Nothing under `lib/` reads plugin code from disk.
+- `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) is the Node
+  registry. `dynamicPluginPackages` (re-read on every use) is Node only.
+- `bin/buildPlugins.js` (`e9core build-plugins`) serializes the same discovery
+  for a bundle. `e9core setup` puts it in wrangler's `build.command`; do not
+  tell people to run it by hand, and do not commit `engine9.plugins.js`.
+- No `install({ source })`, no absolute plugin paths, no second loader. A
+  plugin that is not in a listed package is an error with one of the codes
+  above. In this
 repository, tests use the sibling checkout (`file:../interfaces` in
 devDependencies). Keep that path. The peer range in package.json is what a
 deployed site must satisfy.

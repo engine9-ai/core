@@ -1,22 +1,25 @@
 /*
-  `e9core build-plugins`: write the plugin registry module for this project.
+  `e9core build-plugins`: write the plugin registry module for a bundled build.
 
-  Runs in Node at build or install time. It reads the project's package.json,
-  finds plugin entry points in the listed packages under node_modules, and
-  writes a module that imports each one with a literal specifier, so any
-  bundler (wrangler, Vite, esbuild) can include them. Nothing in that module
-  touches the filesystem when it runs.
+  Bundlers (wrangler, esbuild, Vite) include only what they can see as a
+  literal import specifier, and workerd has no filesystem to discover plugins
+  at run time. So for Cloudflare the discovery below runs at build time and its
+  result is written as a module of literal imports. `e9core setup` puts this
+  command in wrangler's build step; nobody runs it by hand.
+
+  Node runtimes do not need the file: @engine9/core/plugins/node runs the same
+  discovery when the process starts.
 
   package.json:
     "engine9": {
-      "plugins": ["@engine9/interfaces/event"],          // only these (plus
-                                                         // core interfaces and
-                                                         // stack includes)
-      "pluginPackages": ["@engine9/interfaces"]          // or: every plugin in
-                                                         // these packages
+      "pluginPackages":        ["@engine9/interfaces", "@engine9/plugins"],
+      "dynamicPluginPackages": ["engine9-accounts"],   // Node only; a bundle refuses it
+      "plugins": ["@engine9/interfaces/event"]         // legacy: only these identities
+                                                       // (plus core interfaces and
+                                                       // stack includes)
     }
 
-  With neither, every plugin in @engine9/interfaces is included.
+  With none of these, every plugin in @engine9/interfaces is included.
 
   A plugin is a directory with index.js (identity: <package>/<dir>) or a
   file named *.plugin.js (identity: <package>/<dir>/<file>). Next to index.js,
@@ -27,39 +30,83 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import JSON5 from 'json5';
 import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
-import { normalizePluginInstallPath } from '../lib/pluginPaths.js';
+import { normalizePluginInstallPath, packageNameOf } from '../lib/pluginPaths.js';
+import { PLUGIN_CONFIG_INVALID, PluginLoadError } from '../lib/pluginRegistry.js';
 
 const DEFAULT_OUT = 'engine9.plugins.js';
 const DEFAULT_PACKAGES = ['@engine9/interfaces'];
 const SKIP_DIRS = new Set(['node_modules', 'skills', 'test', 'tests']);
 
-function readPackageJson(cwd) {
+function asList(value, key) {
+  if (value == null) return [];
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string' || !v.trim())) {
+    throw new PluginLoadError(PLUGIN_CONFIG_INVALID, `package.json "engine9.${key}" must be an array of package names`);
+  }
+  return [...new Set(value.map((v) => v.trim()))];
+}
+
+/**
+ * The "engine9" plugin configuration of the project at `cwd`.
+ * @returns {{ plugins: string[]|null, pluginPackages: string[], dynamicPluginPackages: string[], configured: boolean }}
+ */
+export function readEngine9Config(cwd) {
   const file = path.join(cwd, 'package.json');
-  if (!existsSync(file)) throw new Error(`build-plugins: no package.json in ${cwd}`);
-  return JSON.parse(readFileSync(file, 'utf8'));
-}
-
-function packageNameOf(pluginPath) {
-  const parts = pluginPath.split('/');
-  return pluginPath.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
-}
-
-function packageRoot(cwd, name) {
-  const req = createRequire(path.join(cwd, 'package.json'));
-  try {
-    return path.dirname(req.resolve(`${name}/package.json`));
-  } catch {
-    throw new Error(
-      `build-plugins: package ${name} is not installed in ${cwd}. Add it to dependencies (e.g. "file:../${name.split('/').pop()}") and run npm install.`
+  const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).engine9 || {} : {};
+  const plugins = config.plugins ? asList(config.plugins, 'plugins') : null;
+  const pluginPackages = asList(config.pluginPackages, 'pluginPackages');
+  const dynamicPluginPackages = asList(config.dynamicPluginPackages, 'dynamicPluginPackages');
+  const both = pluginPackages.filter((p) => dynamicPluginPackages.includes(p));
+  if (both.length) {
+    throw new PluginLoadError(
+      PLUGIN_CONFIG_INVALID,
+      `package.json "engine9": ${both.join(', ')} listed in both pluginPackages and dynamicPluginPackages. A package is one or the other.`
     );
   }
+  return {
+    plugins,
+    pluginPackages,
+    dynamicPluginPackages,
+    configured: Boolean(plugins || pluginPackages.length || dynamicPluginPackages.length)
+  };
+}
+
+/**
+ * Absolute directory of an installed package, resolved from `cwd`.
+ * With `peerFallback`, a package the project has not installed may still be
+ * found next to @engine9/core (its peer dependency, e.g. @engine9/interfaces);
+ * that is fine for Node, which imports by absolute path, but not for a bundle,
+ * which resolves the literal specifier from the project root.
+ */
+export function packageRoot(cwd, name, { peerFallback = false } = {}) {
+  const tryResolve = (from) => {
+    try {
+      return path.dirname(createRequire(from).resolve(`${name}/package.json`));
+    } catch {
+      return null;
+    }
+  };
+  const found = tryResolve(path.join(cwd, 'package.json')) || (peerFallback ? tryResolve(import.meta.url) : null);
+  if (found) return found;
+  throw new PluginLoadError(
+    PLUGIN_CONFIG_INVALID,
+    `Plugin package "${name}" is listed in package.json "engine9" but is not installed in ${cwd} ` +
+      `(looked for node_modules/${name}/package.json). Add it to dependencies and run npm install.`
+  );
 }
 
 function entryFor(identity, fsPath, isFile) {
-  if (isFile) return { identity, index: identity };
-  const entry = { identity, index: `${identity}/index.js` };
-  if (existsSync(path.join(fsPath, 'schema.js'))) entry.schema = `${identity}/schema.js`;
-  if (existsSync(path.join(fsPath, 'settings.js'))) entry.settings = `${identity}/settings.js`;
+  if (isFile) return { identity, index: identity, files: { index: fsPath } };
+  const entry = { identity, index: `${identity}/index.js`, files: { index: path.join(fsPath, 'index.js') } };
+  const schema = path.join(fsPath, 'schema.js');
+  if (existsSync(schema)) {
+    entry.schema = `${identity}/schema.js`;
+    entry.files.schema = schema;
+  }
+  const settings = path.join(fsPath, 'settings.js');
+  if (existsSync(settings)) {
+    entry.settings = `${identity}/settings.js`;
+    entry.files.settings = settings;
+  }
   const consoleFile = path.join(fsPath, 'ui.console.json5');
   if (existsSync(consoleFile)) entry.console = JSON5.parse(readFileSync(consoleFile, 'utf8'));
   const stackFile = path.join(fsPath, 'stack.json');
@@ -91,8 +138,8 @@ function walk(root, name, rel, out) {
 }
 
 /** Every plugin entry point in one installed package. */
-function discoverPackagePlugins(cwd, name) {
-  return walk(packageRoot(cwd, name), name, '', []);
+export function discoverPackagePlugins(cwd, name, resolveOptions) {
+  return walk(packageRoot(cwd, name, resolveOptions), name, '', []);
 }
 
 function selectEntries(discovered, requested) {
@@ -103,7 +150,12 @@ function selectEntries(discovered, requested) {
     const identity = queue.shift();
     if (selected.has(identity)) continue;
     const entry = byIdentity.get(identity);
-    if (!entry) throw new Error(`build-plugins: ${identity} is not in node_modules/${packageNameOf(identity)}`);
+    if (!entry) {
+      throw new PluginLoadError(
+        PLUGIN_CONFIG_INVALID,
+        `package.json "engine9.plugins": ${identity} is not in node_modules/${packageNameOf(identity)}`
+      );
+    }
     selected.set(identity, entry);
     for (const inc of entry.include || []) queue.push(inc);
   }
@@ -111,21 +163,24 @@ function selectEntries(discovered, requested) {
 }
 
 /**
- * @param {{ cwd?: string, plugins?: string[], packages?: string[] }} options
+ * Plugins to load statically for the project at `cwd`. Reads
+ * `engine9.plugins` / `engine9.pluginPackages`; ignores dynamicPluginPackages.
+ * @param {{ cwd?: string, plugins?: string[], packages?: string[], peerFallback?: boolean }} options
  * @returns {{ entries: object[], packages: string[] }}
  */
 export function collectPluginEntries(options = {}) {
   const cwd = options.cwd || process.cwd();
-  const config = readPackageJson(cwd).engine9 || {};
+  const resolveOptions = { peerFallback: options.peerFallback === true };
+  const config = readEngine9Config(cwd);
   const requested = options.plugins || config.plugins || null;
   if (requested) {
     const all = [...DEFAULT_CORE_INTERFACES, ...requested];
-    const packages = [...new Set([...(options.packages || config.pluginPackages || []), ...all.map(packageNameOf)])];
-    const discovered = packages.flatMap((name) => discoverPackagePlugins(cwd, name));
+    const packages = [...new Set([...(options.packages || config.pluginPackages), ...all.map(packageNameOf)])];
+    const discovered = packages.flatMap((name) => discoverPackagePlugins(cwd, name, resolveOptions));
     return { entries: selectEntries(discovered, all), packages };
   }
-  const packages = options.packages || config.pluginPackages || DEFAULT_PACKAGES;
-  return { entries: packages.flatMap((name) => discoverPackagePlugins(cwd, name)), packages };
+  const packages = options.packages || (config.configured ? config.pluginPackages : DEFAULT_PACKAGES);
+  return { entries: packages.flatMap((name) => discoverPackagePlugins(cwd, name, resolveOptions)), packages };
 }
 
 function indent(text, spaces) {
@@ -140,9 +195,8 @@ function indent(text, spaces) {
 export function renderPluginRegistry(entries, { packages = [] } = {}) {
   const sorted = [...entries].sort((a, b) => a.identity.localeCompare(b.identity));
   const lines = [
-    '// Generated by `npx e9core build-plugins`. Do not edit.',
+    '// Generated by `e9core build-plugins` (wrangler runs it at build time). Do not edit.',
     `// Packages: ${packages.join(', ') || '(none)'}`,
-    '// Regenerate after changing plugin dependencies or "engine9" in package.json.',
     'export default {'
   ];
   sorted.forEach((e, i) => {
@@ -165,6 +219,14 @@ export function renderPluginRegistry(entries, { packages = [] } = {}) {
 export function buildPlugins(options = {}) {
   const cwd = options.cwd || process.cwd();
   const out = path.resolve(cwd, options.out || DEFAULT_OUT);
+  const { dynamicPluginPackages } = readEngine9Config(cwd);
+  if (dynamicPluginPackages.length && !options.packages && !options.plugins) {
+    throw new PluginLoadError(
+      PLUGIN_CONFIG_INVALID,
+      `build-plugins compiles plugins into a bundle, and a bundle cannot read plugins from disk. ` +
+        `Move ${dynamicPluginPackages.join(', ')} from "engine9.dynamicPluginPackages" to "engine9.pluginPackages", or remove them.`
+    );
+  }
   const { entries, packages } = collectPluginEntries({ ...options, cwd });
   const source = renderPluginRegistry(entries, { packages });
   const current = existsSync(out) ? readFileSync(out, 'utf8') : null;
@@ -179,4 +241,4 @@ export function buildPlugins(options = {}) {
   return { out, count: entries.length, changed };
 }
 
-export { DEFAULT_OUT };
+export { DEFAULT_OUT, DEFAULT_PACKAGES, SKIP_DIRS };

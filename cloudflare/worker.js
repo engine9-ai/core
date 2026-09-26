@@ -21,9 +21,10 @@
   Roles (segment UUIDs with scopes / requiredAuth) are site code: add them to
   `config.roles` below. See docs/identityProviders/delegate.md.
 
-  Plugins: only those compiled into the bundle run. `@engine9/core/plugins/site`
-  is every interface unless wrangler aliases it to the site's
-  engine9.plugins.js (`npx e9core build-plugins`).
+  Plugins: only those compiled into the bundle run. wrangler aliases
+  `@engine9/core/plugins/site` to the site's engine9.plugins.js, which its
+  build step writes from package.json "engine9.pluginPackages" (e9core setup
+  configures both).
 */
 import PersonWorker from '@engine9/core/PersonWorker';
 import plugins from '@engine9/core/plugins/site';

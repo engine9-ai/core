@@ -17,6 +17,7 @@ import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { renderWizardHtml, timingSafeEqualString, isSetupFinished, setMeta } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
+import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
 import {
   ENV_SETUP_TOKEN,
   upsertEnv
@@ -152,6 +153,7 @@ export async function serve(options = {}) {
     ? null
     : (options.staticRoot ? path.resolve(cwd, options.staticRoot) : resolveStaticRoot(cwd));
 
+  ensureNodePluginRegistry({ cwd });
   const worker = new PersonWorker({
     accountId,
     auth: { database_connection: db }

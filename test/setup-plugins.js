@@ -1,8 +1,8 @@
 /*
-  Loaded with `node --import` before every test file: core's workers run the
-  plugins in the build registry, and the test build is every interface.
+  Loaded with `node --import` before every test file: core's workers use the
+  Node plugin registry for this checkout, which is every @engine9/interfaces
+  plugin (core's package.json declares no "engine9" config).
 */
-import { setDefaultPluginRegistry } from '../lib/pluginRegistry.js';
-import interfacePlugins from '../lib/plugins/interfaces.js';
+import { ensureNodePluginRegistry } from '../bin/nodePluginRegistry.js';
 
-setDefaultPluginRegistry(interfacePlugins);
+ensureNodePluginRegistry({ cwd: new URL('..', import.meta.url).pathname });

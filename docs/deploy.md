@@ -45,18 +45,18 @@ npm install @engine9/core @engine9/interfaces
 ```
 
 `installStandard` and `e9core sqlite-ddl` read the interfaces package that
-this install resolved. When you upgrade interfaces, install the new version,
-rebuild the plugin registry, and redeploy:
+this install resolved. When you upgrade interfaces, install the new version
+and redeploy:
 
 ```bash
 npm install @engine9/interfaces@latest
-npx e9core build-plugins
+npx wrangler deploy
 ```
 
-`build-plugins` writes `engine9.plugins.js` from the interfaces package in
-this project. The Worker and the CLI load that registry. Ship the new file
-with the deploy. Leave the `@engine9/core` version as it is when only
-interfaces changed.
+Node commands read plugins from `node_modules` when they start. The Worker
+bundle is rebuilt by wrangler's build step (`e9core setup` put
+`npx e9core build-plugins` there), so the deploy picks up the new interfaces.
+Leave the `@engine9/core` version as it is when only interfaces changed.
 
 ## The project database
 
@@ -85,10 +85,10 @@ Before creating a table, decide in this order:
    `@engine9/interfaces/event`: tables `event` and `person_event`. That
    package is not in the default stack, so install it when the project needs
    events (`npx e9core sqlite-ddl --schema @engine9/interfaces/event`, or add
-   the package to the stack). Keep those table names. The Worker runs only
-   the plugins compiled into it; every `@engine9/interfaces` plugin is
-   included unless the site narrows the set with `npx e9core build-plugins`
-   ([details](../README.md#plugins-are-compiled-into-the-build)).
+   the package to the stack). Keep those table names. Every plugin in the
+   packages listed in `package.json` `engine9.pluginPackages` is available;
+   the default is every `@engine9/interfaces` plugin
+   ([details](../README.md#how-plugins-are-loaded)).
 2. **Build an engine9 package when the feature is a primary extension of
    engine9.** If no interface matches, and other engine9 projects should share
    the same contract, publish it. A shared schema is an interface

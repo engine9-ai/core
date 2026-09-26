@@ -50,18 +50,20 @@
         create/alter tables.
 
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
-        Write the plugin registry module the Worker (or server) is built with.
-        Reads "engine9.plugins" / "engine9.pluginPackages" from package.json.
+        Write the plugin registry module a Cloudflare Worker is bundled with.
+        `e9core setup` puts this in wrangler's build step; it is not run by hand.
+        Reads "engine9.pluginPackages" (or legacy "engine9.plugins") from package.json.
         --check exits non-zero when the file is out of date (for CI).
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 
-  These commands use every interface in @engine9/interfaces. Plugins outside
-  that package run only in a build that includes them (build-plugins).
+  Plugins are every index.js directory and *.plugin.js file in the packages
+  listed in package.json "engine9.pluginPackages" (default: @engine9/interfaces).
+  These Node commands read them from node_modules when they start.
 */
 import PluginWorker from '../lib/PluginWorker.js';
-import { loadRegistrySchema, setDefaultPluginRegistry } from '../lib/pluginRegistry.js';
-import interfacePlugins from '../lib/plugins/interfaces.js';
+import { loadRegistrySchema } from '../lib/pluginRegistry.js';
+import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
 import { buildPlugins } from './buildPlugins.js';
 import {
   generateApiKey, hashApiKey,
@@ -101,6 +103,7 @@ function getPluginWorker(args) {
     console.error('Provide --db <connection> or set ENGINE9_DATABASE_CONNECTION');
     process.exit(1);
   }
+  ensureNodePluginRegistry({ cwd: process.cwd() });
   return new PluginWorker({
     accountId: args.account || 'client',
     auth: { database_connection: db },
@@ -117,7 +120,6 @@ function listArg(value) {
 }
 
 async function main() {
-  const plugins = setDefaultPluginRegistry(interfacePlugins);
   const args = parseArgs(process.argv.slice(2));
   const [command] = args._;
   switch (command) {
@@ -281,7 +283,7 @@ async function main() {
       }
       let schema;
       try {
-        schema = await loadRegistrySchema(plugins, String(args.schema));
+        schema = await loadRegistrySchema(ensureNodePluginRegistry({ cwd: process.cwd() }), String(args.schema));
       } catch (e) {
         console.error(e.message);
         process.exit(1);

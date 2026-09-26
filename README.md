@@ -25,8 +25,9 @@ Other libraries that speak it:
 | [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
 
 `@engine9/interfaces` is a peer of this package. Install both in the site.
-Interfaces publishes on its own; upgrade it, run `npx e9core build-plugins`,
-and redeploy. A core release is for changes to core. Details:
+Interfaces publishes on its own; upgrade it and redeploy (wrangler rebuilds
+the plugin registry as part of the deploy). A core release is for changes to
+core. Details:
 [docs/deploy.md](docs/deploy.md#interfaces).
 
 ## Pick a platform
@@ -303,7 +304,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
 | `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
 | `npx e9core sqlite-ddl --schema @engine9/interfaces/person` | Print one schema's SQL |
-| `npx e9core build-plugins [--check]` | Write the site's plugin registry (see below) |
+| `npx e9core build-plugins [--check]` | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
 `npx e9core setup --help` lists every flag. People with an existing
@@ -393,54 +394,66 @@ Everything under `/api` in the shipped Worker and `serve`.
 
 `@engine9/core/pluginPaths` treats plugin rows, stack `include` / `exclude`
 lists, and `stacks[]` as **package identity only** (`@engine9/interfaces/person`).
-The plugin registry maps that identity to a module compiled into the build.
-Legacy `local$@engine9/...` strings are accepted and normalized.
+The plugin registry maps that identity to a module. Legacy `local$@engine9/...`
+strings are accepted and normalized.
 
-### Plugins are compiled into the build
+### How plugins are loaded
 
-Core runs only plugins that were compiled into the build. It does not search
-`node_modules`, read plugin files, or `import()` a path built at runtime. This
-lets the same code run in pre-compiled runtimes such as Cloudflare workerd,
-which have no filesystem. The cost: adding or changing a plugin means a
-rebuild and a redeploy.
-
-Which plugins run is still decided per account at run time. The inbound
-weaver reads the `plugin` rows and picks the steps, then looks each plugin up
-in the registry instead of loading it from disk.
-
-`npx e9core build-plugins` writes `engine9.plugins.js` with a literal
-`import()` of each plugin's `index.js`, `schema.js`, and `settings.js`, and
-inlines `ui.console.json5`. Choose plugins in `package.json`:
+Plugins are every `index.js` directory and `*.plugin.js` file inside the
+packages listed in `package.json` `engine9.pluginPackages`; Node imports them
+from `node_modules` when the process starts, Cloudflare compiles them into the
+bundle when it deploys.
 
 ```json
 {
   "engine9": {
-    "plugins": ["@engine9/interfaces/event", "@engine9/interfaces/stacks/standard"]
+    "pluginPackages": ["@engine9/interfaces"]
   }
 }
 ```
 
-`plugins` lists exact plugins (stack includes and the core person interfaces
-are added). `pluginPackages` includes every plugin in the listed packages.
-With neither setting, the build has every interface in the installed
-`@engine9/interfaces`. That registry is what the site deploys. Rebuild it
-after upgrading interfaces ([docs/deploy.md](docs/deploy.md#interfaces)).
-`@engine9/core/plugins/interfaces` is the registry core's own tests and the
-CLI use when the site has not built one yet.
+With no `engine9` setting, that list is `["@engine9/interfaces"]`. The legacy
+`engine9.plugins` list of exact identities still works (stack includes and the
+core person interfaces are added).
+
+Which plugins *run* is still decided per account at run time: the inbound
+weaver reads the `plugin` rows, picks the steps, and looks each plugin up in
+the registry.
+
+**Node** (`e9core serve`, the CLI, `@engine9/server`): `@engine9/core/plugins/node`
+walks the listed packages once at startup. Restart after adding or editing a
+plugin; `npm install` after adding a package. A Node project may also list
+`dynamicPluginPackages`; those are re-read from disk on every use, so a new or
+edited plugin is live on the next call. That is for small, stateless
+per-account plugins (old module instances are never freed), and it is Node
+only.
 
 ```js
-import plugins from './engine9.plugins.js';
+import { createNodePluginRegistry } from '@engine9/core/plugins/node';
 import { setDefaultPluginRegistry } from '@engine9/core/pluginRegistry';
 
-const worker = new PersonWorker({ d1: env.DB, plugins });
-// or once at startup:
-setDefaultPluginRegistry(plugins);
+setDefaultPluginRegistry(createNodePluginRegistry({ cwd: process.cwd() }));
 ```
 
-Installing or running a plugin that is not in the build fails with
-`PLUGIN_NOT_IN_BUILD`. `install({ source })` is rejected. Loading plugin code
-at run time is supported only by the private server's `runtime-plugins`
-deployment on Node.
+**Cloudflare**: workerd has no filesystem, and a bundler includes only literal
+imports, so the same discovery runs at build time. `e9core setup` puts
+`npx e9core build-plugins` in wrangler's `build.command` and aliases
+`@engine9/core/plugins/site` to the `engine9.plugins.js` it writes (a gitignored
+build artifact, like the bundle). Every `wrangler dev` and `wrangler deploy`
+regenerates it; nobody runs it by hand. A project that lists
+`dynamicPluginPackages` cannot build a bundle; `build-plugins` says so.
+
+Errors carry a `code` from `@engine9/core/pluginRegistry`:
+
+| Code | Meaning |
+| --- | --- |
+| `PLUGIN_CONFIG_INVALID` | a listed package is not installed, a package is in both lists, or no registry is configured |
+| `PLUGIN_PACKAGE_NOT_DECLARED` | the path's package is in neither list; the message prints the lists |
+| `PLUGIN_NOT_FOUND` | package declared, no such plugin; the message says restart / redeploy / the file it looked for, plus nearby plugins |
+| `PLUGIN_IMPORT_FAILED` | plugin found, importing it threw; the original error is `cause` |
+
+Absolute paths and `install({ source })` are not supported anywhere. Put the
+plugin in a package the project lists.
 
 ### Package layout
 
@@ -452,8 +465,9 @@ deployment on Node.
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy interface schemas
 - `lib/PluginWorker.js` — plugin rows, stack install, `installStandard`, `bootstrapAccount`
-- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity and the build-time registry
-- `lib/plugins/interfaces.js` — generated registry of every `@engine9/interfaces` plugin (`npm run build:plugins`)
+- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem)
+- `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
+- `bin/buildPlugins.js` (`e9core build-plugins`) — the same discovery serialized for a Cloudflare bundle
 - `lib/PersonWorker.js`, `lib/peoplePipeline/` — inbound person pipeline. See [lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)
 - `lib/id/` — person identifier stores (compact SQLite, legacy MySQL, Durable Objects)
 - `auth/` — API keys, policy, HMAC helpers. See [auth/README.md](auth/README.md)
