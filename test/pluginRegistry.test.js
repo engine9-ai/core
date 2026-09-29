@@ -121,7 +121,7 @@ function makeSite(engine9Config) {
     mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true });
     writeFileSync(path.join(pkg, rel), text);
   };
-  write('package.json', JSON.stringify({ name: 'acme-plugins', type: 'module' }));
+  write('package.json', JSON.stringify({ name: 'acme-plugins', version: '2.3.4', type: 'module' }));
   write('crm/index.js', "export default { metadata: { name: 'CRM' } };\n");
   write('crm/settings.js', "export const settings = [{ name: 'region', default: 'us' }];\n");
   write('crm/ui.console.json5', "{ menu: { crm: { title: 'CRM' } } }\n");
@@ -146,8 +146,10 @@ test('build-plugins selects configured plugins, stack includes, and core interfa
     assert.doesNotMatch(text, /@engine9\/interfaces\/event/);
     assert.equal(buildPlugins({ cwd: site }).changed, false);
 
-    const { default: entries } = await import(pathToFileURL(first.out).href);
-    const registry = createPluginRegistry(entries);
+    const { default: entries, packageVersions } = await import(pathToFileURL(first.out).href);
+    assert.equal(packageVersions['acme-plugins'], '2.3.4');
+    assert.ok(packageVersions['@engine9/interfaces']);
+    const registry = createPluginRegistry(entries, { packageVersions });
     const paths = await registry.paths();
     for (const p of [
       'acme-plugins/crm',
@@ -158,6 +160,7 @@ test('build-plugins selects configured plugins, stack includes, and core interfa
     ]) {
       assert.ok(paths.includes(p), `${p} in build`);
     }
+    assert.equal(await registry.packageVersion('acme-plugins'), '2.3.4');
     const crm = await compileRegistryPlugin(registry, 'acme-plugins/crm');
     assert.deepEqual(crm.settings, [{ name: 'region', default: 'us' }]);
     assert.deepEqual(await loadRegistryConsole(registry, 'acme-plugins/crm'), { menu: { crm: { title: 'CRM' } } });
@@ -189,6 +192,8 @@ test('Node registry: static packages are read at start, dynamic packages on ever
     const registry = createNodePluginRegistry({ cwd: site });
     assert.deepEqual(await registry.packages(), ['@engine9/interfaces', 'acme-plugins']);
     assert.match(await describePluginRegistry(registry, { cwd: site }), /static: @engine9\/interfaces; dynamic: acme-plugins/);
+    assert.equal(await registry.packageVersion('acme-plugins'), '2.3.4');
+    assert.ok(await registry.packageVersion('@engine9/interfaces'));
 
     const person = await compileRegistryPlugin(registry, '@engine9/interfaces/person');
     assert.equal(person.path, '@engine9/interfaces/person');

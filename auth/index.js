@@ -49,6 +49,31 @@ export {
   PUBLIC_SCOPE
 };
 export {
+  ROLE_NAMES,
+  STANDARD_ROLES,
+  ROLES_PLUGIN_PATH,
+  rolesPluginId,
+  roleSegmentId,
+  standardRoleRegistry,
+  roleIdByName,
+  ensureRolesPlugin,
+  ensureRoleSegment,
+  ensureRoleSegments,
+  setMembershipPolicy,
+  addPeopleToSegment,
+  removePeopleFromSegment,
+  listSegmentMembers,
+  personHasRole,
+  rolesForEmail
+} from './roles.js';
+export {
+  parseMinLevel,
+  normalizeMembershipPolicy,
+  membershipPolicyFromRow,
+  canEditSegmentMembership,
+  loadMembershipPolicies
+} from './segmentAccess.js';
+export {
   parseSharedSecrets,
   base64urlEncode,
   base64urlDecode,

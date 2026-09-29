@@ -80,8 +80,12 @@ When a new build needs a table, decide in this order:
    an interface (`@engine9/interfaces/<name>`) for a shared schema or a plugin
    (`@engine9/plugins/<name>`) for a deployable integration. Those table names
    join the standard and stay fixed.
-3. Otherwise prefix project-local tables with the use case (`content_blog`,
-   `cms_post`, `cms_page`) in the same database.
+3. Otherwise self-scope project-local or third-party plugin tables with a
+   stable company+use-case stem in the schema names (`acme_blog_post`,
+   `cms_page`). Do not set `metadata.prefix` for ordinary third-party
+   plugins; leave `table_prefix` empty so SQL can use fixed names. The hex
+   allocator (`metadata.prefix` → `{prefix}_{hex}_`) stays for multi-instance
+   cases only.
 
 Human-facing writeup: [docs/deploy.md](docs/deploy.md#the-project-database)
 and [README.md](README.md#the-project-database).

@@ -225,7 +225,13 @@ hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
 (or `delegate.domain` in `createApi`).
 
 Roles are segments. Add them in `config.roles` keyed by segment UUID, with
-`scopes` and an optional `requiredAuth.minLevel`. Details:
+`scopes` and an optional `requiredAuth.minLevel`, or set `roles: 'standard'`
+for the canonical pair (`admin`, `operator`). Other role names are
+per-deployment — not shipped or recommended by core. Who may add or remove
+themselves, and which role may add or remove others, is on the segment row
+(`join_min_level`, `leave_min_level`, `manager_role_id`). Grant and revoke by
+email with `npx e9core segment add|remove`, or over HTTP with
+`POST /auth/segments`. Details: [docs/segments.md](docs/segments.md),
 [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md) and
 [auth/README.md](auth/README.md).
 
@@ -265,10 +271,15 @@ When a new build needs storage, decide in this order:
    (`@engine9/interfaces/<name>`). A deployable integration (workers, inbound
    transforms, a vendor) is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
-3. **Prefix tables that belong only to this project.** A blog, a CMS, or
-   another local feature gets tables named for that use case: `content_blog`,
-   `cms_post`, `cms_page`. The prefix keeps them clear of the engine9 catalog
-   in the same database.
+3. **Self-scope tables that belong only to this project or a third-party
+   plugin.** A blog, a CMS, or a vendor package names tables with a stable
+   company+use-case stem: `acme_blog_post`, `cms_page`, `content_blog`. That
+   stem lives in the schema table names; leave `metadata.prefix` unset so
+   install keeps an empty `plugin.table_prefix` and SQL can use the fixed
+   names. Core does not enforce stems today; pick one you can keep (prefixes
+   may need registration later). See the create-engine9-plugin skill for the
+   third-party recommendation. Do not use `metadata.prefix` unless you need
+   multi-instance hex isolation (`{prefix}_{hex}_`, as with `person_custom`).
 
 ## What is in `.env`
 
@@ -355,7 +366,9 @@ roles: {
 
 Effective scopes are the intersection of the key and the active role; the
 key is always the ceiling; `admin` on one side means that side does not
-constrain. `POST /auth/role` (or `auth.changeRole`) switches roles. Legacy
+constrain. Who may add or remove people in each segment is on the segment row
+and enforced by `POST /auth/segments` and `POST /auth/role`
+([docs/segments.md](docs/segments.md)). Legacy
 `roleSegments: { admin: '<uuid>' }` is still accepted. Soft **declared
 roles** with the same `requiredAuth` shape live in
 [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
@@ -386,7 +399,8 @@ account: [auth/README.md](auth/README.md).
 | `POST /auth/login` | `{ delegate_token }` → `{ session, token }` | API key; 501 until `SESSION_SECRET` / `delegate` is set |
 | `GET /auth/me` | `{ personId, roles, level, domainUnid, domainProfile, profile? }` | API key + session or Identity Token |
 | `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
-| `POST /auth/role` | `{ role_id, person_id?, exclusive? }` | API key + session/token matching `person_id`, or `admin` |
+| `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
+| `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
 
 Everything under `/api` in the shipped Worker and `serve`.
 
@@ -464,7 +478,7 @@ plugin in a package the project lists.
 - `lib/sql/standardizeSchema.js` — dialect-aware column standardization
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy interface schemas
-- `lib/PluginWorker.js` — plugin rows, stack install, `installStandard`, `bootstrapAccount`
+- `lib/PluginWorker.js` — plugin rows, stack install, `installStandard`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
 - `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem)
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
 - `bin/buildPlugins.js` (`e9core build-plugins`) — the same discovery serialized for a Cloudflare bundle

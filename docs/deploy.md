@@ -95,10 +95,13 @@ Before creating a table, decide in this order:
    (`@engine9/interfaces/<name>`). A deployable integration — workers, inbound
    transforms, a vendor — is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
-3. **Prefix tables that belong only to this project.** A blog, a CMS, or
-   another local feature gets tables named for that use case: `content_blog`,
-   `cms_post`, `cms_page`. Those tables live in this same database. The
-   prefix keeps them clear of the engine9 catalog.
+3. **Self-scope tables that belong only to this project or a third-party
+   plugin.** Name them with a stable company+use-case stem in the schema
+   (`acme_blog_post`, `cms_page`, `content_blog`). Leave `metadata.prefix`
+   unset so `plugin.table_prefix` stays empty and SQL can use those fixed
+   names. Core does not enforce stems; choose one you can keep (registration
+   may be required later). Reserve `metadata.prefix` for multi-instance hex
+   isolation only.
 
 The same rule is in the [core README](../README.md#the-project-database).
 

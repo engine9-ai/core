@@ -33,7 +33,7 @@ test('client API: auth, people POST, table upsert, segment-gated reads, modifica
     const segmentId = getVersionedUUID();
     await worker.insertArray({
       table: 'segment',
-      array: [{ id: segmentId, plugin_id: pluginId, name: 'Members', build_type: 'list' }]
+      array: [{ id: segmentId, plugin_id: pluginId, name: 'Members', build_type: 'list', join_min_level: 0 }]
     });
     await worker.createTable({
       table: 'member_content',
@@ -89,6 +89,19 @@ test('client API: auth, people POST, table upsert, segment-gated reads, modifica
       body: { rows: [{ segment_id: segmentId, person_id: carolId }] }
     });
     assert.equal(upserted.status, 200, JSON.stringify(upserted.body));
+
+    const closedId = getVersionedUUID();
+    await worker.insertArray({
+      table: 'segment',
+      array: [{ id: closedId, plugin_id: pluginId, name: 'Closed', build_type: 'manual' }]
+    });
+    const closedUpsert = await api.handle({
+      method: 'POST',
+      path: '/upsert/person_segment',
+      headers,
+      body: { rows: [{ segment_id: closedId, person_id: carolId }] }
+    });
+    assert.equal(closedUpsert.status, 403, 'tables:write cannot write a segment with no join_min_level');
 
     // disallowed table
     const badTable = await api.handle({
@@ -149,7 +162,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     await worker.insertArray({
       table: 'segment',
       array: [
-        { id: vipRoleId, plugin_id: pluginId, name: 'VIP', build_type: 'list' },
+        { id: vipRoleId, plugin_id: pluginId, name: 'VIP', build_type: 'list', join_min_level: 1, leave_min_level: 1 },
         { id: adminRoleId, plugin_id: pluginId, name: 'Admin', build_type: 'list' }
       ]
     });
@@ -231,18 +244,23 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     assert.equal(readOk.status, 200);
 
     const { session } = await delegateAuth.login(identityJwt);
+    const sessionHeaders = { ...headers, 'x-engine9-session': delegateAuth.issueToken(session) };
+    const deniedAdmin = await api.handle({
+      method: 'POST',
+      path: '/auth/role',
+      headers: sessionHeaders,
+      body: { role_id: adminRoleId, exclusive: true }
+    });
+    assert.equal(deniedAdmin.status, 403, 'a signed-in person cannot grant themselves a closed role');
+
     const changed = await api.handle({
       method: 'POST',
       path: '/auth/role',
-      headers,
-      body: {
-        role_id: adminRoleId,
-        session_token: delegateAuth.issueToken(session),
-        exclusive: true
-      }
+      headers: sessionHeaders,
+      body: { role_id: vipRoleId, exclusive: true }
     });
     assert.equal(changed.status, 200, JSON.stringify(changed.body));
-    assert.deepEqual(changed.body.roles, [adminRoleId]);
+    assert.deepEqual(changed.body.roles, [vipRoleId]);
     assert.ok(changed.body.token);
 
     // Without delegateAuth, endpoint reports 501

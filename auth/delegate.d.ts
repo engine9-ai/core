@@ -198,10 +198,24 @@ export function sessionNeedsRole(
 ): boolean;
 
 export function normalizeRoleRegistry(options?: {
-  roles?: Record<string, RoleDefinition | string>;
+  /** UUID-keyed map, or `'standard'` (requires accountId; see auth/roles). */
+  roles?: Record<string, RoleDefinition | string> | "standard";
   /** @deprecated Prefer `roles` keyed by segment UUID. */
   roleSegments?: Record<string, string>;
+  accountId?: string;
 }): Record<string, RoleDefinition>;
+
+/** Membership operations take a role name from the registry or a segment id. */
+export interface RoleMembershipOptions {
+  role: string;
+  emails?: string[];
+  personIds?: Array<number | string>;
+}
+
+export interface RoleMember {
+  person_id: number;
+  emails: string[];
+}
 
 export function resolveRoleId(
   registry: Record<string, RoleDefinition>,
@@ -275,6 +289,26 @@ export interface DelegateAuth {
     exclusive?: boolean;
     session?: DelegateSession | null;
   }): Promise<{ roles: string[]; session: DelegateSession; token: string }>;
+  /** Create the segment rows behind the standard registry (idempotent). `roles: 'standard'` only. */
+  ensureSegments(): Promise<Record<string, RoleDefinition>>;
+  /**
+   * Add people to a role by email (new emails become people first) or person_id.
+   * A "user" is a person in a role segment; this is how one is created.
+   */
+  addPeople(options: RoleMembershipOptions): Promise<{
+    segmentId: string;
+    personIds: number[];
+    byEmail: Record<string, number>;
+    added: number[];
+  }>;
+  /** Remove people from a role. Unknown emails are ignored; never creates people. */
+  removePeople(options: RoleMembershipOptions): Promise<{
+    segmentId: string;
+    personIds: number[];
+    removed: number[];
+  }>;
+  /** Members of a role with their emails. */
+  members(options: { role: string }): Promise<RoleMember[]>;
   /** Normalized UUID-keyed role registry. */
   roleRegistry: Record<string, RoleDefinition>;
 }
@@ -299,8 +333,11 @@ export function createDelegateAuth(config: {
   inputType?: string;
   /**
    * Preferred role registry. Keys are role_id === segment_id UUIDs.
+   * `'standard'` derives the registry from worker.accountId with the names in
+   * auth/roleNames.js (admin, operator). Other role names are site-specific
+   * and belong in an explicit registry, not in `'standard'`.
    */
-  roles?: Record<string, RoleDefinition>;
+  roles?: Record<string, RoleDefinition> | "standard";
   /**
    * @deprecated Prefer `roles` keyed by segment UUID.
    * Legacy map of display name -> segment id; normalized into `roleRegistry`.

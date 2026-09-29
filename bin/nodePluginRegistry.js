@@ -33,7 +33,14 @@ import {
   getDefaultPluginRegistry,
   setDefaultPluginRegistry
 } from '../lib/pluginRegistry.js';
-import { SKIP_DIRS, collectPluginEntries, discoverPackagePlugins, packageRoot, readEngine9Config } from './buildPlugins.js';
+import {
+  SKIP_DIRS,
+  collectPluginEntries,
+  discoverPackagePlugins,
+  packageRoot,
+  readEngine9Config,
+  readPackageVersion
+} from './buildPlugins.js';
 
 const VERSION_PARAM = 'e9v';
 const STATIC_HINT =
@@ -90,9 +97,9 @@ function newestMtime(dir) {
 
 /** Static half: `pluginPackages`, walked once. */
 function createStaticNodeRegistry({ cwd, packages, name }) {
-  const { entries } = collectPluginEntries({ cwd, packages, peerFallback: true });
+  const collected = collectPluginEntries({ cwd, packages, peerFallback: true });
   const table = {};
-  for (const e of entries) {
+  for (const e of collected.entries) {
     const thunk = (file) => () => withFile(file, () => import(pathToFileURL(file).href));
     table[e.identity] = {
       index: thunk(e.files.index),
@@ -102,7 +109,12 @@ function createStaticNodeRegistry({ cwd, packages, name }) {
       resolvedFsEntry: e.files.index
     };
   }
-  return createPluginRegistry(table, { name, packages, hint: STATIC_HINT });
+  return createPluginRegistry(table, {
+    name,
+    packages: collected.packages,
+    packageVersions: collected.packageVersions,
+    hint: STATIC_HINT
+  });
 }
 
 /** Dynamic half: `dynamicPluginPackages`, resolved on every call. */
@@ -133,6 +145,10 @@ function createDynamicNodeRegistry({ cwd, packages, name }) {
     name,
     async packages() {
       return [...packages].sort();
+    },
+    async packageVersion(packageName) {
+      if (!roots.has(packageName)) return null;
+      return readPackageVersion(cwd, packageName);
     },
     async paths() {
       return packages

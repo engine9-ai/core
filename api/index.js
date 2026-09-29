@@ -15,9 +15,15 @@
     POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth)
     GET  /auth/me               -- current User from session or Identity Token
     POST /auth/logout           -- { loggedOut: true }; cookie clear is the host's job
-    POST /auth/role             -- change role (requires delegateAuth); body:
-                                   { role_id, person_id?, exclusive?, session_token? }
-                                   person_id without a matching session/JWT needs admin
+    POST /auth/role             -- change the caller's role (requires delegateAuth)
+                                   body: { role_id, person_id?, exclusive?, session_token? }
+                                   Same membership rules as /auth/segments, then
+                                   returns a re-signed session token.
+    POST /auth/segments         -- add or remove people in segments
+                                   body: { add?: [...], remove?: [...] }
+                                   an entry is a segment id (yourself) or
+                                   { segment_id, person_id | email } (someone else)
+                                   See docs/segments.md.
 
   Auth layers (see package README):
     1. API key (required on all routes except /ok)
@@ -39,6 +45,7 @@
         defaultRemoteInputId: 'website',
         upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
         roles: { '<segment-uuid>': { name: 'VIP', scopes: ['data:read'] } },
+                          // or roles: 'standard' (auth/roleNames.js, ids from worker.accountId)
         reads: {
           content: { table: 'content', segmentId: null, columns: ['*'] }
         }
@@ -58,8 +65,11 @@ import {
   normalizeRoleRegistry,
   resolveDelegatePersonId,
   isDelegateIdentityJwt,
-  domainFromUrl
+  domainFromUrl,
+  resolveRoleId
 } from '../auth/delegate.js';
+import { canEditSegmentMembership, loadMembershipPolicies } from '../auth/segmentAccess.js';
+import { addPeopleToSegment, removePeopleFromSegment } from '../auth/roles.js';
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
 import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
@@ -221,7 +231,11 @@ export function createApi({
 
   const rolesRegistry =
     delegateAuth?.roleRegistry ||
-    normalizeRoleRegistry({ roles: configRoles, roleSegments: configRoleSegments });
+    normalizeRoleRegistry({
+      roles: configRoles,
+      roleSegments: configRoleSegments,
+      accountId: worker?.accountId
+    });
 
   function authContextFor({ apiKey, query, body, session }) {
     const roleId =
@@ -252,6 +266,44 @@ export function createApi({
     return requireAnyScope(ctx, [scope]);
   }
 
+  async function heldRoleIds(personId) {
+    if (!personId) return [];
+    const { data } = await worker.query({
+      sql: 'select segment_id from person_segment where person_id=?',
+      values: [personId]
+    });
+    return (data || []).map((row) => row.segment_id);
+  }
+
+  function callerFrom({ ctx, session, roleIds }) {
+    return {
+      isAdmin: scopesAllow(ctx.scopes, SCOPES.ADMIN),
+      level: session?.level ?? 0,
+      personId: session?.personId ?? null,
+      roleIds: roleIds || [],
+      scopes: ctx.scopes || [],
+      twoFactor: Boolean(session?.auth?.twoFactor)
+    };
+  }
+
+  function segmentIdsOnPeople(people, options) {
+    const ids = [];
+    const push = (value) => {
+      if (value == null || value === '') return;
+      for (const part of String(value).split(',')) {
+        const id = part.trim();
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+    };
+    push(options?.segmentIds);
+    push(options?.segment_ids);
+    for (const person of Array.isArray(people) ? people : []) {
+      push(person?.segment_ids);
+      push(person?.segmentIds);
+    }
+    return ids;
+  }
+
   async function logModification(entry) {
     try {
       await logger.log({ accountId: worker.accountId, ...entry });
@@ -274,6 +326,23 @@ export function createApi({
     }
     if (people.length > maxBatchSize) return json(400, { error: `body.people exceeds max batch size ${maxBatchSize}` });
     const options = body.options || {};
+    const requestedSegments = segmentIdsOnPeople(people, options);
+    if (requestedSegments.length) {
+      // The people in the batch are not signed in, whatever session the
+      // caller has, so a session cannot attach a self-service role to
+      // someone else's email. Only join_min_level 0 (public lists) passes.
+      const policies = await loadMembershipPolicies(worker, requestedSegments, rolesRegistry);
+      const caller = callerFrom({ ctx, session: null, roleIds: [] });
+      for (const segmentId of requestedSegments) {
+        const decision = canEditSegmentMembership({
+          policy: policies[segmentId] || null,
+          operation: 'add',
+          caller,
+          targetPersonId: null
+        });
+        if (!decision.allowed) return json(403, { error: decision.reason, segment_id: segmentId, subject: decision.subject });
+      }
+    }
     if (!pluginId && !options.doNotUpsert) return json(500, { error: 'api is not configured with a pluginId' });
     let summary;
     try {
@@ -317,6 +386,30 @@ export function createApi({
     const rows = body?.rows || body?.array;
     if (!Array.isArray(rows) || rows.length === 0) return json(400, { error: 'body.rows must be a non-empty array' });
     if (rows.length > maxBatchSize) return json(400, { error: `body.rows exceeds max batch size ${maxBatchSize}` });
+    if (table === 'person_segment' && !scopesAllow(ctx.scopes, SCOPES.ADMIN)) {
+      // A tables:write key may bulk-add people only to segments people could
+      // add themselves to (join_min_level is not null). Segments with no
+      // join_min_level (including both standard roles) need admin scope or
+      // POST /auth/segments as a manager.
+      const segmentIds = [];
+      for (const row of rows) {
+        const segmentId = row?.segment_id == null ? '' : String(row.segment_id).trim();
+        if (!segmentId) return json(400, { error: 'person_segment rows require segment_id' });
+        if (!segmentIds.includes(segmentId)) segmentIds.push(segmentId);
+      }
+      const policies = await loadMembershipPolicies(worker, segmentIds, rolesRegistry);
+      for (const segmentId of segmentIds) {
+        const policy = policies[segmentId];
+        if (!policy) return json(403, { error: 'unknown segment', segment_id: segmentId });
+        if (policy.joinMinLevel == null) {
+          return json(403, {
+            error: `cannot add other people to ${policy.name ? `'${policy.name}'` : 'this segment'} by upsert: join_min_level is not set, so this needs admin scope (or POST /auth/segments as its manager)`,
+            segment_id: segmentId,
+            subject: 'other'
+          });
+        }
+      }
+    }
     try {
       await worker.upsertArray({ table, array: rows });
     } catch (e) {
@@ -508,10 +601,36 @@ export function createApi({
     if (!personId) return json(400, { error: 'person_id or session is required' });
 
     const exclusive = body?.exclusive !== undefined ? Boolean(body.exclusive) : true;
+    const resolvedRoleId = resolveRoleId(rolesRegistry, roleId) || roleId;
+    if (!isAdmin) {
+      if (!session?.personId) return json(401, { error: 'session or identity token required' });
+      const held = await heldRoleIds(session.personId);
+      const caller = callerFrom({ ctx, session, roleIds: held });
+      const policies = await loadMembershipPolicies(worker, [resolvedRoleId, ...held], rolesRegistry);
+      const add = canEditSegmentMembership({
+        policy: policies[resolvedRoleId] || null,
+        operation: 'add',
+        caller,
+        targetPersonId: session.personId
+      });
+      if (!add.allowed) return json(403, { error: add.reason, segment_id: resolvedRoleId, subject: add.subject });
+      if (exclusive) {
+        for (const heldId of held) {
+          if (heldId === resolvedRoleId) continue;
+          const remove = canEditSegmentMembership({
+            policy: policies[heldId] || null,
+            operation: 'remove',
+            caller,
+            targetPersonId: session.personId
+          });
+          if (!remove.allowed) return json(403, { error: remove.reason, segment_id: heldId, subject: remove.subject });
+        }
+      }
+    }
     try {
       const result = await delegateAuth.changeRole({
         personId,
-        roleId,
+        roleId: resolvedRoleId,
         exclusive,
         session
       });
@@ -532,6 +651,138 @@ export function createApi({
       if (msg.indexOf('Unknown role') === 0) return json(400, { error: msg });
       return json(422, { error: msg });
     }
+  }
+
+  /**
+   * Parse one list of membership edits. An entry is either a segment id
+   * string (the session person) or { segment_id, person_id? | email? }.
+   * No person_id and no email also means the session person.
+   */
+  function membershipEdits(value, label) {
+    if (value == null) return [];
+    if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+    return value.map((item) => {
+      if (typeof item === 'string') {
+        const segmentId = item.trim();
+        if (!segmentId) throw new Error(`${label} entries require segment_id`);
+        return { segmentId, email: '', personId: null, self: true };
+      }
+      if (!item || typeof item !== 'object') throw new Error(`${label} entries must be a segment id or an object`);
+      const segmentId = String(item.segment_id || item.segmentId || '').trim();
+      const email = item.email == null ? '' : String(item.email).trim();
+      const rawPerson = item.person_id ?? item.personId;
+      const personId = rawPerson == null || rawPerson === '' ? null : Number(rawPerson);
+      if (!segmentId) throw new Error(`${label} entries require segment_id`);
+      if (rawPerson != null && rawPerson !== '' && !Number.isInteger(personId)) {
+        throw new Error(`${label} person_id must be an integer`);
+      }
+      return { segmentId, email, personId: Number.isInteger(personId) ? personId : null, self: !email && personId == null };
+    });
+  }
+
+  /**
+   * Add or remove people in segments. One rule, `canEditSegmentMembership`,
+   * decides every entry before anything is written. Yourself: governed by
+   * join_min_level / leave_min_level. Someone else: manager_role_id or
+   * admin scope. Adding by email creates the person (people:write or admin,
+   * and pluginId).
+   */
+  async function postAuthSegments({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const isAdmin = scopesAllow(ctx.scopes, SCOPES.ADMIN);
+    if (body && (body.join !== undefined || body.leave !== undefined)) {
+      return json(400, { error: 'join and leave are not accepted; use add and remove with a bare segment id for yourself' });
+    }
+    let adds;
+    let removes;
+    try {
+      adds = membershipEdits(body?.add, 'add');
+      removes = membershipEdits(body?.remove, 'remove');
+    } catch (e) {
+      return json(400, { error: String(e.message || e) });
+    }
+    const edits = [
+      ...adds.map((item) => ({ ...item, operation: 'add' })),
+      ...removes.map((item) => ({ ...item, operation: 'remove' }))
+    ];
+    if (!edits.length) return json(400, { error: 'body must include add or remove' });
+
+    const selfEdits = edits.filter((item) => item.self);
+    const otherEdits = edits.filter((item) => !item.self);
+    if (selfEdits.length && !session?.personId) {
+      return json(401, {
+        error: 'an entry with no person_id or email means yourself, which requires a session or identity token',
+        subject: 'self'
+      });
+    }
+    if (otherEdits.length && !session?.personId && !isAdmin) {
+      return json(401, { error: 'changing other people requires a session or admin scope', subject: 'other' });
+    }
+    const emailEdits = otherEdits.some((item) => item.email);
+    if (emailEdits && !isAdmin && !scopesAllow(ctx.scopes, SCOPES.PEOPLE_WRITE)) {
+      return json(403, { error: 'entries with email require people:write or admin scope', subject: 'other' });
+    }
+    if (adds.some((item) => item.email) && !pluginId) return json(500, { error: 'api is not configured with a pluginId' });
+
+    // Self entries are the session person. Other entries carry the target
+    // id, or -1 when only an email is known: still "someone else".
+    for (const item of edits) {
+      item.targetPersonId = item.self ? session.personId : (item.personId ?? -1);
+    }
+    const held = session?.personId ? await heldRoleIds(session.personId) : [];
+    const caller = callerFrom({ ctx, session, roleIds: held });
+    const policies = await loadMembershipPolicies(worker, edits.map((item) => item.segmentId), rolesRegistry);
+    for (const item of edits) {
+      const decision = canEditSegmentMembership({
+        policy: policies[item.segmentId] || null,
+        operation: item.operation,
+        caller,
+        targetPersonId: item.targetPersonId
+      });
+      if (!decision.allowed) {
+        return json(403, {
+          error: decision.reason,
+          segment_id: item.segmentId,
+          operation: item.operation,
+          subject: decision.subject
+        });
+      }
+    }
+
+    try {
+      for (const item of edits) {
+        const args = {
+          worker,
+          segmentId: item.segmentId,
+          emails: item.email ? [item.email] : [],
+          personIds: item.email ? [] : [item.targetPersonId]
+        };
+        if (item.operation === 'add') await addPeopleToSegment({ ...args, pluginId });
+        else await removePeopleFromSegment(args);
+      }
+    } catch (e) {
+      debug('postAuthSegments error:', e);
+      const msg = String(e.message || e);
+      const status = /not an email/i.test(msg) ? 400 : 422;
+      return json(status, { error: msg });
+    }
+    await logModification({
+      action: 'segment.membership',
+      apiKeyId: apiKey?.id,
+      roleId: ctx.roleId,
+      personIds: [...new Set(edits.map((item) => item.targetPersonId).filter((id) => id > 0))],
+      meta: { add: adds.length, remove: removes.length, self: selfEdits.length }
+    });
+    const describe = (item) => ({
+      segment_id: item.segmentId,
+      person_id: item.email ? undefined : item.targetPersonId,
+      ...(item.email ? { email: item.email } : {}),
+      subject: item.self ? 'self' : 'other'
+    });
+    return json(200, {
+      add: edits.filter((item) => item.operation === 'add').map(describe),
+      remove: edits.filter((item) => item.operation === 'remove').map(describe)
+    });
   }
 
   /* Core dispatch on a normalized request:
@@ -598,6 +849,13 @@ export function createApi({
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
       result = await postAuthLogout();
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'segments') {
+      result = await postAuthSegments({
+        body: req.body,
+        apiKey,
+        query: req.query || {},
+        session
+      });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'role') {
       result = await postAuthRole({
         body: req.body,

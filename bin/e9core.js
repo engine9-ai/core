@@ -55,6 +55,23 @@
         Reads "engine9.pluginPackages" (or legacy "engine9.plugins") from package.json.
         --check exits non-zero when the file is out of date (for CI).
 
+    e9core segment list    [--db ...] [--account <id>]
+    e9core segment members --segment <role name | segment id>
+    e9core segment add     --segment admin --email a@x.org[,b@y.org] [--emails file.txt] [--person-id 12]
+    e9core segment remove  --segment admin --email a@x.org
+    e9core segment policy  --segment <id> [--join 0-7|none] [--leave 1-7|none] [--manager <role name | id>|none]
+        Membership of any segment. --segment takes a standard role name
+        (admin, operator; ids derive from --account or E9_ACCOUNT_ID,
+        default "local") or any segment id.
+        `add` creates a standard role's segment row if missing, and any people
+        who do not exist yet (under the site plugin: E9_PLUGIN_ID or
+        --plugin-id), so an email can be granted before its owner ever signs
+        in. Email is the key: a later Delegate login with that verified email
+        lands on the same person. `policy` sets who may add or remove
+        themselves (join, leave: Identity Level) and which role may add or
+        remove others (manager). Omitted flags keep their current value.
+        These commands write directly; no membership check runs.
+
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 
   Plugins are every index.js directory and *.plugin.js file in the packages
@@ -77,8 +94,194 @@ import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
+import PersonWorker from '../lib/PersonWorker.js';
+import { getPluginUUID } from '../lib/utilities.js';
+import {
+  STANDARD_ROLES,
+  standardRoleRegistry,
+  roleIdByName,
+  roleSegmentId,
+  ensureRoleSegment,
+  setMembershipPolicy,
+  addPeopleToSegment,
+  removePeopleFromSegment,
+  listSegmentMembers
+} from '../auth/roles.js';
+import { membershipPolicyFromRow } from '../auth/segmentAccess.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+
+function emailsFromArgs(args) {
+  const out = [];
+  const push = (value) => {
+    for (const part of String(value).split(/[\s,;]+/)) {
+      const email = part.trim();
+      if (email && !email.startsWith('#') && !out.includes(email)) out.push(email);
+    }
+  };
+  if (args.email && args.email !== true) push(args.email);
+  if (args.emails && args.emails !== true) {
+    const file = path.resolve(process.cwd(), String(args.emails));
+    if (!existsSync(file)) {
+      console.error(`--emails file not found: ${file}`);
+      process.exit(1);
+    }
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      const text = line.replace(/#.*$/, '').trim();
+      if (text) push(text);
+    }
+  }
+  return out;
+}
+
+/** `--join 3`, `--leave none`. Returns undefined when the flag is absent. */
+function levelFlag(value) {
+  if (value === undefined || value === true) return undefined;
+  const text = String(value).trim().toLowerCase();
+  if (text === 'none' || text === 'null' || text === '') return null;
+  return Number(text);
+}
+
+async function segmentCommand(args) {
+  const [, action] = args._;
+  const db = args.db || process.env.ENGINE9_DATABASE_CONNECTION;
+  if (!db) {
+    console.error('Provide --db <connection> or set ENGINE9_DATABASE_CONNECTION');
+    process.exit(1);
+  }
+  const accountId = args.account || process.env.E9_ACCOUNT_ID || 'local';
+  const pluginId = args['plugin-id'] || process.env.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
+  const registry = standardRoleRegistry(accountId);
+  const roleNames = STANDARD_ROLES.map((r) => r.name).join(', ');
+  // A role name or a raw segment id.
+  const resolveSegment = (value) => {
+    if (!value || value === true) return null;
+    return roleIdByName(registry, value) || String(value).trim();
+  };
+
+  ensureNodePluginRegistry({ cwd: process.cwd() });
+  const worker = new PersonWorker({ accountId, auth: { database_connection: db } });
+  try {
+    if (action === 'list' || !action) {
+      const { data } = await worker.query(
+        'select id, name, category, build_type, join_min_level, leave_min_level, manager_role_id from segment order by category, name'
+      );
+      const byId = Object.fromEntries(data.map((row) => [row.id, row]));
+      console.log(`account ${accountId}`);
+      console.log(`${'name'.padEnd(24)} ${'id'.padEnd(36)} join  leave  manager`);
+      for (const row of data) {
+        const policy = membershipPolicyFromRow(row);
+        const manager = policy.managerRoleId
+          ? registry[policy.managerRoleId]?.name || byId[policy.managerRoleId]?.name || policy.managerRoleId
+          : '-';
+        const label = registry[row.id] ? `${registry[row.id].name} (role)` : row.name;
+        console.log(`${String(label).padEnd(24)} ${row.id}  ${String(policy.joinMinLevel ?? '-').padEnd(5)} ${String(policy.leaveMinLevel ?? '-').padEnd(6)} ${manager}`);
+      }
+      const missing = Object.entries(registry).filter(([id]) => !byId[id]);
+      if (missing.length) {
+        console.log(`\nStandard roles with no segment row yet (created on first add): ${missing.map(([, r]) => r.name).join(', ')}`);
+      }
+      if (!action) console.log('\nActions: list | members | add | remove | policy (see --help)');
+      return;
+    }
+
+    const segmentId = resolveSegment(args.segment ?? args.role);
+    if (!segmentId) {
+      console.error(`--segment is required: a standard role name (${roleNames}) or a segment id`);
+      process.exit(1);
+    }
+    const roleName = registry[segmentId]?.name || null;
+    const label = roleName ? { role: roleName, segment_id: segmentId } : { segment_id: segmentId };
+
+    if (action === 'members') {
+      const list = await listSegmentMembers({ worker, segmentId });
+      console.log(JSON.stringify({ ...label, members: list }, null, 2));
+      return;
+    }
+
+    if (action === 'policy') {
+      const { data } = await worker.query({ sql: 'select * from segment where id=?', values: [segmentId] });
+      if (!data.length) {
+        console.error(`No segment ${segmentId} in this database.`);
+        process.exit(1);
+      }
+      const current = membershipPolicyFromRow(data[0]);
+      const join = levelFlag(args.join);
+      const leave = levelFlag(args.leave);
+      let manager;
+      if (args.manager !== undefined && args.manager !== true) {
+        const text = String(args.manager).trim().toLowerCase();
+        manager = text === 'none' || text === 'null' || text === '' ? null : resolveSegment(args.manager);
+      }
+      if (join === undefined && leave === undefined && manager === undefined) {
+        console.log(JSON.stringify({ ...label, name: data[0].name, ...current }, null, 2));
+        return;
+      }
+      let stored;
+      try {
+        stored = await setMembershipPolicy({
+          worker,
+          segmentId,
+          joinMinLevel: join === undefined ? current.joinMinLevel : join,
+          leaveMinLevel: leave === undefined ? current.leaveMinLevel : leave,
+          managerRoleId: manager === undefined ? current.managerRoleId : manager
+        });
+      } catch (e) {
+        console.error(String(e.message || e));
+        process.exit(1);
+      }
+      console.log(JSON.stringify({ ...label, name: data[0].name, ...stored }, null, 2));
+      return;
+    }
+
+    if (action !== 'add' && action !== 'remove') {
+      console.error(`Unknown segment action '${action}'. Use list, members, add, remove, or policy.`);
+      process.exit(1);
+    }
+    const emails = emailsFromArgs(args);
+    const personIds = args['person-id'] && args['person-id'] !== true
+      ? String(args['person-id']).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+    if (!emails.length && !personIds.length) {
+      console.error(`segment ${action} requires --email <a@x.org[,b@y.org]>, --emails <file>, or --person-id <id>`);
+      process.exit(1);
+    }
+    if (action === 'add') {
+      const { data: pluginRows } = await worker.query({ sql: 'select id from plugin where id=?', values: [pluginId] });
+      if (!pluginRows.length) {
+        console.error(`No plugin row ${pluginId} in this database. Run npx e9core setup first, or pass --plugin-id <uuid> for the site plugin.`);
+        process.exit(1);
+      }
+      if (roleName) {
+        const def = STANDARD_ROLES.find((role) => role.name === roleName);
+        if (def?.managerRole) await ensureRoleSegment({ worker, accountId, name: def.managerRole });
+        await ensureRoleSegment({
+          worker,
+          accountId,
+          name: roleName,
+          policy: {
+            joinMinLevel: def.joinMinLevel ?? null,
+            leaveMinLevel: def.leaveMinLevel ?? null,
+            managerRoleId: def.managerRole ? roleSegmentId(accountId, def.managerRole) : null
+          }
+        });
+      } else {
+        const { data } = await worker.query({ sql: 'select id from segment where id=?', values: [segmentId] });
+        if (!data.length) {
+          console.error(`No segment ${segmentId} in this database. Standard role names are ${roleNames}.`);
+          process.exit(1);
+        }
+      }
+      const { segmentId: _a, ...result } = await addPeopleToSegment({ worker, pluginId, segmentId, emails, personIds });
+      console.log(JSON.stringify({ ...label, ...result }, null, 2));
+      return;
+    }
+    const { segmentId: _r, ...result } = await removePeopleFromSegment({ worker, segmentId, emails, personIds });
+    console.log(JSON.stringify({ ...label, ...result }, null, 2));
+  } finally {
+    await worker.destroy();
+  }
+}
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -311,6 +514,12 @@ async function main() {
       }
       break;
     }
+    case 'segment':
+    case 'role': {
+      if (command === 'role') console.error('e9core role is now e9core segment (--segment replaces --role).');
+      await segmentCommand(args);
+      break;
+    }
     case 'build-plugins': {
       const result = buildPlugins({
         cwd: process.cwd(),
@@ -326,7 +535,7 @@ async function main() {
     }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
-      console.log('Other commands: e9core <serve|setup-keys|create-api-key|sqlite-ddl|installStandard|build-plugins>');
+      console.log('Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installStandard|build-plugins>');
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }

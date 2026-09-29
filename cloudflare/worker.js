@@ -27,13 +27,18 @@
   configures both).
 */
 import PersonWorker from '@engine9/core/PersonWorker';
-import plugins from '@engine9/core/plugins/site';
+import pluginEntries, { packageVersions } from '@engine9/core/plugins/site';
+import { createPluginRegistry } from '@engine9/core/pluginRegistry';
 import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';
 import { BatchLogger, NullLogger, r2Sink } from '@engine9/core/logging';
 import { createApi } from '@engine9/core/api';
 import { PersonIdentifierDO } from '@engine9/core/id';
 
 export { PersonIdentifierDO };
+
+const plugins = pluginEntries
+  ? createPluginRegistry(pluginEntries, { packageVersions: packageVersions || {} })
+  : null;
 
 export default {
   async fetch(request, env, ctx) {

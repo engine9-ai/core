@@ -13,17 +13,20 @@ Provider-specific terms (UNID) are in
 
 This is **not** OpenID Connect. Do not invent OIDC discovery, `id_token`
 aliases, or extra OIDC claims. The default provider’s wire protocol is
-[`id` protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
+`id` [protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
 
 ## Layout
 
-| File | Role |
-| --- | --- |
-| `index.js` | API keys (`SqlApiKeyStore`, `KVApiKeyStore`, prefixes, catalog) |
-| `policy.js` | Scopes, `requiredAuth` (`minLevel`, `twoFactor`), `resolveAuthContext` |
-| `hmac.js` | `encoded.sig` HMAC helpers (Core Session + legacy bridge) |
-| `delegate.js` | Identity Tokens, person + role + session |
-| `delegate.d.ts` | Types for `createDelegateAuth` and JWT verification |
+| File               | Role                                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `index.js`         | API keys (`SqlApiKeyStore`, `KVApiKeyStore`, prefixes, catalog)                                                        |
+| `policy.js`        | Scopes, `requiredAuth` (`minLevel`, `twoFactor`), `resolveAuthContext`                                                 |
+| `hmac.js`          | `encoded.sig` HMAC helpers (Core Session + legacy bridge)                                                              |
+| `delegate.js`      | Identity Tokens, person + role + session                                                                               |
+| `delegate.d.ts`    | Types for `createDelegateAuth` and JWT verification                                                                    |
+| `roles.js`         | Role segments: standard names, deterministic ids, add/remove people by email ([docs/segments.md](../docs/segments.md)) |
+| `roleNames.js`     | `ROLE_NAMES`, `STANDARD_ROLES`                                                                                         |
+| `segmentAccess.js` | `canEditSegmentMembership` — join, leave, manager ([docs/segments.md](../docs/segments.md))                            |
 
 ## Authentication vs authorization
 
@@ -32,8 +35,8 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 2. **Role** (layer 2) — `role_id === segment_id`. Effective scopes =
    key ∩ role (`intersectScopes`). Soft **declared roles** with the same
    `requiredAuth` shape (no `person_id`) are documented in
-   [`@engine9/id` declared roles](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
-   and demonstrated in [`demo-id`](https://github.com/engine9-ai/demo-id).
+   `@engine9/id` [declared roles](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
+   and demonstrated in `[demo-id](https://github.com/engine9-ai/demo-id)`.
 3. **Identity Level** (layer 3) — `requiredAuth.minLevel` and
    `requiredAuth.twoFactor` against the session / Identity Token. Levels are
    not authorization.
@@ -66,12 +69,12 @@ is at least 2.
 createDelegateAuth({
   worker,
   delegateUrl,
-  domain,            // JWT aud (host[:port]); else domainFromUrl(returnTo) on login
-  sessionSecret,     // required — HMAC Core Session
+  domain, // JWT aud (host[:port]); else domainFromUrl(returnTo) on login
+  sessionSecret, // required — HMAC Core Session
   pluginId,
-  roles,             // { [segmentUuid]: { name, scopes, requiredAuth } }
-  fetchImpl
-})
+  roles, // { [segmentUuid]: { name, scopes, requiredAuth } }
+  fetchImpl,
+});
 ```
 
 `login(token)` accepts an Identity Token (JWT). Verification uses the
@@ -83,6 +86,16 @@ provider JWKS. No shared secret.
 `verifyIdentityToken(jwt)` is the same JWKS check with constructor `domain` /
 `delegateUrl`.
 
+`roles: 'standard'` builds the registry from `worker.accountId` with the
+canonical names in `roleNames.js` (`admin`, `operator`). Any other role
+name is site-specific: put it in an explicit `config.roles` map (or install
+it outside core). `auth.ensureSegments()`, `auth.addPeople({ role, emails })`,
+`auth.removePeople({ role, emails })`, and `auth.members({ role })` manage
+membership from server-side code. HTTP callers use `POST /auth/segments`
+(`add` / `remove`), which checks `canEditSegmentMembership`
+(`segmentAccess.js`). A "user" is a person in one of these segments. Full
+guide: [docs/segments.md](../docs/segments.md).
+
 ## Local session (`SESSION_SECRET`)
 
 A **Core Session** is a compact HMAC token the host mints after it has
@@ -91,14 +104,13 @@ checks the signature and `exp` in process. It does not call Delegate, fetch
 JWKS, or read the database to decide that the caller is the same User who
 just logged in.
 
-The env name is **`SESSION_SECRET`**. It is the HMAC-SHA256 key. Anyone who
+The env name is `SESSION_SECRET`. It is the HMAC-SHA256 key. Anyone who
 knows it can mint a session the host will accept, so production must use an
 unguessable value kept out of git. Each host has its own value. One host’s
 secret does not sign the engine9 API’s sessions, and the API’s secret does
 not sign another host’s cookie.
 
-Create one (32 random bytes, hex). This is the same generator `e9core
-setup-keys` uses:
+Create one (32 random bytes, hex). This is the same generator `e9core setup-keys` uses:
 
 ```bash
 openssl rand -hex 32
@@ -110,10 +122,10 @@ secret. Rotate with `npx e9core setup-keys --rotate`, then `--remote` again.
 
 ### What it is, and what it is not
 
-| Secret | Who holds it | What it does |
-| --- | --- | --- |
-| `SESSION_SECRET` | Your Domain’s host, or the engine9 API host | Signs that host’s local session |
-| `E9_ADMIN_API_KEY` / `E9_PUBLIC_API_KEY` | The caller | Authorizes the HTTP API. Empty scopes deny |
+| Secret                                   | Who holds it                                | What it does                               |
+| ---------------------------------------- | ------------------------------------------- | ------------------------------------------ |
+| `SESSION_SECRET`                         | Your Domain’s host, or the engine9 API host | Signs that host’s local session            |
+| `E9_ADMIN_API_KEY` / `E9_PUBLIC_API_KEY` | The caller                                  | Authorizes the HTTP API. Empty scopes deny |
 
 Identity Tokens are verified with the provider’s public JWKS
 (`{delegateUrl}/.well-known/jwks.json`). The signing key stays on the
@@ -125,12 +137,12 @@ provider). Requests after that need `SESSION_SECRET`.
 
 ### When a request hits Delegate
 
-| Call | Credential | Delegate? |
-| --- | --- | --- |
-| `POST /auth/login` with `delegate_token` | Identity Token (JWT, `aud` = Domain) | Yes. JWKS verify, then map UNID → `person_id` |
-| `GET /auth/me`, `POST /auth/role`, other routes with `X-Engine9-Session` or the session cookie | Core Session | No. HMAC + `exp` |
-| Same routes with `Authorization: Bearer <jwt>` (three segments, not an API key) | Identity Token | Yes, when `verifyIdentityToken` is configured |
-| `POST /people` and other data routes | API key | No |
+| Call                                                                                           | Credential                           | Delegate?                                     |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------ | --------------------------------------------- |
+| `POST /auth/login` with `delegate_token`                                                       | Identity Token (JWT, `aud` = Domain) | Yes. JWKS verify, then map UNID → `person_id` |
+| `GET /auth/me`, `POST /auth/role`, other routes with `X-Engine9-Session` or the session cookie | Core Session                         | No. HMAC + `exp`                              |
+| Same routes with `Authorization: Bearer <jwt>` (three segments, not an API key)                | Identity Token                       | Yes, when `verifyIdentityToken` is configured |
+| `POST /people` and other data routes                                                           | API key                              | No                                            |
 
 Mint a session when the browser or app will call back many times and you
 want those calls to skip the provider. Send the Identity Token on each
@@ -152,14 +164,14 @@ object is:
 
 ```js
 {
-  personId,          // person in this database
-  roles,             // role_id values (segment UUIDs)
-  domainUnid,        // the provider's id for this person on this Domain (token `sub`)
-  domainProfile,     // which Profile is acting (token `domain_profile`)
-  email,             // only when the provider said it was verified, or level >= 2
-  auth,              // { signInProvider, twoFactor, signInSecondFactor, authTime }
-  level,             // Identity Level from the provider
-  exp                // unix milliseconds
+  (personId, // person in this database
+    roles, // role_id values (segment UUIDs)
+    domainUnid, // the provider's id for this person on this Domain (token `sub`)
+    domainProfile, // which Profile is acting (token `domain_profile`)
+    email, // only when the provider said it was verified, or level >= 2
+    auth, // { signInProvider, twoFactor, signInSecondFactor, authTime }
+    level, // Identity Level from the provider
+    exp); // unix milliseconds
 }
 ```
 
@@ -167,12 +179,12 @@ The host delivers the token. Core will not set a cookie for you.
 
 ```js
 createSessionCookieHeaders(token, {
-  cookieName: 'session',
+  cookieName: "session",
   maxAge: 86400,
   secure: true,
-  sameSite: 'lax',
-  path: '/'
-})
+  sameSite: "lax",
+  path: "/",
+});
 // → Set-Cookie header value (HttpOnly)
 ```
 
@@ -220,11 +232,11 @@ All routes except `GET /ok` require an API key.
   before SQL, `setDelegatePersonId` after resolve.
 - Keep `X-Engine9-Session` for HMAC sessions.
 
-| Route | Notes |
-| --- | --- |
-| `POST /auth/login` | API key; body `delegate_token` |
-| `GET /auth/me` | session or JWT → `{ personId, roles, level, domainUnid, domainProfile, profile?, auth }` |
-| `POST /auth/logout` | API key; `{ loggedOut: true }` |
-| `POST /auth/role` | session/JWT `personId` must match `body.person_id`, or `admin` scope |
+| Route               | Notes                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `POST /auth/login`  | API key; body `delegate_token`                                                           |
+| `GET /auth/me`      | session or JWT → `{ personId, roles, level, domainUnid, domainProfile, profile?, auth }` |
+| `POST /auth/logout` | API key; `{ loggedOut: true }`                                                           |
+| `POST /auth/role`   | session/JWT `personId` must match `body.person_id`, or `admin` scope                     |
 
 Error reasons include `invalid_identity_token` and `invalid_domain`.

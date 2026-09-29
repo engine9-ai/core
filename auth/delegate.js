@@ -27,6 +27,13 @@ import {
   verifySignedPayload,
   splitSignedToken
 } from './hmac.js';
+import {
+  standardRoleRegistry,
+  ensureRoleSegments,
+  addPeopleToSegment,
+  removePeopleFromSegment,
+  listSegmentMembers
+} from './roles.js';
 
 /** In-memory JWKS (createLocalJWKSet) keyed by delegateUrl. */
 const delegateJwksCache = new Map();
@@ -194,12 +201,18 @@ export function delegateIdentityUrl({
  * Preferred:
  *   roles: { '<segment-uuid>': { name, scopes?, requiredAuth? } }
  *
+ * Standard names (auth/roleNames.js), ids derived from the account id:
+ *   roles: 'standard'            (requires accountId)
+ *
  * Legacy (deprecated):
  *   roleSegments: { admin: '<segment-uuid>', vip: '<segment-uuid>' }
  */
-export function normalizeRoleRegistry({ roles, roleSegments } = {}) {
+export function normalizeRoleRegistry({ roles, roleSegments, accountId } = {}) {
   const out = {};
-  if (roles && typeof roles === 'object') {
+  if (roles === 'standard') {
+    if (!accountId) throw new Error("roles: 'standard' requires accountId");
+    Object.assign(out, standardRoleRegistry(accountId));
+  } else if (roles && typeof roles === 'object') {
     for (const [key, cfg] of Object.entries(roles)) {
       if (typeof cfg === 'string') {
         // Accidental legacy shape inside `roles`: name -> uuid
@@ -595,7 +608,15 @@ export function sessionNeedsRole(session) {
     await auth.rolesForPerson(id)           // role_ids from person_segment
     await auth.grantRole(id, roleId, opts?)
     await auth.changeRole({ personId, roleId, exclusive?, session? })
+    await auth.ensureSegments()             // create segment rows for the registry
+    await auth.addPeople({ role, emails?, personIds? })     // membership by email
+    await auth.removePeople({ role, emails?, personIds? })
+    await auth.members({ role })            // [{ person_id, emails }]
     auth.roleRegistry                       // normalized UUID-keyed map
+
+    roles: 'standard' uses the canonical names in auth/roleNames.js
+    (admin, operator) with ids derived from worker.accountId
+    (see auth/roles.js). Other role names are site-specific.
 
   loadRolesOnLogin (default true): when false, login() always returns
   session.roles = [] so the site can re-prompt role selection every login.
@@ -618,8 +639,51 @@ export function createDelegateAuth({
 }) {
   if (!worker) throw new Error('createDelegateAuth requires a worker (PersonWorker)');
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
-  const roleRegistry = normalizeRoleRegistry({ roles, roleSegments });
+  const accountId = worker.accountId;
+  const roleRegistry = normalizeRoleRegistry({ roles, roleSegments, accountId });
   const roleIds = Object.keys(roleRegistry);
+
+  function requireRoleId(roleIdOrName, fn) {
+    const roleId = resolveRoleId(roleRegistry, roleIdOrName);
+    if (!roleId) {
+      throw new Error(
+        `${fn}: unknown role '${roleIdOrName}' -- configured roles: ${
+          roleIds.map((id) => `${roleRegistry[id].name} (${id})`).join(', ') || '(none)'
+        }`
+      );
+    }
+    return roleId;
+  }
+
+  /* Membership management. A "user" is a person in a role segment; these
+     add or remove that membership by email (creating the person when new)
+     or by person_id. Emails are the key: Delegate login with a verified
+     email later merges into the same person. */
+  async function addPeople({ role, emails, personIds } = {}) {
+    const segmentId = requireRoleId(role, 'addPeople');
+    return addPeopleToSegment({ worker, pluginId, segmentId, emails, personIds, remoteInputId });
+  }
+
+  async function removePeople({ role, emails, personIds } = {}) {
+    const segmentId = requireRoleId(role, 'removePeople');
+    return removePeopleFromSegment({ worker, segmentId, emails, personIds });
+  }
+
+  async function members({ role } = {}) {
+    const segmentId = requireRoleId(role, 'members');
+    return listSegmentMembers({ worker, segmentId });
+  }
+
+  /* Create the segment rows behind the registry (idempotent). Only the
+     standard registry has account-derived ids; explicit registries name
+     segments the site created itself. */
+  async function ensureSegments() {
+    if (roles !== 'standard') {
+      throw new Error("ensureSegments applies to roles: 'standard'; explicit registries own their segment rows");
+    }
+    await ensureRoleSegments({ worker, accountId });
+    return roleRegistry;
+  }
 
   async function rolesForPerson(personId) {
     if (roleIds.length === 0) return [];
@@ -782,6 +846,10 @@ export function createDelegateAuth({
     rolesForPerson,
     grantRole,
     changeRole,
+    addPeople,
+    removePeople,
+    members,
+    ensureSegments,
     roleRegistry
   };
 }

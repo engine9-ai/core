@@ -164,13 +164,14 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
     aliases: { '@engine9/core/plugins/site': registryFile },
     contents: `
       import PersonWorker from '@engine9/core/PersonWorker';
-      import plugins from '@engine9/core/plugins/site';
-      import { loadRegistrySchema, asPluginRegistry } from '@engine9/core/pluginRegistry';
+      import pluginEntries, { packageVersions } from '@engine9/core/plugins/site';
+      import { createPluginRegistry, loadRegistrySchema } from '@engine9/core/pluginRegistry';
       export async function run() {
+        const plugins = createPluginRegistry(pluginEntries, { packageVersions });
         const worker = new PersonWorker({ accountId: 't', d1: { prepare() { throw new Error('no db'); } }, plugins });
         const person = await worker.compilePlugin({ path: '@engine9/interfaces/person' });
         const step = await worker.resolveTransform({ path: '@engine9/interfaces/person_email:transforms:extractEmailHashes' });
-        const schema = await loadRegistrySchema(asPluginRegistry(plugins), '@engine9/interfaces/person_email');
+        const schema = await loadRegistrySchema(plugins, '@engine9/interfaces/person_email');
         const errors = {};
         try { await worker.compilePlugin({ path: '@engine9/plugins/e9email' }); } catch (e) { errors.notDeclared = e.code; }
         try { await worker.compilePlugin({ path: '@engine9/interfaces/persn' }); } catch (e) { errors.notFound = e.message; }
@@ -180,6 +181,7 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
           transform: typeof step.transform,
           tables: schema.tables.map((t) => t.name),
           paths: await worker.listAvailable(),
+          interfacesVersion: await plugins.packageVersion('@engine9/interfaces'),
           errors
         };
       }
@@ -194,6 +196,7 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
     assert.equal(out.transform, 'function');
     assert.ok(out.tables.includes('person_email'));
     assert.ok(out.paths.includes('@engine9/interfaces/event'));
+    assert.ok(out.interfacesVersion, 'baked packageVersions includes @engine9/interfaces');
     assert.equal(out.errors.notDeclared, 'PLUGIN_PACKAGE_NOT_DECLARED');
     assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/interfaces\/person/);
   } finally {

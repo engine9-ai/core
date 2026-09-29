@@ -63,7 +63,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     await worker.insertArray({
       table: 'segment',
       array: [
-        { id: vipRoleId, plugin_id: pluginId, name: 'VIP', build_type: 'list' },
+        { id: vipRoleId, plugin_id: pluginId, name: 'VIP', build_type: 'list', join_min_level: 1, leave_min_level: 1 },
         { id: adminRoleId, plugin_id: pluginId, name: 'Admin', build_type: 'list' }
       ]
     });
@@ -236,15 +236,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(selfRole.status, 200, JSON.stringify(selfRole.body));
     assert.deepEqual(selfRole.body.roles, [vipRoleId]);
 
-    const adminBare = await api.handle({
-      method: 'POST',
-      path: '/auth/role',
-      headers: adminHeaders,
-      body: { role_id: adminRoleId, person_id: personId, exclusive: true }
-    });
-    assert.equal(adminBare.status, 200, JSON.stringify(adminBare.body));
-    assert.deepEqual(adminBare.body.roles, [adminRoleId]);
-
     const jwtRole = await api.handle({
       method: 'POST',
       path: '/auth/role',
@@ -256,6 +247,15 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     });
     assert.equal(jwtRole.status, 200, JSON.stringify(jwtRole.body));
     assert.deepEqual(jwtRole.body.roles, [vipRoleId]);
+
+    const adminBare = await api.handle({
+      method: 'POST',
+      path: '/auth/role',
+      headers: adminHeaders,
+      body: { role_id: adminRoleId, person_id: personId, exclusive: true }
+    });
+    assert.equal(adminBare.status, 200, JSON.stringify(adminBare.body));
+    assert.deepEqual(adminBare.body.roles, [adminRoleId]);
   } finally {
     await worker.destroy();
   }

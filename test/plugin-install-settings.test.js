@@ -14,7 +14,7 @@ function withSettingsPlugin(worker, settings) {
   worker.compilePlugin = async (opts) => {
     if (opts.path === TEST_PLUGIN_PATH) {
       return {
-        metadata: { name: 'Test Settings', unique: true, version: '1.0.0' },
+        metadata: { name: 'Test Settings', unique: true },
         settings
       };
     }
@@ -154,7 +154,7 @@ test('listSettings continues when one plugin fails to compile', async () => {
   plugins.compilePlugin = async (opts) => {
     if (opts.path === TEST_PLUGIN_PATH) {
       return {
-        metadata: { name: 'Test Settings', unique: true, version: '1.0.0' },
+        metadata: { name: 'Test Settings', unique: true },
         settings: [{ name: 'color', default: 'blue' }]
       };
     }

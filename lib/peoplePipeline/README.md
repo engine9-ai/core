@@ -63,7 +63,6 @@ Two things, both in your package:
 ```js
 const metadata = {
   name: '@acme/engine9-loyalty',
-  version: '1.0.0',
   inbound: {
     id: ['extractLoyaltyNumber'],
     upsert: ['upsertMembership']
