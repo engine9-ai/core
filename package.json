@@ -59,7 +59,7 @@
   "engines": {
     "node": ">=18"
   },
-  "author": "Engine9",
+  "author": "engine9",
   "license": "MIT",
   "dependencies": {
     "@engine9/input-tools": "^2.5.1",
