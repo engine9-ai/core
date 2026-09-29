@@ -311,7 +311,7 @@ maintained as a second copy of the rules.
 ## Upgrading an existing database
 
 The three columns are on `@engine9/interfaces/segment`. Reinstall the
-interfaces (`npx e9core installStandard`, or your usual schema apply) before
+interfaces (`npx e9core installDefaultPlugins`, or your usual schema apply) before
 `ensureRoleSegments` or `POST /auth/segments` runs. Until then every
 membership edit that reads the policy is denied. Role segments created before
 the columns keep `null` in all three; set them with

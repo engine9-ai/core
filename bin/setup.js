@@ -440,7 +440,7 @@ async function withDatabase(cwd, db, name, fn) {
 
 async function installLocalDatabase({ cwd, db, pluginId, name }) {
   await withDatabase(cwd, db, name, async (worker) => {
-    await worker.installStandard();
+    await worker.installDefaultPlugins();
     const { SqlApiKeyStore } = await import('../auth/index.js');
     await new SqlApiKeyStore({ worker }).deploy();
     await worker.query({

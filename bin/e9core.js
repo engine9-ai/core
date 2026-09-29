@@ -6,7 +6,7 @@
   No accounts.d, no WorkerRunner.
 
   This is not the server CLI. @engine9/server publishes bin.e9, which points at
-  server/bin/e9 (WorkerRunner: `e9 personworker installStandard -a …`).
+  server/bin/e9 (WorkerRunner: `e9 personworker installDefaultPlugins -a …`).
   See core/README.md "The e9core CLI" and server/README.md.
 
     e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
@@ -44,10 +44,11 @@
         with wrangler d1 execute --file. migrations apply posts to /query
         and fails on the modified_at triggers this prints.
 
-    e9core installStandard --db sqlite://./engine9.db [--stack ...]
+    e9core installDefaultPlugins --db sqlite://./engine9.db [--stack ...]
         Live-install published person interfaces (default), or an opt-in stack
         with --stack (e.g. @engine9/interfaces/stacks/standard): plugin rows +
-        create/alter tables.
+        create/alter tables. Not the same as the stack named "standard" unless
+        you pass that --stack (or set the warehouse default_stack setting).
 
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
         Write the plugin registry module a Cloudflare Worker is bundled with.
@@ -504,10 +505,10 @@ async function main() {
       }
       break;
     }
-    case 'installStandard': {
+    case 'installDefaultPlugins': {
       const worker = getPluginWorker(args);
       try {
-        const result = await worker.installStandard({ path: args.stack || args.path });
+        const result = await worker.installDefaultPlugins({ path: args.stack || args.path });
         console.log(JSON.stringify(result, null, 2));
       } finally {
         await worker.destroy();
@@ -535,7 +536,7 @@ async function main() {
     }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
-      console.log('Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installStandard|build-plugins>');
+      console.log('Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|build-plugins>');
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }

@@ -21,8 +21,8 @@ Core setup without a provider: [../deploy.md](../deploy.md).
 | **User** | The person delegate knows |
 | **UNID** | Delegate’s id for the person. It stays on delegate. Core never sees it |
 | **Domain UNID** | This Domain’s id for the person (`sub`, `domain:hex`). Core stores Domain UNID → `person_id` |
-| **Profile** | Fields the User agreed to share (`given_name`, `email`, …). Everyone also has the Anonymous Profile |
-| **Domain Profile** | Which Profile is acting (`domain_profile`). Core keeps it on the session; it is not a person key |
+| **Fields** | Values the User agreed to share (`given_name`, `email`, …), on the Identity Token as `fields` |
+| **Grant** | Which of the requested fields this Domain may receive. Core does not store the field values on the session |
 | **Identity Token** | Short-lived JWT delegate signs. The host verifies it |
 | **Domain** | Host or `host:port` for your site. The token `aud` claim must equal it (not a full `https://` origin) |
 
@@ -108,8 +108,8 @@ Verification steps:
 
 1. Fetch `{delegateUrl}/.well-known/jwks.json` (cached in memory).
 2. Verify ES256, `iss`, `aud === domain`, `exp`.
-3. Require `sub` to start with `domain:`. Read `domain_profile`,
-   `merged_from`, `level`, `profile`, and `auth` from the token.
+3. Require `sub` to start with `domain:`. Read `merged_from`, `level`,
+   `fields`, and `auth` from the token.
 
 Person resolution uses the Domain UNID. When Delegate merges a second
 browser into the person's UNID at sign-in, the next token carries
@@ -127,7 +127,7 @@ verified or the Identity Level is at least 2.
 | `delegate_token` | Identity Token |
 | `domain` | Optional override for JWT `aud` (host[:port]); else derived from `return_to` |
 
-`GET /auth/me` includes `personId`, `roles`, `level`, `domainUnid`, and `domainProfile`.
+`GET /auth/me` includes `personId`, `roles`, `level`, `domainUnid`, and `fields` when the request used an Identity Token.
 
 Send visitors to `/identity/authorize` (`auth.identityUrl`).
 

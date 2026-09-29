@@ -27,18 +27,16 @@ async function signDelegateJwt({
   issuer = 'https://delegate.engine9.ai',
   domain = 'site.example.com',
   sub = domainUnidOf(domain, 'a'),
-  domainProfile = `${domain}:anonymous`,
   mergedFrom,
   level = 2,
-  profile,
+  fields,
   auth = { provider: 'google.com', two_factor: true, auth_time: 1234 },
   expires = '1h'
 }) {
   const jwt = new SignJWT({
-    domain_profile: domainProfile,
     merged_from: mergedFrom,
     level,
-    profile,
+    fields,
     auth
   });
   jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
@@ -57,8 +55,6 @@ function domainUnidOf(domain, hexChar) {
 
 const UNID_A = domainUnidOf('site.example.com', 'a');
 const UNID_B = domainUnidOf('site.example.com', 'b');
-const PROFILE_A = domainUnidOf('site.example.com', '9');
-
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
@@ -241,8 +237,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     const { privateKey, publicKey } = await generateKeyPair('ES256');
     const fetchImpl = await jwksFetch(publicKey, 'roles-key');
     const domain = 'site.example.com';
-    const profile = {
-      id: 'prof-roles',
+    const fields = {
       email: 'alice@example.com',
       email_verified: true
     };
@@ -252,8 +247,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
         kid: 'roles-key',
         issuer: 'https://delegate.example.test',
         domain,
-        domainProfile: `${domain}:${'1'.repeat(64)}`,
-        profile,
+        fields,
         auth: { provider: 'google.com', two_factor: twoFactor, auth_time: 1234 }
       });
 
@@ -436,7 +430,7 @@ test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
   assert.match(cookie, /Secure/);
 });
 
-test('createDelegateAuth: login() with JWT creates session with level/domainProfile', async () => {
+test('createDelegateAuth: login() with JWT creates session with level and shared fields', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await applyStandardStack(worker);
@@ -451,8 +445,7 @@ test('createDelegateAuth: login() with JWT creates session with level/domainProf
 
     const jwt = await signDelegateJwt({
       privateKey,
-      profile: { email: 'alice@example.com', email_verified: true, display_name: 'Alice' },
-      domainProfile: PROFILE_A
+      fields: { email: 'alice@example.com', email_verified: true, display_name: 'Alice' },
     });
 
     const fetchImpl = async (url) => {
@@ -468,7 +461,7 @@ test('createDelegateAuth: login() with JWT creates session with level/domainProf
     });
     assert.equal(verifiedUser.domainUnid, UNID_A);
     assert.equal(verifiedUser.level, 2);
-    assert.equal(verifiedUser.domainProfile, PROFILE_A);
+    assert.equal(verifiedUser.fields.email, 'alice@example.com');
     assert.equal(verifiedUser.mergedFrom, undefined);
     assert.equal(verifiedUser.email, 'alice@example.com');
     assert.equal(verifiedUser.emailVerified, true);
@@ -532,7 +525,6 @@ test('createDelegateAuth: login() with JWT creates session with level/domainProf
     assert.ok(session.personId > 0);
     assert.equal(session.domainUnid, UNID_A);
     assert.equal(session.level, 2);
-    assert.equal(session.domainProfile, PROFILE_A);
     assert.equal(session.email, 'alice@example.com');
     assert.equal(session.auth.signInProvider, 'google.com');
     assert.equal(session.auth.twoFactor, true);
@@ -542,11 +534,11 @@ test('createDelegateAuth: login() with JWT creates session with level/domainProf
     const verified = auth.verify(token);
     assert.equal(verified.personId, session.personId);
     assert.equal(verified.level, 2);
-    assert.equal(verified.domainProfile, PROFILE_A);
+    assert.equal(verified.domainUnid, UNID_A);
 
     const again = await auth.verifyIdentityToken(jwt);
     assert.equal(again.domainUnid, UNID_A);
-    assert.equal(again.domainProfile, PROFILE_A);
+    assert.equal(again.fields.display_name, 'Alice');
   } finally {
     await worker.destroy();
   }

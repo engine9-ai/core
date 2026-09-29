@@ -60,7 +60,7 @@ test('standard stack weave equals the historical hardcoded chain', async () => {
 test('limited-pii stack weaves person_hash and no plaintext contact plugin', async () => {
   const worker = newWorker();
   try {
-    await worker.installStandard({ path: LIMITED_PII });
+    await worker.installDefaultPlugins({ path: LIMITED_PII });
     const pluginId = getPluginUUID('engine9.test', 'pii-free-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'pii-free-site', name: 'PII free site' });
 

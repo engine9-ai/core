@@ -6,7 +6,7 @@ import PluginWorker from '../../lib/PluginWorker.js';
 import { getVersionedUUID } from '../../lib/utilities.js';
 
 function asPluginWorker(worker) {
-  if (typeof worker.installStandard === 'function' && typeof worker.install === 'function') return worker;
+  if (typeof worker.installDefaultPlugins === 'function' && typeof worker.install === 'function') return worker;
   return new PluginWorker(worker);
 }
 
@@ -39,5 +39,5 @@ export async function applyInterface(worker, pluginPath) {
 
 export async function applyStandardStack(worker) {
   const plugins = asPluginWorker(worker);
-  return plugins.installStandard({ path: '@engine9/interfaces/stacks/standard' });
+  return plugins.installDefaultPlugins({ path: '@engine9/interfaces/stacks/standard' });
 }

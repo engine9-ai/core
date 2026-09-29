@@ -501,11 +501,10 @@ export function createApi({
       personId,
       roles,
       domainUnid: delegateUser.domainUnid,
-      domainProfile: delegateUser.domainProfile,
       email: delegateUser.email,
       auth: delegateUser.auth || {},
       level: delegateUser.level,
-      profile: delegateUser.profile
+      fields: delegateUser.fields
     };
   }
 
@@ -547,10 +546,9 @@ export function createApi({
       roles: session.roles || [],
       level: session.level ?? null,
       domainUnid: session.domainUnid,
-      domainProfile: session.domainProfile ?? null,
       auth: session.auth || {}
     };
-    if (session.profile) me.profile = session.profile;
+    if (session.fields) me.fields = session.fields;
     return json(200, me);
   }
 

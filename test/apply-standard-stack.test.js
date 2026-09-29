@@ -1,12 +1,12 @@
 import { test } from 'node:test';
-import assert from 'node:assert';
+import assert from 'node:assert/strict';
 import PersonWorker from '../lib/PersonWorker.js';
 import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
 
-test('installStandard bootstraps a SQLite database for the person pipeline', async () => {
+test('installDefaultPlugins bootstraps a SQLite database for the person pipeline', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    const r = await worker.installStandard();
+    const r = await worker.installDefaultPlugins();
     assert.equal(r.complete, true);
     assert.equal(r.path, null);
     assert.deepEqual(r.installed, DEFAULT_CORE_INTERFACES);
@@ -26,7 +26,7 @@ test('installStandard bootstraps a SQLite database for the person pipeline', asy
       assert.ok(tables.indexOf(t) >= 0, `expected table ${t}, got ${tables.join(',')}`);
     }
     for (const t of ['timeline', 'transaction']) {
-      assert.ok(tables.indexOf(t) < 0, `did not expect table ${t} from no-arg installStandard`);
+      assert.ok(tables.indexOf(t) < 0, `did not expect table ${t} from no-arg installDefaultPlugins`);
     }
     const { data: pluginRows } = await worker.query('select path from plugin order by path');
     assert.equal(pluginRows.length, DEFAULT_CORE_INTERFACES.length);
@@ -35,9 +35,74 @@ test('installStandard bootstraps a SQLite database for the person pipeline', asy
       [...DEFAULT_CORE_INTERFACES].sort()
     );
 
-    await worker.installStandard();
+    await worker.installDefaultPlugins();
     const { data: plugins2 } = await worker.query('select path from plugin');
     assert.equal(plugins2.length, pluginRows.length, 'no duplicate plugin rows');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('installDefaultPlugins respects warehouse default_stack setting', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installDefaultPlugins();
+    const { data: pluginRows } = await worker.query({
+      sql: 'select id from plugin where path=?',
+      values: ['@engine9/interfaces/plugin']
+    });
+    assert.ok(pluginRows[0]?.id);
+    await worker.setSetting({
+      pluginId: pluginRows[0].id,
+      name: 'default_stack',
+      value: '@engine9/interfaces/stacks/standard'
+    });
+    const r = await worker.installDefaultPlugins();
+    assert.equal(r.path, '@engine9/interfaces/stacks/standard');
+    const { tables } = await worker.tables();
+    assert.ok(tables.indexOf('timeline') >= 0, 'expected timeline from standard stack');
+    assert.ok(tables.indexOf('transaction') >= 0, 'expected transaction from standard stack');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('installDefaultPlugins respects warehouse exclude_pii setting', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installDefaultPlugins();
+    const { data: pluginRows } = await worker.query({
+      sql: 'select id from plugin where path=?',
+      values: ['@engine9/interfaces/plugin']
+    });
+    assert.ok(pluginRows[0]?.id);
+    await worker.setSetting({
+      pluginId: pluginRows[0].id,
+      name: 'default_stack',
+      value: '@engine9/interfaces/stacks/standard'
+    });
+    await worker.setSetting({
+      pluginId: pluginRows[0].id,
+      name: 'exclude_pii',
+      value: true
+    });
+    const r = await worker.installDefaultPlugins();
+    assert.equal(r.path, '@engine9/interfaces/stacks/limited-pii');
+    await assert.rejects(
+      () => worker.install({ path: '@engine9/interfaces/stacks/standard' }),
+      /exclude_pii/
+    );
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('PersonWorker.installStandard is a deprecated alias for installDefaultPlugins', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    const r = await worker.installStandard();
+    assert.equal(r.complete, true);
+    assert.deepEqual(r.installed, DEFAULT_CORE_INTERFACES);
   } finally {
     await worker.destroy();
   }

@@ -19,7 +19,7 @@ Other libraries that speak it:
 
 | Library | What it is |
 | --- | --- |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms, installed beside core. `installStandard` deploys them into your database |
+| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
 | [`@engine9/id`](https://github.com/engine9-ai/id) | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login` |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production) |
 | [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
@@ -151,7 +151,7 @@ Keep `.env` out of git; `setup` adds it to `.gitignore`.
 Already have a database? Install only the tables:
 
 ```bash
-npx e9core installStandard --db mysql://user:pass@host/dbname
+npx e9core installDefaultPlugins --db mysql://user:pass@host/dbname
 ```
 
 ## Try it
@@ -243,12 +243,14 @@ tables and the rest of the project's tables. Application code (an Astro site,
 a Next.js app, another schema) reads and writes that same database.
 
 **Table names are the engine9 standard, and they are immutable.**
-`installStandard` creates `person`, `person_email`, `person_phone`,
-`person_address`, `segment`, `person_segment`, `timeline`, `transaction`, and
-the other tables published by
-[`@engine9/interfaces`](https://github.com/engine9-io/interfaces). Those names
-are the contract. `person` stays `person`. `event` stays `event`. Columns on
-those tables stay as published. Other engine9 libraries join on these names.
+`installDefaultPlugins` creates the core person tables (`person`,
+`person_email`, `person_phone`, `person_address`, `segment`, `person_segment`,
+…). Opt-in stacks such as `@engine9/interfaces/stacks/standard` also install
+`timeline`, `transaction`, and related interfaces. Pass `--stack` / `path`, or
+set the warehouse `default_stack` setting on `@engine9/interfaces/plugin`.
+Those published names are the contract. `person` stays `person`. `event` stays
+`event`. Columns on those tables stay as published. Other engine9 libraries
+join on these names.
 
 A local schema may live in the same database. Its table names must differ
 from every published engine9 table (`person`, `event`, `message`,
@@ -311,7 +313,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core setup --remote [--domain host]` | Production D1, secrets, deploy |
 | `npx e9core setup --node [--db url]` | SQLite (or MySQL) tables and `.env`, no Wrangler |
 | `npx e9core serve [--api-only] [--setup]` | Local site + `/api`; `--setup` reopens the wizard |
-| `npx e9core installStandard --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
+| `npx e9core installDefaultPlugins --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
 | `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
 | `npx e9core sqlite-ddl --schema @engine9/interfaces/person` | Print one schema's SQL |
@@ -376,8 +378,8 @@ for browser-only personalization.
 
 **Layer 3 — Identity provider.** Optional. Production defaults to delegate:
 [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md).
-After core verifies an Identity Token, the Core Session carries `level`,
-`domainProfile`, and `auth`. `resolveAuthContext` (from `@engine9/core/auth`)
+After core verifies an Identity Token, the Core Session carries `level`
+and `auth`. `resolveAuthContext` (from `@engine9/core/auth`)
 enforces `requiredAuth` when a role is active. Identity **Levels** (0–7) are
 confidence, not permission: a Level 4 User may still have no role.
 
@@ -397,7 +399,7 @@ account: [auth/README.md](auth/README.md).
 | `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
 | `GET /read/:name` | Configured read, optionally gated by `person_segment` (`?person_id=`) | `data:read` |
 | `POST /auth/login` | `{ delegate_token }` → `{ session, token }` | API key; 501 until `SESSION_SECRET` / `delegate` is set |
-| `GET /auth/me` | `{ personId, roles, level, domainUnid, domainProfile, profile? }` | API key + session or Identity Token |
+| `GET /auth/me` | `{ personId, roles, level, domainUnid, fields? }` | API key + session or Identity Token |
 | `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
 | `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
@@ -406,8 +408,8 @@ Everything under `/api` in the shipped Worker and `serve`.
 
 ### Plugin paths
 
-`@engine9/core/pluginPaths` treats plugin rows, stack `include` / `exclude`
-lists, and `stacks[]` as **package identity only** (`@engine9/interfaces/person`).
+`@engine9/core/pluginPaths` treats plugin rows and stack `include` / `exclude`
+lists as **package identity only** (`@engine9/interfaces/person`).
 The plugin registry maps that identity to a module. Legacy `local$@engine9/...`
 strings are accepted and normalized.
 
@@ -478,7 +480,7 @@ plugin in a package the project lists.
 - `lib/sql/standardizeSchema.js` — dialect-aware column standardization
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy interface schemas
-- `lib/PluginWorker.js` — plugin rows, stack install, `installStandard`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
+- `lib/PluginWorker.js` — plugin rows, stack install, `installDefaultPlugins`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
 - `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem)
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
 - `bin/buildPlugins.js` (`e9core build-plugins`) — the same discovery serialized for a Cloudflare bundle

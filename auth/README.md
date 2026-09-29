@@ -80,7 +80,7 @@ createDelegateAuth({
 `login(token)` accepts an Identity Token (JWT). Verification uses the
 provider JWKS. No shared secret.
 
-`verify(sessionToken)` returns `personId`, `roles`, `domainUnid`, `domainProfile`,
+`verify(sessionToken)` returns `personId`, `roles`, `domainUnid`,
 `email`, `auth`, `level`, `exp`.
 
 `verifyIdentityToken(jwt)` is the same JWKS check with constructor `domain` /
@@ -167,8 +167,7 @@ object is:
   (personId, // person in this database
     roles, // role_id values (segment UUIDs)
     domainUnid, // the provider's id for this person on this Domain (token `sub`)
-    domainProfile, // which Profile is acting (token `domain_profile`)
-    email, // only when the provider said it was verified, or level >= 2
+    email, // only when fields.email_verified is true
     auth, // { signInProvider, twoFactor, signInSecondFactor, authTime }
     level, // Identity Level from the provider
     exp); // unix milliseconds
@@ -211,7 +210,7 @@ that as `Authorization: Bearer`. The HMAC check is local. Delegate is not
 called again until the next login.
 
 That session is not a Core Session. The body is the operator uid (the
-Identity Token `sub` for the API host's domain), email, `domainProfile`, and
+Identity Token `sub` for the API host's domain), email, and
 Identity Level (at least 3), and `exp` is unix seconds. By contrast, the Core Session
 `@engine9/core` mints carries `personId` and roles, and uses unix milliseconds
 for `exp`.
@@ -235,7 +234,7 @@ All routes except `GET /ok` require an API key.
 | Route               | Notes                                                                                    |
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | `POST /auth/login`  | API key; body `delegate_token`                                                           |
-| `GET /auth/me`      | session or JWT → `{ personId, roles, level, domainUnid, domainProfile, profile?, auth }` |
+| `GET /auth/me`      | session or JWT → `{ personId, roles, level, domainUnid, fields?, auth }` |
 | `POST /auth/logout` | API key; `{ loggedOut: true }`                                                           |
 | `POST /auth/role`   | session/JWT `personId` must match `body.person_id`, or `admin` scope                     |
 

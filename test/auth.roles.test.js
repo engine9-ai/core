@@ -220,9 +220,8 @@ test("createDelegateAuth roles: 'standard' -- email granted before first login l
     await assert.rejects(auth.addPeople({ role: 'superuser', emails: ['x@example.com'] }), /unknown role 'superuser'/);
 
     const jwt = await new SignJWT({
-      domain_profile: `${domain}:${'1'.repeat(64)}`,
       level: 3,
-      profile: { id: 'p1', email: 'Carol@Example.com', email_verified: true },
+      fields: { email: 'Carol@Example.com', email_verified: true },
       auth: { provider: 'google.com', two_factor: false, auth_time: 1234 }
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'k1', typ: 'JWT' })

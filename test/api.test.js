@@ -173,9 +173,8 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     jwk.alg = 'ES256';
     jwk.use = 'sig';
     const identityJwt = await new SignJWT({
-      domain_profile: `site.example.com:${'1'.repeat(64)}`,
       level: 2,
-      profile: { email: 'role@example.com', email_verified: true },
+      fields: { email: 'role@example.com', email_verified: true },
       auth: { provider: 'google.com', two_factor: false, auth_time: 1700000000 }
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'api-role-key', typ: 'JWT' })

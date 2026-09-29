@@ -11,8 +11,6 @@ import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 
 const DOMAIN = 'site.example.com';
 const UNID = `${DOMAIN}:${'a'.repeat(64)}`;
-const PROFILE_LOGIN = `${DOMAIN}:${'1'.repeat(64)}`;
-const PROFILE_API = `${DOMAIN}:${'2'.repeat(64)}`;
 const RETURN_ORIGIN = 'https://site.example.com';
 const DELEGATE_URL = 'https://delegate.engine9.ai';
 
@@ -31,11 +29,10 @@ function memoryKv() {
   };
 }
 
-async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, sub = UNID, domainProfile = PROFILE_API, profile, auth }) {
+async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, sub = UNID, fields, auth }) {
   const jwt = new SignJWT({
-    domain_profile: domainProfile,
     level,
-    profile: profile || {
+    fields: fields || {
       email: 'api@example.com',
       email_verified: true
     },
@@ -138,8 +135,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
 
     const loginToken = await signIdentityJwt({
       privateKey,
-      domainProfile: PROFILE_LOGIN,
-      profile: { email: 'api@example.com', email_verified: true }
+      fields: { email: 'api@example.com', email_verified: true }
     });
     const loginCode = await api.handle({
       method: 'POST',
@@ -152,7 +148,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.ok(loginCode.body.session.personId > 0);
     assert.equal(loginCode.body.session.domainUnid, UNID);
     assert.equal(loginCode.body.session.level, 2);
-    assert.equal(loginCode.body.session.domainProfile, PROFILE_LOGIN);
     const personId = loginCode.body.session.personId;
     const sessionToken = loginCode.body.token;
 
@@ -165,7 +160,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(meSession.body.personId, personId);
     assert.equal(meSession.body.domainUnid, UNID);
     assert.equal(meSession.body.level, 2);
-    assert.equal(meSession.body.domainProfile, PROFILE_LOGIN);
     assert.ok(meSession.body.auth);
 
     const noSession = await api.handle({
@@ -188,8 +182,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(meJwt.body.personId, personId);
     assert.equal(meJwt.body.domainUnid, UNID);
     assert.equal(meJwt.body.level, 2);
-    assert.equal(meJwt.body.domainProfile, PROFILE_API);
-    assert.equal(meJwt.body.profile?.email, 'api@example.com');
+    assert.equal(meJwt.body.fields?.email, 'api@example.com');
     assert.equal(await kv.get(`delegate:${UNID}`), String(personId));
 
     const loginJwt = await api.handle({
@@ -200,7 +193,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     });
     assert.equal(loginJwt.status, 200, JSON.stringify(loginJwt.body));
     assert.equal(loginJwt.body.session.level, 2);
-    assert.equal(loginJwt.body.session.domainProfile, PROFILE_API);
 
     const logout = await api.handle({
       method: 'POST',
@@ -314,7 +306,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
       config: { pluginId }
     });
 
-    const token = await signIdentityJwt({ privateKey, kid, level: 1, profile: { given_name: 'Alex' } });
+    const token = await signIdentityJwt({ privateKey, kid, level: 1, fields: { given_name: 'Alex' } });
     const idHeaders = { authorization: `Bearer ${publicKeyValue}`, 'x-api-key': publicKeyValue };
 
     // The public key is the signup-form key: it may add people…
@@ -392,7 +384,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
       headers: { authorization: `Bearer ${token}`, 'x-api-key': publicKeyValue, host: DOMAIN }
     });
     assert.equal(meJwt.status, 200, JSON.stringify(meJwt.body));
-    assert.equal(meJwt.body.profile?.given_name, 'Alex');
+    assert.equal(meJwt.body.fields?.given_name, 'Alex');
 
     // Without a secret, login is off but reports why.
     const off = createApi({ worker, keyStore, config: { pluginId } });

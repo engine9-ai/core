@@ -13,7 +13,7 @@ are the standard. How to choose a table:
 installs come from the public
 [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) package.
 
-Call `PersonWorker.installStandard()` (or `e9core installStandard` from
+Call `PersonWorker.installDefaultPlugins()` (or `e9core installDefaultPlugins` from
 [`bin/e9core.js`](../bin/e9core.js)) to deploy plugin rows and tables, or
 generate SQL for one interface with `e9core sqlite-ddl --schema …` and load
 it with `wrangler d1 execute --file`. Then serve the people, upsert, and read
@@ -71,7 +71,7 @@ one piece at a time.
    Live plugin install deploys plugin rows and tables:
 
    ```bash
-   npx e9core installStandard --db sqlite://./engine9.db
+   npx e9core installDefaultPlugins --db sqlite://./engine9.db
    ```
 
    Or print SQLite DDL for one interface and load it with D1's import API.
@@ -87,7 +87,7 @@ one piece at a time.
    ```
 
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations
-   > create tables but no rows, so `installStandard` (which writes the rows and
+   > create tables but no rows, so `installDefaultPlugins` (which writes the rows and
    > their `transforms.inbound` snapshot) is required before people writes.
    > Re-run it after upgrading `@engine9/interfaces` to refresh the snapshots;
    > the Worker cannot import interface packages at runtime to fill them in.
@@ -95,7 +95,7 @@ one piece at a time.
 4. **Create the plugin row and an API key**
 
    Every people write is attributed to a plugin (your website). Insert a site
-   plugin row after `installStandard` (or after applying plugin-table DDL),
+   plugin row after `installDefaultPlugins` (or after applying plugin-table DDL),
    then create an API key:
 
    ```bash

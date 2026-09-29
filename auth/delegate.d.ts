@@ -19,8 +19,6 @@ export interface DelegateAuthState {
 export interface DelegateUser {
   /** Domain UNID (`domain:hex`, JWT `sub`): this person on this Domain. Not the UNID. */
   domainUnid: string;
-  /** Domain Profile (`domain:hex` or `domain:anonymous`): the acting Profile. */
-  domainProfile?: string;
   /** Earlier Domain UNID for the same person, after Delegate merged a browser's UNID. */
   mergedFrom?: string;
   email?: string;
@@ -29,7 +27,8 @@ export interface DelegateUser {
   returnTo?: string;
   createdAt?: string;
   level?: number;
-  profile?: Record<string, unknown>;
+  /** Values of the fields the User shared with this Domain. */
+  fields?: Record<string, unknown>;
 }
 
 /** Credential level carried inside a local session (auth layer 3). */
@@ -88,14 +87,11 @@ export interface DelegateSession {
   roles: string[];
   /** Domain UNID from the Identity Token `sub`. */
   domainUnid: string;
-  /** Domain Profile from the Identity Token. */
-  domainProfile?: string;
   email?: string;
   auth: CredentialLevel;
   exp?: number;
   /** Identity Level from the Identity Token. */
   level?: number;
-  profile?: Record<string, unknown>;
 }
 
 export function delegateIdentityUrl(options: {
@@ -107,6 +103,7 @@ export function delegateIdentityUrl(options: {
   minLevel?: number;
   maxLevel?: number;
   fields?: string[] | string;
+  optionalFields?: string[] | string;
   nonce?: string;
   state?: string;
   responseMode?: string;
@@ -230,6 +227,7 @@ export interface DelegateAuth {
     minLevel?: number;
     maxLevel?: number;
     fields?: string[] | string;
+    optionalFields?: string[] | string;
     nonce?: string;
     state?: string;
     responseMode?: string;
@@ -252,7 +250,7 @@ export interface DelegateAuth {
     token: string;
     delegateUser: DelegateUser;
   }>;
-  /** Verify a Core Session token; null when invalid or expired. Returns level and domainProfile. */
+  /** Verify a Core Session token; null when invalid or expired. Returns level and domainUnid. */
   verify(token: string | null | undefined): DelegateSession | null;
   /** Verify a delegate Identity Token using this auth's delegateUrl / domain / JWKS. */
   verifyIdentityToken(

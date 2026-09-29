@@ -44,7 +44,7 @@ interfaces version and upgrades it on its own schedule.
 npm install @engine9/core @engine9/interfaces
 ```
 
-`installStandard` and `e9core sqlite-ddl` read the interfaces package that
+`installDefaultPlugins` and `e9core sqlite-ddl` read the interfaces package that
 this install resolved. When you upgrade interfaces, install the new version
 and redeploy:
 
@@ -314,14 +314,14 @@ commands below.
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
 
 ```bash
-npx e9core installStandard --db sqlite://./engine9.db
+npx e9core installDefaultPlugins --db sqlite://./engine9.db
 npx e9core setup-keys
 npx e9core setup-keys --remote
 npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes public
 ```
 
-`installStandard` fills a database file on your computer. `setup` copies that
-into D1. Tables without the plugin rows from `installStandard` will not
+`installDefaultPlugins` fills a database file on your computer. `setup` copies that
+into D1. Tables without the plugin rows from `installDefaultPlugins` will not
 accept people writes.
 
 The Worker that `setup` points at is

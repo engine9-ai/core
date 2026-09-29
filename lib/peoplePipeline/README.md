@@ -161,11 +161,11 @@ Jobs can adjust the woven chain without touching plugins:
 ## Guard rails
 
 - Plugin table exists but no installed plugin declares inbound slots → the load
-  fails with "No inbound people plugins are installed. Run installStandard".
+  fails with "No inbound people plugins are installed. Run installDefaultPlugins".
   Silent skipping would lose data, so this is loud on purpose.
 - A known plugin is installed but has no saved spec and the runtime cannot load
   its package (Cloudflare Workers cannot import packages at runtime) → fails with
-  "re-run install". Re-running `installStandard` refreshes the snapshots.
+  "re-run install". Re-running `installDefaultPlugins` refreshes the snapshots.
 - No plugin table at all (unit tests, fresh dev database) → every package the
   runtime can execute is treated as installed. Real accounts always have the
   table.

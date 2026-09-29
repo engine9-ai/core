@@ -7,7 +7,7 @@
     1. Browser obtains a delegate-signed Identity Token (JWT, ES256) via
        /identity/authorize or /identity/bridge
     2. The host verifies the JWT with JWKS (`verifyDelegateIdentityToken`) — no
-       shared secret. Claims: sub (Domain UNID), domain_profile, level, profile,
+       shared secret. Claims: sub (Domain UNID), level, fields,
        auth, merged_from; aud is the Domain (host[:port])
     3. Maps the Domain UNID → person_id (`resolveDelegatePersonId`) and
        optionally mints a local HMAC Core Session (`createSessionToken`)
@@ -175,6 +175,7 @@ export function delegateIdentityUrl({
   minLevel,
   maxLevel,
   fields,
+  optionalFields,
   nonce,
   state,
   responseMode = 'query'
@@ -189,6 +190,12 @@ export function delegateIdentityUrl({
   if (minLevel !== undefined) url.searchParams.set('min_level', String(minLevel));
   if (maxLevel !== undefined) url.searchParams.set('max_level', String(maxLevel));
   if (fields) url.searchParams.set('fields', Array.isArray(fields) ? fields.join(',') : fields);
+  if (optionalFields) {
+    url.searchParams.set(
+      'optional_fields',
+      Array.isArray(optionalFields) ? optionalFields.join(',') : optionalFields
+    );
+  }
   if (nonce) url.searchParams.set('nonce', nonce);
   if (state) url.searchParams.set('state', state);
   if (responseMode) url.searchParams.set('response_mode', responseMode);
@@ -336,7 +343,7 @@ function mapJoseVerifyError(err) {
  * Checks alg ES256, iss (default delegateUrl origin), aud === domain, exp (±60s).
  *
  * `sub` is the Domain UNID (`domain:hex`): the person on this Domain, and the
- * id an Engine9 API host stores. `domain_profile` names the acting Profile.
+ * id an Engine9 API host stores. `fields` holds the values the User shared.
  * `merged_from` is an earlier Domain UNID for the same person.
  */
 export async function verifyDelegateIdentityToken({
@@ -411,10 +418,6 @@ export async function verifyDelegateIdentityToken({
       detail: 'identity token sub is not a Domain UNID for this domain'
     });
   }
-  const domainProfile =
-    typeof payload.domain_profile === 'string' && payload.domain_profile.startsWith(domainPrefix)
-      ? payload.domain_profile
-      : undefined;
   const mergedFrom =
     typeof payload.merged_from === 'string' &&
     payload.merged_from.startsWith(domainPrefix) &&
@@ -423,9 +426,9 @@ export async function verifyDelegateIdentityToken({
       : undefined;
 
   const rawAuth = payload.auth && typeof payload.auth === 'object' ? payload.auth : {};
-  const profile = payload.profile && typeof payload.profile === 'object' ? payload.profile : undefined;
-  const emailVerified = profile?.email_verified === true;
-  const email = emailVerified && profile?.email ? String(profile.email) : undefined;
+  const fields = payload.fields && typeof payload.fields === 'object' ? payload.fields : undefined;
+  const emailVerified = fields?.email_verified === true;
+  const email = emailVerified && fields?.email ? String(fields.email) : undefined;
   const level = typeof payload.level === 'number' ? payload.level : undefined;
   const amr = Array.isArray(rawAuth.amr) ? rawAuth.amr : [];
   const signInSecondFactor =
@@ -437,7 +440,6 @@ export async function verifyDelegateIdentityToken({
 
   const delegateUser = {
     domainUnid,
-    domainProfile,
     mergedFrom,
     email,
     emailVerified,
@@ -448,7 +450,7 @@ export async function verifyDelegateIdentityToken({
       authTime: rawAuth.auth_time ?? rawAuth.authTime
     },
     level,
-    profile
+    fields
   };
   return delegateUser;
 }
@@ -558,7 +560,7 @@ export function createSessionCookieHeaders(
    Session shape helpers (pure -- no worker or secrets required).
 
    A delegate session payload is:
-     { personId, roles: [role_id...], domainUnid, domainProfile?, email?, level?,
+     { personId, roles: [role_id...], domainUnid, email?, level?,
        auth: { signInProvider?, twoFactor?, signInSecondFactor?, authTime? }, exp }
 
    `roles` is an array of role_id values (segment UUIDs). Helpers below only
@@ -729,7 +731,6 @@ export function createDelegateAuth({
       personId: payload.personId,
       roles: Array.isArray(payload.roles) ? payload.roles : [],
       domainUnid: payload.domainUnid,
-      domainProfile: payload.domainProfile,
       email: payload.email,
       auth: payload.auth || {},
       exp: payload.exp,
@@ -771,7 +772,17 @@ export function createDelegateAuth({
     };
   }
 
-  function identityUrl({ returnTo, prompt, minLevel, maxLevel, fields, nonce, state, responseMode } = {}) {
+  function identityUrl({
+    returnTo,
+    prompt,
+    minLevel,
+    maxLevel,
+    fields,
+    optionalFields,
+    nonce,
+    state,
+    responseMode
+  } = {}) {
     return delegateIdentityUrl({
       delegateUrl,
       domain: domain || domainFromUrl(returnTo),
@@ -780,6 +791,7 @@ export function createDelegateAuth({
       minLevel,
       maxLevel,
       fields,
+      optionalFields,
       nonce,
       state,
       responseMode
@@ -824,7 +836,6 @@ export function createDelegateAuth({
       personId,
       roles: sessionRoles,
       domainUnid: delegateUser.domainUnid,
-      domainProfile: delegateUser.domainProfile,
       email: delegateUser.email,
       auth: {
         signInProvider: delegateUser.auth?.signInProvider,

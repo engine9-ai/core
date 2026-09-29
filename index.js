@@ -7,6 +7,14 @@ export { default as SQLWorker } from './lib/SQLWorker.js';
 export { default as SchemaWorker } from './lib/SchemaWorker.js';
 export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/PluginWorker.js';
 export {
+  CORE_PLUGIN_PATH,
+  LIMITED_PII_STACK_PATH,
+  STANDARD_STACK_PATH,
+  PLAINTEXT_PII_INSTALL_PATHS,
+  isTruthyExcludePii,
+  readCorePluginSettings
+} from './lib/corePluginSettings.js';
+export {
   listAccountPluginSettings,
   normalizePluginSettings,
   publicSettingDefinition,
