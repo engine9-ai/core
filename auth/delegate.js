@@ -60,6 +60,21 @@ const DELEGATE_LOGIN_ERRORS = {
     message:
       'Sign-in did not finish on this site after Delegate sent you back. Please try signing in again.'
   },
+  plugin_registry_missing: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site was deployed without its interface plugins. The Worker must alias @engine9/core/plugins/site to the file written by e9core build-plugins, then be deployed again. Retrying sign-in will not fix it.'
+  },
+  schema_update_failed: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site could not update its database while installing interfaces. D1 cannot add a column whose default is CURRENT_TIMESTAMP; that table has to be rebuilt. Retrying sign-in will not fix it.'
+  },
+  database_error: {
+    kind: 'configuration',
+    message:
+      'Sign-in cannot be completed because this site\'s database returned an error while finishing sign-in. Retrying sign-in will not fix it. The detail is the database message for the site operator.'
+  },
   invalid_identity_token: {
     kind: 'auth',
     message: 'Your sign-in token is invalid or expired. Please sign in again.'
@@ -79,6 +94,19 @@ function inferLoginReasonFromMessage(message) {
   }
   if (text.includes('person resolution') || text.includes('processpeople')) {
     return 'person_resolution_failed';
+  }
+  if (
+    text.includes('no plugin registry') ||
+    text.includes('plugin_config_invalid') ||
+    text.includes('e9core build-plugins')
+  ) {
+    return 'plugin_registry_missing';
+  }
+  if (text.includes('non-constant default') || text.includes('has to be rebuilt')) {
+    return 'schema_update_failed';
+  }
+  if (text.includes('d1_error') || text.includes('sqlite_error')) {
+    return 'database_error';
   }
   return null;
 }

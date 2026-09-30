@@ -202,6 +202,28 @@ test('normalizeDelegateLoginFailure maps plain errors and preserves structured f
   const generic = normalizeDelegateLoginFailure(new Error('database is locked'));
   assert.equal(generic.reason, 'login_failed');
   assert.match(generic.message, /database is locked/);
+
+  const registry = normalizeDelegateLoginFailure(
+    new Error(
+      'Plugin @engine9/interfaces/plugin cannot load: no plugin registry is configured. Cloudflare: alias @engine9/core/plugins/site to the module wrangler builds with `e9core build-plugins`.'
+    )
+  );
+  assert.equal(registry.reason, 'plugin_registry_missing');
+  assert.equal(registry.kind, 'configuration');
+  assert.match(registry.userMessage, /build-plugins/);
+  assert.doesNotMatch(registry.userMessage, /try signing in again/i);
+
+  const schema = normalizeDelegateLoginFailure(
+    new Error('D1_ERROR: Cannot add a column with non-constant default: SQLITE_ERROR')
+  );
+  assert.equal(schema.reason, 'schema_update_failed');
+  assert.equal(schema.kind, 'configuration');
+  assert.match(schema.userMessage, /CURRENT_TIMESTAMP/);
+  assert.doesNotMatch(schema.userMessage, /try signing in again/i);
+
+  const database = normalizeDelegateLoginFailure(new Error('D1_ERROR: no such table: person: SQLITE_ERROR'));
+  assert.equal(database.reason, 'database_error');
+  assert.equal(database.kind, 'configuration');
 });
 
 async function jwksFetch(publicKey, kid = 'test-key') {

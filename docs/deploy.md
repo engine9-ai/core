@@ -345,6 +345,25 @@ Wire `createApi` into your HTTP app. A short sketch is in the
 
 Browser login steps: [with-core.md](https://github.com/engine9-ai/id/blob/main/docs/with-core.md).
 
+### When sign-in fails after Delegate
+
+Delegate can succeed and the site can still fail while it installs interfaces
+and writes the person. The login page shows a reason code and the detail.
+Configuration failures are not fixed by signing in again.
+
+| Detail | Reason | What is happening | What to do |
+| --- | --- | --- | --- |
+| `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/interfaces`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
+| `Cannot add a column with non-constant default` | `schema_update_failed` | `installDefaultPlugins` tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
+| other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
+| `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `wrangler secret put SESSION_SECRET`, then redeploy. |
+| invalid or expired token | `invalid_identity_token` | The Identity Token did not verify. | Sign in again. |
+
+`npm install @engine9/interfaces@latest` then `npx wrangler deploy` is how a
+new interfaces package reaches the Worker. Leave the `@engine9/core` version
+as it is when only interfaces changed. The deploy rebuilds `engine9.plugins.js`
+from the interfaces package this project has installed.
+
 Technical reference (KV caches, R2 logs, endpoint table):
 [cloudflare/README.md](../cloudflare/README.md) and the
 [core README](../README.md).
