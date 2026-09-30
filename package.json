@@ -73,7 +73,7 @@
     "uuid": "^14.0.1"
   },
   "peerDependencies": {
-    "@engine9/interfaces": "^1.7.4",
+    "@engine9/interfaces": "^1.8.1",
     "better-sqlite3": ">=11",
     "knex": ">=3",
     "mysql2": ">=3"
