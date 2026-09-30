@@ -167,7 +167,8 @@ object is:
   (personId, // person in this database
     roles, // role_id values (segment UUIDs)
     domainUnid, // the provider's id for this person on this Domain (token `sub`)
-    email, // only when fields.email_verified is true
+    email, // set when fields.email_verified is true (Google/Level 3
+    // share of the provider email should mint that flag)
     auth, // { signInProvider, twoFactor, signInSecondFactor, authTime }
     level, // Identity Level from the provider
     exp); // unix milliseconds
