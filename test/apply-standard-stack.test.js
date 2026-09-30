@@ -67,17 +67,18 @@ test('installDefaultPlugins respects warehouse default_stack setting', async () 
   }
 });
 
-test('installDefaultPlugins respects limited-pii exclude_pii setting', async () => {
+test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await worker.installDefaultPlugins({ path: '@engine9/interfaces/stacks/limited-pii' });
+    await worker.installDefaultPlugins();
+    await worker.install({ path: '@engine9/interfaces/utilities/limited-pii' });
     const { data: coreRows } = await worker.query({
       sql: 'select id from plugin where path=?',
       values: ['@engine9/interfaces/plugin']
     });
     const { data: limitedRows } = await worker.query({
       sql: 'select id from plugin where path=?',
-      values: ['@engine9/interfaces/stacks/limited-pii']
+      values: ['@engine9/interfaces/utilities/limited-pii']
     });
     assert.ok(coreRows[0]?.id);
     assert.ok(limitedRows[0]?.id);

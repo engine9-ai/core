@@ -9,6 +9,7 @@ export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/Plugi
 export {
   CORE_PLUGIN_PATH,
   LIMITED_PII_STACK_PATH,
+  LIMITED_PII_PLUGIN_PATH,
   STANDARD_STACK_PATH,
   PLAINTEXT_PII_INSTALL_PATHS,
   isTruthyExcludePii,
