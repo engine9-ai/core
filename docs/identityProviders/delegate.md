@@ -92,6 +92,38 @@ const api = createApi({
    (`data-e9-min-level`, `id.gate()`) are soft; core's roles are the hard
    gate. See [id with core](https://github.com/engine9-ai/id/blob/main/docs/with-core.md).
 
+5. Add a **Change your Delegate information** button for signed-in people.
+   Include it unless the site asks for no fields.
+
+   Delegate remembers which email address each person shares with your
+   Domain, so logging in again returns the same address. When someone shared
+   the wrong one (a personal Gmail instead of the address your roles
+   expect), this button reopens delegate's share page. There they can pick
+   another address, add one, or use a different Google account.
+
+```html
+<button data-e9-change-delegate hidden>Change your Delegate information</button>
+```
+
+   The existing `id.onChange` handler calls `id.core.login()` again with the
+   new token, so roles are re-read. Picking another address keeps the same
+   Domain UNID and `person_id`. A different Google account arrives as a
+   different Domain UNID, which is a different person to core.
+
+   Sites that log in on the server instead add a route that redirects to the
+   same request with `prompt: 'select'`:
+
+```js
+return Response.redirect(auth.identityUrl({
+  returnTo: new URL('/auth/callback', request.url).toString(),
+  prompt: 'select',
+  minLevel: 1,
+  fields: ['display_name', 'email'],
+}), 302);
+```
+
+   Put the link next to Log out and on any access-denied message.
+
 ## What core does with the token
 
 `createDelegateAuth` verifies the JWT (ES256, JWKS, `iss`, `aud` = domain,
@@ -129,7 +161,8 @@ verified or the Identity Level is at least 2.
 
 `GET /auth/me` includes `personId`, `roles`, `level`, `domainUnid`, and `fields` when the request used an Identity Token.
 
-Send visitors to `/identity/authorize` (`auth.identityUrl`).
+Send visitors to `/identity/authorize` (`auth.identityUrl`). Pass
+`prompt: 'select'` for the Change your Delegate information link (step 5).
 
 ## Optional Cloudflare cache
 
