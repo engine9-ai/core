@@ -104,6 +104,8 @@ export function delegateIdentityUrl(options: {
   maxLevel?: number;
   fields?: string[] | string;
   optionalFields?: string[] | string;
+  /** Delegate sign-in screen. `2` adds an email sign-in link; default Google only. */
+  loginLevel?: 2 | 3 | 4;
   nonce?: string;
   state?: string;
   responseMode?: string;
@@ -228,6 +230,12 @@ export interface DelegateAuth {
     maxLevel?: number;
     fields?: string[] | string;
     optionalFields?: string[] | string;
+    /**
+     * Delegate sign-in screen (`login_level`). Default (omit, `3`, or `4`):
+     * Google only. `2`: Google or an email sign-in link, which reaches
+     * Level 2 at most. Ignored by delegate when `minLevel` is 3 or more.
+     */
+    loginLevel?: 2 | 3 | 4;
     nonce?: string;
     state?: string;
     responseMode?: string;

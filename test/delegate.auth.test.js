@@ -290,6 +290,13 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     const authorizeUrl = auth.identityUrl({ returnTo: 'https://site.example.com/auth/delegate' });
     assert.ok(authorizeUrl.includes('/identity/authorize'));
     assert.ok(authorizeUrl.includes('domain=site.example.com'));
+    assert.equal(new URL(authorizeUrl).searchParams.has('login_level'), false, 'default: Google-only screen');
+    const emailLinkUrl = auth.identityUrl({
+      returnTo: 'https://site.example.com/auth/delegate',
+      minLevel: 2,
+      loginLevel: 2
+    });
+    assert.equal(new URL(emailLinkUrl).searchParams.get('login_level'), '2');
 
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);

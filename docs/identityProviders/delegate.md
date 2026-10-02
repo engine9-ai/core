@@ -124,6 +124,64 @@ return Response.redirect(auth.identityUrl({
 
    Put the link next to Log out and on any access-denied message.
 
+6. Choose delegate's sign-in screen. Skip this step if Google-only is right
+   for your site.
+
+## Sign-in screen: Google only, or Google plus an email link
+
+A visitor who is not signed in to delegate yet sees one of two screens.
+
+| Option | Screen | Highest Level the sign-in can reach |
+| --- | --- | --- |
+| default (omit `loginLevel`, or `3` / `4`) | Sign in with Google | 4 |
+| `loginLevel: 2` | Sign in with Google, or Email me a sign-in link | 2 for the email link, 4 for Google |
+
+Google only is the default because an emailed link proves only that the
+person reads that inbox: Level 2 (Contact Confirmed). Core roles that set
+`requiredAuth: { minLevel: 3 }` (the standard `admin` and `operator` roles
+do) can never be met by an email-link sign-in. Offering the link on those
+logins would let people sign in and then be refused.
+
+Offer the email link when Level 2 or lower is all the site needs, such as
+newsletter signups, RSVPs, or comments, and you want people without a Google
+account to get in:
+
+```js
+// Browser (@engine9/id): every login on the site
+const id = engine9Id.mount({
+  core: { apiUrl: '/api', publicApiKey: 'e9publickey_…' },
+  loginLevel: 2,
+});
+```
+
+```html
+<!-- Browser: just this button -->
+<button data-e9-login="2" data-e9-login-level="2">Join the list</button>
+```
+
+```js
+// Server: a login route that redirects to delegate
+return Response.redirect(auth.identityUrl({
+  returnTo: new URL('/auth/callback', request.url).toString(),
+  minLevel: 2,
+  loginLevel: 2,
+  fields: ['display_name', 'email'],
+}), 302);
+```
+
+Rules delegate applies:
+
+- With `minLevel` 3 or higher, delegate shows Google only, even when you
+  pass `loginLevel: 2`.
+- The screen does not change the Identity Level on the token, and it does
+  not change what core's roles allow. A visitor who picks Google on the
+  `loginLevel: 2` screen still arrives at Level 3. A role with
+  `requiredAuth.minLevel: 3` still refuses an email-link login.
+- Visitors already signed in to delegate do not see either screen.
+
+On the wire this is `login_level=2` on `/identity/authorize`
+([protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#sign-in-screen-login_level)).
+
 ## What core does with the token
 
 `createDelegateAuth` verifies the JWT (ES256, JWKS, `iss`, `aud` = domain,
@@ -162,7 +220,9 @@ verified or the Identity Level is at least 2.
 `GET /auth/me` includes `personId`, `roles`, `level`, `domainUnid`, and `fields` when the request used an Identity Token.
 
 Send visitors to `/identity/authorize` (`auth.identityUrl`). Pass
-`prompt: 'select'` for the Change your Delegate information link (step 5).
+`prompt: 'select'` for the Change your Delegate information link (step 5),
+and `loginLevel: 2` to offer an email sign-in link
+([Sign-in screen](#sign-in-screen-google-only-or-google-plus-an-email-link)).
 
 ## Optional Cloudflare cache
 
