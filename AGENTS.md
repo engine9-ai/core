@@ -5,7 +5,7 @@
 `@engine9/core` is MIT licensed. See [LICENSE](LICENSE). Use, copy, modify, and
 distribute this code as-is. No further permission is required.
 
-`@engine9/interfaces`, `@engine9/id`, `demo-festival`, and `demo-id` are also
+`@engine9/schemas`, `@engine9/id`, `demo-festival`, and `demo-id` are also
 MIT. The private repositories `delegate` and `server` are not open source.
 Do not copy code from those repositories under this license.
 
@@ -64,20 +64,20 @@ database and HTTP endpoints. The database it deploys is the project's primary
 database. Astro, Next.js, and other schemas use that same database when their
 table names do not collide with engine9 tables. engine9 is the standard
 (tables, fields, pipeline, scopes) as well as the code. Public libraries that
-share it include [`@engine9/interfaces`](../interfaces) and
+share it include [`@engine9/schemas`](../schemas) and
 [`@engine9/id`](../id); the festival [`demo-festival`](../demo-festival) is a
 site built on both. The private `server` repo is for people who already have
 an engine9-capable database.
 
 Table names are immutable. The published names are the standard. Keep
-`person`, `event`, and the rest as published in `@engine9/interfaces`.
+`person`, `event`, and the rest as published in `@engine9/schemas`.
 
 When a new build needs a table, decide in this order:
 
-1. Use a matching `@engine9/interfaces` schema (an event is
-   `@engine9/interfaces/event`: `event`, `person_event`).
-2. If none matches and the feature is a primary extension of engine9, build
-   an interface (`@engine9/interfaces/<name>`) for a shared schema or a plugin
+1. Use a matching schema plugin from `@engine9/schemas` (an event is
+   `@engine9/schemas/event`: `event`, `person_event`).
+2. If none matches and the feature is a primary extension of engine9, add
+   a schema plugin (`@engine9/schemas/<name>`) for shared tables or a plugin
    (`@engine9/plugins/<name>`) for a deployable integration. Those table names
    join the standard and stay fixed.
 3. Otherwise self-scope project-local or third-party plugin tables with a
@@ -128,26 +128,36 @@ The open reports are
 and
 [workers-sdk#15690](https://github.com/cloudflare/workers-sdk/issues/15690).
 
-## Interfaces
+## Schemas
 
-`@engine9/interfaces` is a peer of this package. A site installs both, as
-siblings. The copy the site installed is the one core reads.
+`@engine9/schemas` is a peer of this package. A site installs both, as
+siblings. The copy the site installed is the one core reads. Each directory
+in it with an `index.js` is a schema plugin (`@engine9/schemas/person`); its
+table definitions are that directory's `schema.js`.
 
 When you deploy or set up a site, install both:
 
 ```
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 ```
 
-Interfaces publishes on its own. When schemas or transforms change, upgrade
-interfaces in the site and redeploy:
+`@engine9/schemas` publishes on its own. When its tables or transforms change,
+upgrade it in the site and redeploy:
 
 ```
-npm install @engine9/interfaces@latest
+npm install @engine9/schemas@latest
 npx wrangler deploy
 ```
 
-Leave `@engine9/core`'s version alone when only interfaces changed.
+Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed.
+
+The package was named `@engine9/interfaces` through 1.8.1.
+[lib/pluginPaths.js](lib/pluginPaths.js) reads `@engine9/interfaces/...`
+paths (and that name in `engine9.pluginPackages`) as `@engine9/schemas/...`,
+so databases written before the rename keep working.
+`PluginWorker.migratePackageRename` rewrites the stored paths
+(`npx e9core migratePackageRename`, or `npx e9core package-rename-sql` for a
+D1 `execute --file`). Write new code and docs with `@engine9/schemas`.
 
 ## Plugins
 
@@ -167,7 +177,7 @@ bundle when it deploys.
 - No `install({ source })`, no absolute plugin paths, no second loader. A
   plugin that is not in a listed package is an error with one of the codes
   above. In this
-repository, tests use the sibling checkout (`file:../interfaces` in
+repository, tests use the sibling checkout (`file:../schemas` in
 devDependencies). Keep that path. The peer range in package.json is what a
 deployed site must satisfy.
 

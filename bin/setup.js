@@ -5,7 +5,7 @@
  *
  *   Cloudflare:
  *     npx wrangler login
- *     npm install @engine9/core @engine9/interfaces
+ *     npm install @engine9/core @engine9/schemas
  *     npx e9core setup
  *     npx wrangler dev
  *
@@ -54,13 +54,13 @@ Production Cloudflare deploy is --remote, or the deploy step.
 
   Cloudflare (production on Cloudflare; develop locally):
     npx wrangler login
-    npm install @engine9/core @engine9/interfaces
+    npm install @engine9/core @engine9/schemas
     npx e9core setup
     npx wrangler dev
     Open the wizard: npx e9core serve  (prints /setup?token=…).
 
   Your own servers (production on Node.js you run; develop locally):
-    npm install @engine9/core @engine9/interfaces
+    npm install @engine9/core @engine9/schemas
     npx e9core setup --node
     npx e9core serve
     Open the setup URL serve prints. Node serves your pages and /api together.

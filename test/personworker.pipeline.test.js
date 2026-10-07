@@ -91,16 +91,16 @@ test('person_hash is woven in once it is installed -- no extraTransforms needed'
     const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-hash-plugin', name: 'Test Hash Plugin' });
 
-    const hashId = '@engine9/interfaces/person_hash:transforms:extractContactHashes';
-    const hashUpsert = '@engine9/interfaces/person_hash:transforms:upsertPersonHash';
+    const hashId = '@engine9/schemas/person_hash:transforms:extractContactHashes';
+    const hashUpsert = '@engine9/schemas/person_hash:transforms:upsertPersonHash';
     const beforeInstall = await worker.getInboundTransforms({ pluginId });
     assert.ok(!beforeInstall.some((t) => t.path === hashId), 'not woven before install');
 
-    const first = await applyInterface(worker, '@engine9/interfaces/person_hash');
-    const second = await applyInterface(worker, '@engine9/interfaces/person_hash');
+    const first = await applyInterface(worker, '@engine9/schemas/person_hash');
+    const second = await applyInterface(worker, '@engine9/schemas/person_hash');
     assert.equal(second.id, first.id, 'person_hash plugin row is unique by path');
     const { data: pluginRows } = await worker.query(
-      "select id, transforms from plugin where path='@engine9/interfaces/person_hash'"
+      "select id, transforms from plugin where path='@engine9/schemas/person_hash'"
     );
     assert.equal(pluginRows.length, 1);
     assert.deepEqual(JSON.parse(pluginRows[0].transforms), {
@@ -108,7 +108,7 @@ test('person_hash is woven in once it is installed -- no extraTransforms needed'
     });
 
     const afterInstall = await worker.getInboundTransforms({ pluginId });
-    const hashSteps = afterInstall.filter((t) => t.path.startsWith('@engine9/interfaces/person_hash:'));
+    const hashSteps = afterInstall.filter((t) => t.path.startsWith('@engine9/schemas/person_hash:'));
     assert.deepEqual(
       hashSteps.map((t) => [t.slot, t.source]),
       [['id', 'woven'], ['upsert', 'woven']],

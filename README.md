@@ -19,16 +19,17 @@ Other libraries that speak it:
 
 | Library | What it is |
 | --- | --- |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
+| [`@engine9/schemas`](https://github.com/engine9-ai/schemas) | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
 | [`@engine9/id`](https://github.com/engine9-ai/id) | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login` |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production) |
 | [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
 
-`@engine9/interfaces` is a peer of this package. Install both in the site.
-Interfaces publishes on its own; upgrade it and redeploy (wrangler rebuilds
-the plugin registry as part of the deploy). A core release is for changes to
-core. Details:
-[docs/deploy.md](docs/deploy.md#interfaces).
+`@engine9/schemas` is a peer of this package. Install both in the site.
+`@engine9/schemas` publishes on its own; upgrade it and redeploy (wrangler
+rebuilds the plugin registry as part of the deploy). A core release is for
+changes to core. It was named `@engine9/interfaces` through 1.8.1. Details,
+including moving a site off the old name:
+[docs/deploy.md](docs/deploy.md#schemas).
 
 ## Pick a platform
 
@@ -56,7 +57,7 @@ npx wrangler login
 In your project folder:
 
 ```bash
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 npx e9core setup
 npx e9core serve
 ```
@@ -91,7 +92,7 @@ Technical notes (bundler aliases, KV caches, R2 logs):
 ## Install on your own server (Node.js)
 
 ```bash
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 npx e9core setup --node
 npx e9core serve
 ```
@@ -245,9 +246,9 @@ a Next.js app, another schema) reads and writes that same database.
 **Table names are the engine9 standard, and they are immutable.**
 `installDefaultPlugins` creates the core person tables (`person`,
 `person_email`, `person_phone`, `person_address`, `segment`, `person_segment`,
-…). Opt-in stacks such as `@engine9/interfaces/stacks/standard` also install
-`timeline`, `transaction`, and related interfaces. Pass `--stack` / `path`, or
-set the warehouse `default_stack` setting on `@engine9/interfaces/plugin`.
+…). Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
+`timeline`, `transaction`, and related schema plugins. Pass `--stack` / `path`, or
+set the warehouse `default_stack` setting on `@engine9/schemas/plugin`.
 Those published names are the contract. `person` stays `person`. `event` stays
 `event`. Columns on those tables stay as published. Other engine9 libraries
 join on these names.
@@ -255,22 +256,22 @@ join on these names.
 A local schema may live in the same database. Its table names must differ
 from every published engine9 table (`person`, `event`, `message`,
 `transaction`, `segment`, `plugin`, `timeline`, `input`, `api_key`, and the
-rest of the catalog in `@engine9/interfaces`).
+rest of the catalog in `@engine9/schemas`).
 
 ### Choosing a table
 
 When a new build needs storage, decide in this order:
 
-1. **Use a published interface.** Look through `@engine9/interfaces` for a
-   schema that already describes the thing. An event is
-   `@engine9/interfaces/event` (`event`, `person_event`). It is not part of
+1. **Use a published schema plugin.** Look through `@engine9/schemas` for a
+   schema plugin that already describes the thing. An event is
+   `@engine9/schemas/event` (`event`, `person_event`). It is not part of
    the default stack, so install that schema when the project needs it
-   (`e9core sqlite-ddl --schema @engine9/interfaces/event`, or add the package
+   (`e9core sqlite-ddl --schema @engine9/schemas/event`, or add the package
    to the stack). Keep the published table names.
 2. **Build an engine9 package when the feature is a primary extension of
-   engine9.** If no interface matches, and other engine9 projects should share
-   the same contract, publish it. A shared schema is an interface
-   (`@engine9/interfaces/<name>`). A deployable integration (workers, inbound
+   engine9.** If no schema plugin matches, and other engine9 projects should
+   share the same contract, publish it. Shared tables are a schema plugin
+   (`@engine9/schemas/<name>`). A deployable integration (workers, inbound
    transforms, a vendor) is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
 3. **Self-scope tables that belong only to this project or a third-party
@@ -316,7 +317,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core installDefaultPlugins --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
 | `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
-| `npx e9core sqlite-ddl --schema @engine9/interfaces/person` | Print one schema's SQL |
+| `npx e9core sqlite-ddl --schema @engine9/schemas/person` | Print one schema's SQL |
 | `npx e9core build-plugins [--check]` | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
@@ -409,7 +410,7 @@ Everything under `/api` in the shipped Worker and `serve`.
 ### Plugin paths
 
 `@engine9/core/pluginPaths` treats plugin rows and stack `include` / `exclude`
-lists as **package identity only** (`@engine9/interfaces/person`).
+lists as **package identity only** (`@engine9/schemas/person`).
 The plugin registry maps that identity to a module. Legacy `local$@engine9/...`
 strings are accepted and normalized.
 
@@ -423,14 +424,14 @@ bundle when it deploys.
 ```json
 {
   "engine9": {
-    "pluginPackages": ["@engine9/interfaces"]
+    "pluginPackages": ["@engine9/schemas"]
   }
 }
 ```
 
-With no `engine9` setting, that list is `["@engine9/interfaces"]`. The legacy
+With no `engine9` setting, that list is `["@engine9/schemas"]`. The legacy
 `engine9.plugins` list of exact identities still works (stack includes and the
-core person interfaces are added).
+core person schema plugins are added).
 
 Which plugins *run* is still decided per account at run time: the inbound
 weaver reads the `plugin` rows, picks the steps, and looks each plugin up in
@@ -479,7 +480,7 @@ plugin in a package the project lists.
 - `lib/sql/sqliteDDL.js` — native SQLite/D1 DDL generation (no knex needed)
 - `lib/sql/standardizeSchema.js` — dialect-aware column standardization
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
-- `lib/SchemaWorker.js` — standardize / diff / deploy interface schemas
+- `lib/SchemaWorker.js` — standardize / diff / deploy plugin schemas
 - `lib/PluginWorker.js` — plugin rows, stack install, `installDefaultPlugins`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
 - `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem)
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
@@ -499,7 +500,7 @@ plugin in a package the project lists.
 npm test
 ```
 
-Runs the SQLite-backed suite: SQL round trips, the standard interface tables,
+Runs the SQLite-backed suite: SQL round trips, the standard schema tables,
 the person pipeline, the API surface (auth, scopes, segment gating, logs),
 and a workerd-style bundle of the Worker entry.
 

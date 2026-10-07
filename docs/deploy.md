@@ -27,36 +27,63 @@ Public libraries that share the standard:
 
 | Library | Role |
 | --- | --- |
-| [`@engine9/interfaces`](https://github.com/engine9-io/interfaces) | Schemas and transforms. Install this beside core; see [Interfaces](#interfaces) |
+| [`@engine9/schemas`](https://github.com/engine9-ai/schemas) | Schemas and transforms. Install this beside core; see [Schemas](#schemas) |
 | [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/deploy.md) | Browser library. Identity Tokens, and login against these endpoints |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Festival site (Astro + D1) using both |
 
 The private **server** repository is for people who already have an
 engine9-capable database. A new website uses `e9core`, from this package.
 
-## Interfaces
+## Schemas
 
-`@engine9/interfaces` is a separate package. Install it in the same project
+`@engine9/schemas` is a separate package. Install it in the same project
 as `@engine9/core`. Core lists it as a peer, so the site chooses the
-interfaces version and upgrades it on its own schedule.
+`@engine9/schemas` version and upgrades it on its own schedule.
 
 ```bash
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 ```
 
-`installDefaultPlugins` and `e9core sqlite-ddl` read the interfaces package that
-this install resolved. When you upgrade interfaces, install the new version
-and redeploy:
+`installDefaultPlugins` and `e9core sqlite-ddl` read the `@engine9/schemas`
+package that this install resolved. When you upgrade it, install the new
+version and redeploy:
 
 ```bash
-npm install @engine9/interfaces@latest
+npm install @engine9/schemas@latest
 npx wrangler deploy
 ```
 
 Node commands read plugins from `node_modules` when they start. The Worker
 bundle is rebuilt by wrangler's build step (`e9core setup` put
-`npx e9core build-plugins` there), so the deploy picks up the new interfaces.
-Leave the `@engine9/core` version as it is when only interfaces changed.
+`npx e9core build-plugins` there), so the deploy picks up the new schema
+plugins. Leave the `@engine9/core` version as it is when only
+`@engine9/schemas` changed.
+
+### Renamed from `@engine9/interfaces`
+
+The package was named `@engine9/interfaces` through 1.8.1. A site that used it
+moves over in three steps:
+
+1. Replace the dependency: `npm uninstall @engine9/interfaces && npm install @engine9/schemas`.
+2. In `package.json`, change `"engine9": { "pluginPackages": ["@engine9/interfaces"] }`
+   to `@engine9/schemas`. Until you do, core reads the old name as the new one
+   and prints a warning.
+3. Rewrite the plugin paths stored in the database. Core reads the old paths
+   either way; this makes the rows say the new name.
+
+   ```bash
+   # Node / SQLite / MySQL
+   npx e9core migratePackageRename --db sqlite://./engine9.db --dryRun
+   npx e9core migratePackageRename --db sqlite://./engine9.db
+
+   # D1
+   npx e9core package-rename-sql > rename-schemas.sql
+   npx wrangler d1 execute <database> --remote --file rename-schemas.sql
+   ```
+
+   The updates touch `plugin.path`, `plugin_history.path`,
+   `segment.definition_path`, `segment.search`, `setting.value`, and
+   `plugin.schema`. No IDs change. Running them again changes nothing.
 
 ## The project database
 
@@ -69,7 +96,7 @@ not collide with engine9 tables.
 **Table names are immutable. The names are the engine9 standard.**
 `person`, `person_email`, `segment`, `timeline`, `transaction`, and the rest
 of the tables from
-[`@engine9/interfaces`](https://github.com/engine9-io/interfaces) stay under
+[`@engine9/schemas`](https://github.com/engine9-ai/schemas) stay under
 those names. `person` stays `person`. Columns on those tables stay as
 published. Other engine9 libraries join on these names. A project-local table
 uses a different name from every published engine9 table (`person`, `event`,
@@ -80,19 +107,19 @@ and the rest of that catalog).
 
 Before creating a table, decide in this order:
 
-1. **Use a published interface.** Look through `@engine9/interfaces` for a
-   schema that already describes the thing. An event is
-   `@engine9/interfaces/event`: tables `event` and `person_event`. That
+1. **Use a published schema plugin.** Look through `@engine9/schemas` for a
+   schema plugin that already describes the thing. An event is
+   `@engine9/schemas/event`: tables `event` and `person_event`. That
    package is not in the default stack, so install it when the project needs
-   events (`npx e9core sqlite-ddl --schema @engine9/interfaces/event`, or add
+   events (`npx e9core sqlite-ddl --schema @engine9/schemas/event`, or add
    the package to the stack). Keep those table names. Every plugin in the
    packages listed in `package.json` `engine9.pluginPackages` is available;
-   the default is every `@engine9/interfaces` plugin
+   the default is every `@engine9/schemas` plugin
    ([details](../README.md#how-plugins-are-loaded)).
 2. **Build an engine9 package when the feature is a primary extension of
-   engine9.** If no interface matches, and other engine9 projects should share
-   the same contract, publish it. A shared schema is an interface
-   (`@engine9/interfaces/<name>`). A deployable integration — workers, inbound
+   engine9.** If no schema plugin matches, and other engine9 projects should
+   share the same contract, publish it. Shared tables are a schema plugin
+   (`@engine9/schemas/<name>`). A deployable integration — workers, inbound
    transforms, a vendor — is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
 3. **Self-scope tables that belong only to this project or a third-party
@@ -154,7 +181,7 @@ npx wrangler login
 In the project folder:
 
 ```bash
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 npx e9core setup
 ```
 
@@ -189,7 +216,7 @@ deploys the Worker. Attach a hostname with `--domain www.example.com`.
 If the site is (or should become) a Node process that serves HTML and the API:
 
 ```bash
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 npx e9core setup --node
 npx e9core serve
 ```
@@ -347,22 +374,23 @@ Browser login steps: [with-core.md](https://github.com/engine9-ai/id/blob/main/d
 
 ### When sign-in fails after Delegate
 
-Delegate can succeed and the site can still fail while it installs interfaces
-and writes the person. The login page shows a reason code and the detail.
+Delegate can succeed and the site can still fail while it installs schema
+plugins and writes the person. The login page shows a reason code and the detail.
 Configuration failures are not fixed by signing in again.
 
 | Detail | Reason | What is happening | What to do |
 | --- | --- | --- | --- |
-| `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/interfaces`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
+| `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/schemas`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
 | `Cannot add a column with non-constant default` | `schema_update_failed` | `installDefaultPlugins` tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
 | other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
 | `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `wrangler secret put SESSION_SECRET`, then redeploy. |
 | invalid or expired token | `invalid_identity_token` | The Identity Token did not verify. | Sign in again. |
 
-`npm install @engine9/interfaces@latest` then `npx wrangler deploy` is how a
-new interfaces package reaches the Worker. Leave the `@engine9/core` version
-as it is when only interfaces changed. The deploy rebuilds `engine9.plugins.js`
-from the interfaces package this project has installed.
+`npm install @engine9/schemas@latest` then `npx wrangler deploy` is how a
+new `@engine9/schemas` version reaches the Worker. Leave the `@engine9/core`
+version as it is when only `@engine9/schemas` changed. The deploy rebuilds
+`engine9.plugins.js` from the `@engine9/schemas` package this project has
+installed.
 
 Technical reference (KV caches, R2 logs, endpoint table):
 [cloudflare/README.md](../cloudflare/README.md) and the

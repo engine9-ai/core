@@ -63,7 +63,7 @@ E9_PLUGIN_ID = "<uuid of the website plugin row>"
 # Package root is the Node build, which require()s every locale at import.
 "i18n-iso-countries" = "i18n-iso-countries/index.js"
 # Plugins compiled into the Worker: every plugin in package.json
-# "engine9.pluginPackages" (default @engine9/interfaces). wrangler's build
+# "engine9.pluginPackages" (default @engine9/schemas). wrangler's build
 # step below writes this file on every dev/deploy; e9core setup adds both.
 "@engine9/core/plugins/site" = "./engine9.plugins.js"
 

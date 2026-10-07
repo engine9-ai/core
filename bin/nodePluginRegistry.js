@@ -13,7 +13,7 @@
                            imports from its own directory) is imported fresh.
                            Old module instances are never freed, so this is
                            for small, stateless account plugins, not shared
-                           interfaces.
+                           schema plugins.
 
   Node only: it reads the filesystem. Cloudflare runtimes get the same
   discovery serialized by `e9core build-plugins` instead.

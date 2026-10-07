@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import PluginWorker from '../lib/PluginWorker.js';
 
-const LIMITED_PII_STACK_PATH = '@engine9/interfaces/stacks/limited-pii';
+const LIMITED_PII_STACK_PATH = '@engine9/schemas/stacks/limited-pii';
 
 test('limited-pii stack excludes person_email; standard stack is blocked after', async () => {
   const plugins = new PluginWorker({
@@ -19,12 +19,12 @@ test('limited-pii stack excludes person_email; standard stack is blocked after',
 
     await assert.rejects(() => plugins.installDefaultPlugins(), /excluded by/);
     await assert.rejects(
-      () => plugins.install({ path: '@engine9/interfaces/person_email' }),
-      /excluded by @engine9\/interfaces\/stacks\/limited-pii/
+      () => plugins.install({ path: '@engine9/schemas/person_email' }),
+      /excluded by @engine9\/schemas\/stacks\/limited-pii/
     );
     await assert.rejects(
-      () => plugins.install({ path: '@engine9/interfaces/person_address' }),
-      /excluded by @engine9\/interfaces\/stacks\/limited-pii/
+      () => plugins.install({ path: '@engine9/schemas/person_address' }),
+      /excluded by @engine9\/schemas\/stacks\/limited-pii/
     );
   } finally {
     await plugins.destroyAll();

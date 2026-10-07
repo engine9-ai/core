@@ -63,12 +63,12 @@ const DELEGATE_LOGIN_ERRORS = {
   plugin_registry_missing: {
     kind: 'configuration',
     message:
-      'Sign-in cannot be completed because this site was deployed without its interface plugins. The Worker must alias @engine9/core/plugins/site to the file written by e9core build-plugins, then be deployed again. Retrying sign-in will not fix it.'
+      'Sign-in cannot be completed because this site was deployed without its schema plugins. The Worker must alias @engine9/core/plugins/site to the file written by e9core build-plugins, then be deployed again. Retrying sign-in will not fix it.'
   },
   schema_update_failed: {
     kind: 'configuration',
     message:
-      'Sign-in cannot be completed because this site could not update its database while installing interfaces. D1 cannot add a column whose default is CURRENT_TIMESTAMP; that table has to be rebuilt. Retrying sign-in will not fix it.'
+      'Sign-in cannot be completed because this site could not update its database while installing schema plugins. D1 cannot add a column whose default is CURRENT_TIMESTAMP; that table has to be rebuilt. Retrying sign-in will not fix it.'
   },
   database_error: {
     kind: 'configuration',

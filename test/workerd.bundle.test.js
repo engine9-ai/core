@@ -28,8 +28,8 @@ const rootAliases = {
   mysql2: unavailableModule,
   'mysql2/promise': unavailableModule,
   'better-sqlite3': unavailableModule,
-  // Resolved from where @engine9/interfaces resolves it (a sibling checkout keeps its own node_modules).
-  'i18n-iso-countries': createRequire(require.resolve('@engine9/interfaces/package.json')).resolve(
+  // Resolved from where @engine9/schemas resolves it (a sibling checkout keeps its own node_modules).
+  'i18n-iso-countries': createRequire(require.resolve('@engine9/schemas/package.json')).resolve(
     'i18n-iso-countries/index.js'
   )
 };
@@ -156,10 +156,10 @@ test('package entry evaluates with no import.meta.url', async () => {
 });
 
 test('bundled plugin registry compiles plugins, transforms, and schemas with no filesystem', async () => {
-  // What wrangler's build step produces for a site whose plugins are every interface.
+  // What wrangler's build step produces for a site whose plugins are every schema plugin.
   const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-registry-'));
   const registryFile = path.join(siteDir, 'engine9.plugins.js');
-  buildPlugins({ cwd: root, packages: ['@engine9/interfaces'], out: registryFile });
+  buildPlugins({ cwd: root, packages: ['@engine9/schemas'], out: registryFile });
   const built = await bundleWorkerd({
     aliases: { '@engine9/core/plugins/site': registryFile },
     contents: `
@@ -169,19 +169,19 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
       export async function run() {
         const plugins = createPluginRegistry(pluginEntries, { packageVersions });
         const worker = new PersonWorker({ accountId: 't', d1: { prepare() { throw new Error('no db'); } }, plugins });
-        const person = await worker.compilePlugin({ path: '@engine9/interfaces/person' });
-        const step = await worker.resolveTransform({ path: '@engine9/interfaces/person_email:transforms:extractEmailHashes' });
-        const schema = await loadRegistrySchema(plugins, '@engine9/interfaces/person_email');
+        const person = await worker.compilePlugin({ path: '@engine9/schemas/person' });
+        const step = await worker.resolveTransform({ path: '@engine9/schemas/person_email:transforms:extractEmailHashes' });
+        const schema = await loadRegistrySchema(plugins, '@engine9/schemas/person_email');
         const errors = {};
         try { await worker.compilePlugin({ path: '@engine9/plugins/e9email' }); } catch (e) { errors.notDeclared = e.code; }
-        try { await worker.compilePlugin({ path: '@engine9/interfaces/persn' }); } catch (e) { errors.notFound = e.message; }
+        try { await worker.compilePlugin({ path: '@engine9/schemas/persn' }); } catch (e) { errors.notFound = e.message; }
         return {
           personPath: person.path,
           inbound: person.metadata?.inbound,
           transform: typeof step.transform,
           tables: schema.tables.map((t) => t.name),
           paths: await worker.listAvailable(),
-          interfacesVersion: await plugins.packageVersion('@engine9/interfaces'),
+          interfacesVersion: await plugins.packageVersion('@engine9/schemas'),
           errors
         };
       }
@@ -191,14 +191,14 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
   try {
     const mod = await import(built.href);
     const out = await exportOf(mod, 'run')();
-    assert.equal(out.personPath, '@engine9/interfaces/person');
+    assert.equal(out.personPath, '@engine9/schemas/person');
     assert.ok(out.inbound, 'person declares inbound steps');
     assert.equal(out.transform, 'function');
     assert.ok(out.tables.includes('person_email'));
-    assert.ok(out.paths.includes('@engine9/interfaces/event'));
-    assert.ok(out.interfacesVersion, 'baked packageVersions includes @engine9/interfaces');
+    assert.ok(out.paths.includes('@engine9/schemas/event'));
+    assert.ok(out.interfacesVersion, 'baked packageVersions includes @engine9/schemas');
     assert.equal(out.errors.notDeclared, 'PLUGIN_PACKAGE_NOT_DECLARED');
-    assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/interfaces\/person/);
+    assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/schemas\/person/);
   } finally {
     await rm(built.dir, { recursive: true, force: true });
     await rm(siteDir, { recursive: true, force: true });

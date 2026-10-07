@@ -11,11 +11,11 @@ not collide with the engine9 tables. Published table names are immutable; they
 are the standard. How to choose a table:
 [docs/deploy.md](../docs/deploy.md#the-project-database). The schemas it
 installs come from the public
-[`@engine9/interfaces`](https://github.com/engine9-io/interfaces) package.
+[`@engine9/schemas`](https://github.com/engine9-ai/schemas) package.
 
 Call `PersonWorker.installDefaultPlugins()` (or `e9core installDefaultPlugins` from
 [`bin/e9core.js`](../bin/e9core.js)) to deploy plugin rows and tables, or
-generate SQL for one interface with `e9core sqlite-ddl --schema …` and load
+generate SQL for one schema plugin with `e9core sqlite-ddl --schema …` and load
 it with `wrangler d1 execute --file`. Then serve the people, upsert, and read
 API from a Worker.
 
@@ -46,7 +46,7 @@ The usual path writes `wrangler.jsonc` for you, including the D1 database id:
 
 ```bash
 npx wrangler login
-npm install @engine9/core @engine9/interfaces
+npm install @engine9/core @engine9/schemas
 npx e9core setup
 npx e9core setup --remote
 ```
@@ -57,7 +57,7 @@ one piece at a time.
 1. **Install the library**
 
    ```bash
-   npm install @engine9/core @engine9/interfaces
+   npm install @engine9/core @engine9/schemas
    ```
 
 2. **Create the D1 database**
@@ -74,7 +74,7 @@ one piece at a time.
    npx e9core installDefaultPlugins --db sqlite://./engine9.db
    ```
 
-   Or print SQLite DDL for one interface and load it with D1's import API.
+   Or print SQLite DDL for one schema plugin and load it with D1's import API.
    `sqlite-ddl` emits `modified_at` triggers. `wrangler d1 migrations apply`
    posts the file to `/query` and then appends a `d1_migrations` insert, and
    `/query` rejects the statement that follows a trigger
@@ -82,15 +82,15 @@ one piece at a time.
    [Applying schema SQL to D1](../AGENTS.md#applying-schema-sql-to-d1).
 
    ```bash
-   npx e9core sqlite-ddl --schema @engine9/interfaces/plugin > migrations/0001_plugin.sql
+   npx e9core sqlite-ddl --schema @engine9/schemas/plugin > migrations/0001_plugin.sql
    wrangler d1 execute engine9 --remote --file migrations/0001_plugin.sql
    ```
 
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations
    > create tables but no rows, so `installDefaultPlugins` (which writes the rows and
    > their `transforms.inbound` snapshot) is required before people writes.
-   > Re-run it after upgrading `@engine9/interfaces` to refresh the snapshots;
-   > the Worker cannot import interface packages at runtime to fill them in.
+   > Re-run it after upgrading `@engine9/schemas` to refresh the snapshots;
+   > the Worker cannot import schema plugins at runtime to fill them in.
 
 4. **Create the plugin row and an API key**
 
@@ -135,12 +135,12 @@ one piece at a time.
 
 | Specifier | Target | Why |
 | --- | --- | --- |
-| `@engine9/input-tools` | `@engine9/core/cloudflare/input-tools-shim` | The package root pulls AWS SDK, archiver, and googleapis. Interface transforms import `mergeIntoQueue` from that root. The shim re-exports the portable helpers, including `mergeIntoQueue` from `@engine9/input-tools/mergeIntoQueue.js`. |
+| `@engine9/input-tools` | `@engine9/core/cloudflare/input-tools-shim` | The package root pulls AWS SDK, archiver, and googleapis. `@engine9/schemas` transforms import `mergeIntoQueue` from that root. The shim re-exports the portable helpers, including `mergeIntoQueue` from `@engine9/input-tools/mergeIntoQueue.js`. |
 | `knex` | `@engine9/core/cloudflare/unavailable-module` | Optional peer for SQLWorker's Node connection modes. D1 does not use it. |
 | `mysql2` | `@engine9/core/cloudflare/unavailable-module` | Same. The MySQL dialect imports it. |
 | `mysql2/promise` | `@engine9/core/cloudflare/unavailable-module` | Same. Knex loads this entry. |
 | `better-sqlite3` | `@engine9/core/cloudflare/unavailable-module` | Same. Node SQLite only. |
-| `i18n-iso-countries` | `i18n-iso-countries/index.js` | `@engine9/interfaces/person_address` imports the package root. That root is the Node build, which `require()`s every locale while the module is evaluated. `index.js` is the browser build (`"browser": "index"` in that package). |
+| `i18n-iso-countries` | `i18n-iso-countries/index.js` | `@engine9/schemas/person_address` imports the package root. That root is the Node build, which `require()`s every locale while the module is evaluated. `index.js` is the browser build (`"browser": "index"` in that package). |
 
 `npx e9core setup` writes these aliases into `wrangler.jsonc`.
 
@@ -148,7 +148,7 @@ one piece at a time.
 
 The Worker runs the plugins compiled into the bundle: every plugin in the
 packages listed in `package.json` `engine9.pluginPackages` (default
-`@engine9/interfaces`). workerd has no filesystem, so the discovery that Node
+`@engine9/schemas`). workerd has no filesystem, so the discovery that Node
 does at startup runs at build time instead: `e9core build-plugins` writes
 `engine9.plugins.js` with a literal `import()` per plugin. See
 [How plugins are loaded](../README.md#how-plugins-are-loaded).

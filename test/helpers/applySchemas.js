@@ -1,5 +1,5 @@
 /*
-  Test helper: live-install interface schemas via PluginWorker.
+  Test helper: live-install @engine9/schemas plugins via PluginWorker.
   Stack include/exclude is loaded at install time, not a static list.
 */
 import PluginWorker from '../../lib/PluginWorker.js';
@@ -39,5 +39,5 @@ export async function applyInterface(worker, pluginPath) {
 
 export async function applyStandardStack(worker) {
   const plugins = asPluginWorker(worker);
-  return plugins.installDefaultPlugins({ path: '@engine9/interfaces/stacks/standard' });
+  return plugins.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
 }

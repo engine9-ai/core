@@ -10,7 +10,7 @@ import { describeInboundTransforms, normalizeInboundSpec } from '../lib/peoplePi
 import { getPluginUUID } from '../lib/utilities.js';
 import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 
-const I = '@engine9/interfaces';
+const I = '@engine9/schemas';
 const LIMITED_PII = `${I}/stacks/limited-pii`;
 
 function newWorker() {
@@ -47,7 +47,7 @@ test('standard stack weave equals the historical hardcoded chain', async () => {
 
     const described = await worker.getInboundTransforms({ pluginId: 'p1', describe: true });
     assert.equal(described, describeInboundTransforms(steps));
-    assert.match(described, /^normalize woven {2}@engine9\/interfaces\/person:transforms:normalizeFieldNames$/m);
+    assert.match(described, /^normalize woven {2}@engine9\/schemas\/person:transforms:normalizeFieldNames$/m);
     assert.match(described, /^assign {4}core {3}person\.appendPersonId$/m);
 
     const identifyOnly = await worker.getInboundTransforms({ doNotUpsert: true });
@@ -66,8 +66,8 @@ test('limited-pii stack weaves person_hash and no plaintext contact plugin', asy
 
     const described = await worker.getInboundTransforms({ pluginId, describe: true });
     assert.doesNotMatch(described, /person_email|person_phone|person_address/, described);
-    assert.match(described, /^id {8}woven {2}@engine9\/interfaces\/person_hash:transforms:extractContactHashes$/m);
-    assert.match(described, /^upsert {4}woven {2}@engine9\/interfaces\/person_hash:transforms:upsertPersonHash$/m);
+    assert.match(described, /^id {8}woven {2}@engine9\/schemas\/person_hash:transforms:extractContactHashes$/m);
+    assert.match(described, /^upsert {4}woven {2}@engine9\/schemas\/person_hash:transforms:upsertPersonHash$/m);
 
     const summary = await worker.processPeople({
       pluginId,

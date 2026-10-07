@@ -49,16 +49,16 @@ test('installDefaultPlugins respects warehouse default_stack setting', async () 
     await worker.installDefaultPlugins();
     const { data: pluginRows } = await worker.query({
       sql: 'select id from plugin where path=?',
-      values: ['@engine9/interfaces/plugin']
+      values: ['@engine9/schemas/plugin']
     });
     assert.ok(pluginRows[0]?.id);
     await worker.setSetting({
       pluginId: pluginRows[0].id,
       name: 'default_stack',
-      value: '@engine9/interfaces/stacks/standard'
+      value: '@engine9/schemas/stacks/standard'
     });
     const r = await worker.installDefaultPlugins();
-    assert.equal(r.path, '@engine9/interfaces/stacks/standard');
+    assert.equal(r.path, '@engine9/schemas/stacks/standard');
     const { tables } = await worker.tables();
     assert.ok(tables.indexOf('timeline') >= 0, 'expected timeline from standard stack');
     assert.ok(tables.indexOf('transaction') >= 0, 'expected transaction from standard stack');
@@ -71,21 +71,21 @@ test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting',
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await worker.installDefaultPlugins();
-    await worker.install({ path: '@engine9/interfaces/utilities/limited-pii' });
+    await worker.install({ path: '@engine9/schemas/utilities/limited-pii' });
     const { data: coreRows } = await worker.query({
       sql: 'select id from plugin where path=?',
-      values: ['@engine9/interfaces/plugin']
+      values: ['@engine9/schemas/plugin']
     });
     const { data: limitedRows } = await worker.query({
       sql: 'select id from plugin where path=?',
-      values: ['@engine9/interfaces/utilities/limited-pii']
+      values: ['@engine9/schemas/utilities/limited-pii']
     });
     assert.ok(coreRows[0]?.id);
     assert.ok(limitedRows[0]?.id);
     await worker.setSetting({
       pluginId: coreRows[0].id,
       name: 'default_stack',
-      value: '@engine9/interfaces/stacks/standard'
+      value: '@engine9/schemas/stacks/standard'
     });
     await worker.setSetting({
       pluginId: limitedRows[0].id,
@@ -93,9 +93,9 @@ test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting',
       value: true
     });
     const r = await worker.installDefaultPlugins();
-    assert.equal(r.path, '@engine9/interfaces/stacks/limited-pii');
+    assert.equal(r.path, '@engine9/schemas/stacks/limited-pii');
     await assert.rejects(
-      () => worker.install({ path: '@engine9/interfaces/stacks/standard' }),
+      () => worker.install({ path: '@engine9/schemas/stacks/standard' }),
       /exclude_pii/
     );
   } finally {

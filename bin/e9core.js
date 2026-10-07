@@ -39,16 +39,24 @@
         No database: generate a key and print the INSERT statement for the
         api_key table -- useful for D1 migration files (wrangler d1 execute).
 
-    e9core sqlite-ddl --schema @engine9/interfaces/person
+    e9core sqlite-ddl --schema @engine9/schemas/person
         Print the SQLite/D1 create statements for a schema. Load the file
         with wrangler d1 execute --file. migrations apply posts to /query
         and fails on the modified_at triggers this prints.
 
     e9core installDefaultPlugins --db sqlite://./engine9.db [--stack ...]
-        Live-install published person interfaces (default), or an opt-in stack
-        with --stack (e.g. @engine9/interfaces/stacks/standard): plugin rows +
+        Live-install the published person schema plugins (default), or an opt-in stack
+        with --stack (e.g. @engine9/schemas/stacks/standard): plugin rows +
         create/alter tables. Not the same as the stack named "standard" unless
         you pass that --stack (or set the warehouse default_stack setting).
+
+    e9core migratePackageRename --db sqlite://./engine9.db [--dryRun]
+        Rewrite stored @engine9/interfaces/... plugin paths (plugin, segment,
+        setting rows) to @engine9/schemas/.... Prints counts before and after.
+
+    e9core package-rename-sql [--dialect sqlite|mysql] > rename-schemas.sql
+        Print the same updates as plain SQL, for D1:
+        wrangler d1 execute <database> --remote --file rename-schemas.sql
 
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
         Write the plugin registry module a Cloudflare Worker is bundled with.
@@ -76,7 +84,7 @@
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 
   Plugins are every index.js directory and *.plugin.js file in the packages
-  listed in package.json "engine9.pluginPackages" (default: @engine9/interfaces).
+  listed in package.json "engine9.pluginPackages" (default: @engine9/schemas).
   These Node commands read them from node_modules when they start.
 */
 import PluginWorker from '../lib/PluginWorker.js';
@@ -88,6 +96,7 @@ import {
   assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
+import { packageRenameStatements } from '../lib/packageRename.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
 import { setupKeys, readEnvValue } from './setupKeys.js';
@@ -477,12 +486,12 @@ async function main() {
     case 'sqlite-ddl': {
       if (args.stack) {
         console.error('sqlite-ddl does not accept --stack; pass --schema <package>');
-        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/schemas/person');
         process.exit(1);
       }
       if (!args.schema || args.schema === true) {
         console.error('sqlite-ddl requires --schema <package>');
-        console.error('  Example: e9core sqlite-ddl --schema @engine9/interfaces/person');
+        console.error('  Example: e9core sqlite-ddl --schema @engine9/schemas/person');
         process.exit(1);
       }
       let schema;
@@ -503,6 +512,21 @@ async function main() {
         });
         statements.forEach((s) => console.log(`${s};`));
       }
+      break;
+    }
+    case 'migratePackageRename': {
+      const worker = getPluginWorker(args);
+      try {
+        console.log(JSON.stringify(await worker.migratePackageRename({ dryRun: args.dryRun === true }), null, 2));
+      } finally {
+        await worker.destroy();
+      }
+      break;
+    }
+    case 'package-rename-sql': {
+      const dialect = args.dialect && args.dialect !== true ? String(args.dialect) : 'sqlite';
+      console.log('-- @engine9/interfaces -> @engine9/schemas (PluginWorker.migratePackageRename)');
+      for (const s of packageRenameStatements({ dialect, inline: true })) console.log(`${s.updateSql};`);
       break;
     }
     case 'installDefaultPlugins': {
@@ -536,7 +560,9 @@ async function main() {
     }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
-      console.log('Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|build-plugins>');
+      console.log(
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|migratePackageRename|package-rename-sql|build-plugins>'
+      );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);
   }

@@ -9,7 +9,7 @@ already follows this standard. The code is `getInboundTransforms.js` in this
 directory.
 
 Plugin steps come from published packages such as
-[`@engine9/interfaces`](https://github.com/engine9-io/interfaces). Installing
+[`@engine9/schemas`](https://github.com/engine9-ai/schemas). Installing
 a plugin adds its steps; the pipeline itself stays fixed.
 
 ## The one idea: slots
@@ -47,7 +47,7 @@ extraTransforms / omitTransforms ──► per-job additions and removals
       beforeAll → normalize → id → assign → upsert → afterAll
 ```
 
-A PII-free account (`@engine9/interfaces/stacks/limited-pii`) is the clearest
+A PII-free account (`@engine9/schemas/stacks/limited-pii`) is the clearest
 example: it has `person_hash` installed and `person_email` / `person_phone` /
 `person_address` not installed. The weave for that account has hash steps in
 `id` and `upsert` and no plaintext steps anywhere. No flag in core, no branch —
@@ -114,21 +114,21 @@ await personWorker.getInboundTransforms({ pluginId, describe: true });
 ```
 
 ```
-normalize woven  @engine9/interfaces/person:transforms:normalizeFieldNames
-id        woven  @engine9/interfaces/person_email:transforms:extractEmailHashes
-id        woven  @engine9/interfaces/person_phone:transforms:extractPhoneHashes
-id        woven  @engine9/interfaces/person_remote:transforms:extractRemotePersonIds
+normalize woven  @engine9/schemas/person:transforms:normalizeFieldNames
+id        woven  @engine9/schemas/person_email:transforms:extractEmailHashes
+id        woven  @engine9/schemas/person_phone:transforms:extractPhoneHashes
+id        woven  @engine9/schemas/person_remote:transforms:extractRemotePersonIds
 id        core   person.extractDelegateIdentifiers
 assign    core   person.appendInputId
 assign    core   person.appendPersonId
 assign    core   person.appendEntryTypeId
 assign    core   person.validateSourceCodeAscii table=source_code_dictionary
 assign    core   person.appendSourceCodeId
-upsert    woven  @engine9/interfaces/person:transforms:upsertPerson
-upsert    woven  @engine9/interfaces/person_address:transforms:upsertPersonAddress
-upsert    woven  @engine9/interfaces/person_email:transforms:upsertPersonEmail
-upsert    woven  @engine9/interfaces/person_phone:transforms:upsertPersonPhone
-upsert    woven  @engine9/interfaces/person_remote:transforms:upsertPersonRemote
+upsert    woven  @engine9/schemas/person:transforms:upsertPerson
+upsert    woven  @engine9/schemas/person_address:transforms:upsertPersonAddress
+upsert    woven  @engine9/schemas/person_email:transforms:upsertPersonEmail
+upsert    woven  @engine9/schemas/person_phone:transforms:upsertPersonPhone
+upsert    woven  @engine9/schemas/person_remote:transforms:upsertPersonRemote
 ```
 
 On the private server, once the database is engine9-capable:
@@ -149,12 +149,12 @@ Typical questions this answers:
 Jobs can adjust the woven chain without touching plugins:
 
 - `extraTransforms` (`extra_transforms` on the server) appends steps to a slot:
-  `{ afterAll: [{ path: '@engine9/interfaces/timeline:transforms:upsert' }] }`.
+  `{ afterAll: [{ path: '@engine9/schemas/timeline:transforms:upsert' }] }`.
   Extras run after the woven steps in that slot. An extra that repeats a woven
   path is dropped, so old configs that spelled out a now-installed plugin still
   run it once.
 - `omitTransforms` (`omit_transforms`) removes paths for this job only:
-  `['@engine9/interfaces/person_address:transforms:upsertPersonAddress']`.
+  `['@engine9/schemas/person_address:transforms:upsertPersonAddress']`.
 - `doNotUpsert` (`do_not_upsert`) stops after `assign`: identify people, write
   nothing.
 
@@ -175,5 +175,5 @@ Jobs can adjust the woven chain without touching plugins:
 - Weaver, slots, describe: `core/lib/peoplePipeline/getInboundTransforms.js`
 - Snapshot at install: `core/lib/PluginWorker.js` (`installRow`)
 - Transform registry a Worker executes: `core/lib/PersonWorker.js`
-- Example declarations: `interfaces/person_email/index.js`, `interfaces/person_hash/index.js`
+- Example declarations: `schemas/person_email/index.js`, `schemas/person_hash/index.js`
 - Tests: `core/test/inboundWeaver.test.js`

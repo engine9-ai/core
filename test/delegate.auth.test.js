@@ -205,7 +205,7 @@ test('normalizeDelegateLoginFailure maps plain errors and preserves structured f
 
   const registry = normalizeDelegateLoginFailure(
     new Error(
-      'Plugin @engine9/interfaces/plugin cannot load: no plugin registry is configured. Cloudflare: alias @engine9/core/plugins/site to the module wrangler builds with `e9core build-plugins`.'
+      'Plugin @engine9/schemas/plugin cannot load: no plugin registry is configured. Cloudflare: alias @engine9/core/plugins/site to the module wrangler builds with `e9core build-plugins`.'
     )
   );
   assert.equal(registry.reason, 'plugin_registry_missing');

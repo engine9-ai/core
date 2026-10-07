@@ -12,14 +12,15 @@
 
   package.json:
     "engine9": {
-      "pluginPackages":        ["@engine9/interfaces", "@engine9/plugins"],
+      "pluginPackages":        ["@engine9/schemas", "@engine9/plugins"],
       "dynamicPluginPackages": ["engine9-accounts"],   // Node only; a bundle refuses it
-      "plugins": ["@engine9/interfaces/event"]         // legacy: only these identities
-                                                       // (plus core interfaces and
+      "plugins": ["@engine9/schemas/event"]            // legacy: only these identities
+                                                       // (plus the core schemas and
                                                        // stack includes)
     }
 
-  With none of these, every plugin in @engine9/interfaces is included.
+  With none of these, every plugin in @engine9/schemas is included.
+  `@engine9/interfaces` (the package's former name) is read as @engine9/schemas.
 
   A plugin is a directory with index.js (identity: <package>/<dir>) or a
   file named *.plugin.js (identity: <package>/<dir>/<file>). Next to index.js,
@@ -30,11 +31,17 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import JSON5 from 'json5';
 import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
-import { normalizePluginInstallPath, packageNameOf } from '../lib/pluginPaths.js';
+import {
+  LEGACY_SCHEMAS_PACKAGE,
+  SCHEMAS_PACKAGE,
+  normalizePluginInstallPath,
+  normalizePluginPackageName,
+  packageNameOf
+} from '../lib/pluginPaths.js';
 import { PLUGIN_CONFIG_INVALID, PluginLoadError } from '../lib/pluginRegistry.js';
 
 const DEFAULT_OUT = 'engine9.plugins.js';
-const DEFAULT_PACKAGES = ['@engine9/interfaces'];
+const DEFAULT_PACKAGES = [SCHEMAS_PACKAGE];
 const SKIP_DIRS = new Set(['node_modules', 'skills', 'test', 'tests']);
 
 function asList(value, key) {
@@ -45,6 +52,25 @@ function asList(value, key) {
   return [...new Set(value.map((v) => v.trim()))];
 }
 
+let warnedLegacyPackage = false;
+function asPackageList(value, key) {
+  return [
+    ...new Set(
+      asList(value, key).map((name) => {
+        const normalized = normalizePluginPackageName(name);
+        if (normalized !== name && !warnedLegacyPackage) {
+          warnedLegacyPackage = true;
+          console.warn(
+            `package.json "engine9.${key}" lists ${LEGACY_SCHEMAS_PACKAGE}, which was renamed to ${SCHEMAS_PACKAGE}. ` +
+              `Loading ${SCHEMAS_PACKAGE}; run npm install ${SCHEMAS_PACKAGE} and update package.json.`
+          );
+        }
+        return normalized;
+      })
+    )
+  ];
+}
+
 /**
  * The "engine9" plugin configuration of the project at `cwd`.
  * @returns {{ plugins: string[]|null, pluginPackages: string[], dynamicPluginPackages: string[], configured: boolean }}
@@ -53,8 +79,8 @@ export function readEngine9Config(cwd) {
   const file = path.join(cwd, 'package.json');
   const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).engine9 || {} : {};
   const plugins = config.plugins ? asList(config.plugins, 'plugins') : null;
-  const pluginPackages = asList(config.pluginPackages, 'pluginPackages');
-  const dynamicPluginPackages = asList(config.dynamicPluginPackages, 'dynamicPluginPackages');
+  const pluginPackages = asPackageList(config.pluginPackages, 'pluginPackages');
+  const dynamicPluginPackages = asPackageList(config.dynamicPluginPackages, 'dynamicPluginPackages');
   const both = pluginPackages.filter((p) => dynamicPluginPackages.includes(p));
   if (both.length) {
     throw new PluginLoadError(
@@ -73,7 +99,7 @@ export function readEngine9Config(cwd) {
 /**
  * Absolute directory of an installed package, resolved from `cwd`.
  * With `peerFallback`, a package the project has not installed may still be
- * found next to @engine9/core (its peer dependency, e.g. @engine9/interfaces);
+ * found next to @engine9/core (its peer dependency, e.g. @engine9/schemas);
  * that is fine for Node, which imports by absolute path, but not for a bundle,
  * which resolves the literal specifier from the project root.
  */
