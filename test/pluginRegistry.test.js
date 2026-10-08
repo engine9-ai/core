@@ -44,7 +44,7 @@ const fixture = createPluginRegistry(
 );
 
 test('compileRegistryPlugin stamps path, transforms, and settings', async () => {
-  const plugin = await compileRegistryPlugin(fixture, 'local$acme/crm');
+  const plugin = await compileRegistryPlugin(fixture, 'acme/crm');
   assert.equal(plugin.path, 'acme/crm');
   assert.equal(plugin.transforms.pull.path, 'acme/crm');
   assert.deepEqual(plugin.settings, [{ name: 'api_host', default: 'crm.example.com' }]);

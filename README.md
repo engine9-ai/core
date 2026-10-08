@@ -411,8 +411,9 @@ Everything under `/api` in the shipped Worker and `serve`.
 
 `@engine9/core/pluginPaths` treats plugin rows and stack `include` / `exclude`
 lists as **package identity only** (`@engine9/schemas/person`).
-The plugin registry maps that identity to a module. Legacy `local$@engine9/...`
-strings are accepted and normalized.
+The plugin registry maps that identity to a module. Paths match exactly; a
+`local$` or `@engine9/interfaces` path fails to load until
+`migratePackageRename` rewrites it.
 
 ### How plugins are loaded
 

@@ -26,7 +26,7 @@ import path from 'node:path';
 import { createRequire, registerHooks } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import JSON5 from 'json5';
-import { normalizePluginInstallPath, packageNameOf } from '../lib/pluginPaths.js';
+import { packageNameOf } from '../lib/pluginPaths.js';
 import {
   composePluginRegistries,
   createPluginRegistry,
@@ -125,7 +125,7 @@ function createDynamicNodeRegistry({ cwd, packages, name }) {
   const cache = new Map();
 
   function resolve(pluginPath) {
-    const identity = normalizePluginInstallPath(pluginPath);
+    const identity = String(pluginPath || '');
     const pkg = packageNameOf(identity);
     const root = roots.get(pkg);
     if (!root) return null;

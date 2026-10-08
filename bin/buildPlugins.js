@@ -20,7 +20,6 @@
     }
 
   With none of these, every plugin in @engine9/schemas is included.
-  `@engine9/interfaces` (the package's former name) is read as @engine9/schemas.
 
   A plugin is a directory with index.js (identity: <package>/<dir>) or a
   file named *.plugin.js (identity: <package>/<dir>/<file>). Next to index.js,
@@ -31,13 +30,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import JSON5 from 'json5';
 import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
-import {
-  LEGACY_SCHEMAS_PACKAGE,
-  SCHEMAS_PACKAGE,
-  normalizePluginInstallPath,
-  normalizePluginPackageName,
-  packageNameOf
-} from '../lib/pluginPaths.js';
+import { SCHEMAS_PACKAGE, packageNameOf } from '../lib/pluginPaths.js';
 import { PLUGIN_CONFIG_INVALID, PluginLoadError } from '../lib/pluginRegistry.js';
 
 const DEFAULT_OUT = 'engine9.plugins.js';
@@ -52,25 +45,6 @@ function asList(value, key) {
   return [...new Set(value.map((v) => v.trim()))];
 }
 
-let warnedLegacyPackage = false;
-function asPackageList(value, key) {
-  return [
-    ...new Set(
-      asList(value, key).map((name) => {
-        const normalized = normalizePluginPackageName(name);
-        if (normalized !== name && !warnedLegacyPackage) {
-          warnedLegacyPackage = true;
-          console.warn(
-            `package.json "engine9.${key}" lists ${LEGACY_SCHEMAS_PACKAGE}, which was renamed to ${SCHEMAS_PACKAGE}. ` +
-              `Loading ${SCHEMAS_PACKAGE}; run npm install ${SCHEMAS_PACKAGE} and update package.json.`
-          );
-        }
-        return normalized;
-      })
-    )
-  ];
-}
-
 /**
  * The "engine9" plugin configuration of the project at `cwd`.
  * @returns {{ plugins: string[]|null, pluginPackages: string[], dynamicPluginPackages: string[], configured: boolean }}
@@ -79,8 +53,8 @@ export function readEngine9Config(cwd) {
   const file = path.join(cwd, 'package.json');
   const config = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')).engine9 || {} : {};
   const plugins = config.plugins ? asList(config.plugins, 'plugins') : null;
-  const pluginPackages = asPackageList(config.pluginPackages, 'pluginPackages');
-  const dynamicPluginPackages = asPackageList(config.dynamicPluginPackages, 'dynamicPluginPackages');
+  const pluginPackages = asList(config.pluginPackages, 'pluginPackages');
+  const dynamicPluginPackages = asList(config.dynamicPluginPackages, 'dynamicPluginPackages');
   const both = pluginPackages.filter((p) => dynamicPluginPackages.includes(p));
   if (both.length) {
     throw new PluginLoadError(
@@ -190,7 +164,7 @@ export function discoverPackagePlugins(cwd, name, resolveOptions) {
 function selectEntries(discovered, requested) {
   const byIdentity = new Map(discovered.map((e) => [e.identity, e]));
   const selected = new Map();
-  const queue = requested.map(normalizePluginInstallPath);
+  const queue = [...requested];
   while (queue.length) {
     const identity = queue.shift();
     if (selected.has(identity)) continue;

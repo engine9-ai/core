@@ -61,15 +61,16 @@ plugins. Leave the `@engine9/core` version as it is when only
 
 ### Renamed from `@engine9/interfaces`
 
-The package was named `@engine9/interfaces` through 1.8.1. A site that used it
-moves over in three steps:
+The package was named `@engine9/interfaces` through 1.8.1. Core 1.9 does not
+read the old name anywhere, so a site that used it moves over in three steps
+before it runs on 1.9:
 
 1. Replace the dependency: `npm uninstall @engine9/interfaces && npm install @engine9/schemas`.
 2. In `package.json`, change `"engine9": { "pluginPackages": ["@engine9/interfaces"] }`
-   to `@engine9/schemas`. Until you do, core reads the old name as the new one
-   and prints a warning.
-3. Rewrite the plugin paths stored in the database. Core reads the old paths
-   either way; this makes the rows say the new name.
+   to `@engine9/schemas`. The old name is not a package core can load.
+3. Rewrite the plugin paths stored in the database. Rows that still say
+   `@engine9/interfaces/...`, or start with the old `local$` prefix, fail to
+   load until this runs.
 
    ```bash
    # Node / SQLite / MySQL

@@ -51,8 +51,9 @@
         you pass that --stack (or set the warehouse default_stack setting).
 
     e9core migratePackageRename --db sqlite://./engine9.db [--dryRun]
-        Rewrite stored @engine9/interfaces/... plugin paths (plugin, segment,
-        setting rows) to @engine9/schemas/.... Prints counts before and after.
+        Rewrite stored plugin paths (plugin, segment, setting rows): @engine9/interfaces/...
+        becomes @engine9/schemas/... and a local$ prefix is dropped. Prints counts
+        before and after.
 
     e9core package-rename-sql [--dialect sqlite|mysql] > rename-schemas.sql
         Print the same updates as plain SQL, for D1:
@@ -525,7 +526,7 @@ async function main() {
     }
     case 'package-rename-sql': {
       const dialect = args.dialect && args.dialect !== true ? String(args.dialect) : 'sqlite';
-      console.log('-- @engine9/interfaces -> @engine9/schemas (PluginWorker.migratePackageRename)');
+      console.log('-- @engine9/interfaces -> @engine9/schemas, drop local$ (PluginWorker.migratePackageRename)');
       for (const s of packageRenameStatements({ dialect, inline: true })) console.log(`${s.updateSql};`);
       break;
     }
