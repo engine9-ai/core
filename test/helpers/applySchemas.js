@@ -32,7 +32,7 @@ export async function ensurePluginRow(worker, { id, path, name, tablePrefix = ''
   return row;
 }
 
-export async function applyInterface(worker, pluginPath) {
+export async function applySchemaPlugin(worker, pluginPath) {
   const plugins = asPluginWorker(worker);
   return plugins.install({ path: pluginPath, unique: true });
 }

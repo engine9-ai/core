@@ -181,7 +181,7 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
           transform: typeof step.transform,
           tables: schema.tables.map((t) => t.name),
           paths: await worker.listAvailable(),
-          interfacesVersion: await plugins.packageVersion('@engine9/schemas'),
+          schemasVersion: await plugins.packageVersion('@engine9/schemas'),
           errors
         };
       }
@@ -196,7 +196,7 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
     assert.equal(out.transform, 'function');
     assert.ok(out.tables.includes('person_email'));
     assert.ok(out.paths.includes('@engine9/schemas/event'));
-    assert.ok(out.interfacesVersion, 'baked packageVersions includes @engine9/schemas');
+    assert.ok(out.schemasVersion, 'baked packageVersions includes @engine9/schemas');
     assert.equal(out.errors.notDeclared, 'PLUGIN_PACKAGE_NOT_DECLARED');
     assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/schemas\/person/);
   } finally {

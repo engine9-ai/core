@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import PersonWorker from '../lib/PersonWorker.js';
-import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
+import { DEFAULT_CORE_SCHEMAS } from '../lib/stackMetadata.js';
 
 test('installDefaultPlugins bootstraps a SQLite database for the person pipeline', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -9,7 +9,7 @@ test('installDefaultPlugins bootstraps a SQLite database for the person pipeline
     const r = await worker.installDefaultPlugins();
     assert.equal(r.complete, true);
     assert.equal(r.path, null);
-    assert.deepEqual(r.installed, DEFAULT_CORE_INTERFACES);
+    assert.deepEqual(r.installed, DEFAULT_CORE_SCHEMAS);
     const { tables } = await worker.tables();
     for (const t of [
       'plugin',
@@ -29,10 +29,10 @@ test('installDefaultPlugins bootstraps a SQLite database for the person pipeline
       assert.ok(tables.indexOf(t) < 0, `did not expect table ${t} from no-arg installDefaultPlugins`);
     }
     const { data: pluginRows } = await worker.query('select path from plugin order by path');
-    assert.equal(pluginRows.length, DEFAULT_CORE_INTERFACES.length);
+    assert.equal(pluginRows.length, DEFAULT_CORE_SCHEMAS.length);
     assert.deepEqual(
       pluginRows.map((row) => row.path).sort(),
-      [...DEFAULT_CORE_INTERFACES].sort()
+      [...DEFAULT_CORE_SCHEMAS].sort()
     );
 
     await worker.installDefaultPlugins();
@@ -108,7 +108,7 @@ test('PersonWorker.installStandard is a deprecated alias for installDefaultPlugi
   try {
     const r = await worker.installStandard();
     assert.equal(r.complete, true);
-    assert.deepEqual(r.installed, DEFAULT_CORE_INTERFACES);
+    assert.deepEqual(r.installed, DEFAULT_CORE_SCHEMAS);
   } finally {
     await worker.destroy();
   }

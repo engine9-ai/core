@@ -29,7 +29,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import JSON5 from 'json5';
-import { DEFAULT_CORE_INTERFACES } from '../lib/stackMetadata.js';
+import { DEFAULT_CORE_SCHEMAS } from '../lib/stackMetadata.js';
 import { SCHEMAS_PACKAGE, packageNameOf } from '../lib/pluginPaths.js';
 import { PLUGIN_CONFIG_INVALID, PluginLoadError } from '../lib/pluginRegistry.js';
 
@@ -193,7 +193,7 @@ export function collectPluginEntries(options = {}) {
   const config = readEngine9Config(cwd);
   const requested = options.plugins || config.plugins || null;
   if (requested) {
-    const all = [...DEFAULT_CORE_INTERFACES, ...requested];
+    const all = [...DEFAULT_CORE_SCHEMAS, ...requested];
     const packages = [...new Set([...(options.packages || config.pluginPackages), ...all.map(packageNameOf)])];
     const discovered = packages.flatMap((name) => discoverPackagePlugins(cwd, name, resolveOptions));
     return {

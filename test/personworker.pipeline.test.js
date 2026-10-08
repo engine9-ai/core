@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { createHash } from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, applyInterface, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyStandardStack, applySchemaPlugin, ensurePluginRow } from './helpers/applySchemas.js';
 
 test('client PersonWorker: processPeople runs the inbound pipeline end to end', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -96,8 +96,8 @@ test('person_hash is woven in once it is installed -- no extraTransforms needed'
     const beforeInstall = await worker.getInboundTransforms({ pluginId });
     assert.ok(!beforeInstall.some((t) => t.path === hashId), 'not woven before install');
 
-    const first = await applyInterface(worker, '@engine9/schemas/person_hash');
-    const second = await applyInterface(worker, '@engine9/schemas/person_hash');
+    const first = await applySchemaPlugin(worker, '@engine9/schemas/person_hash');
+    const second = await applySchemaPlugin(worker, '@engine9/schemas/person_hash');
     assert.equal(second.id, first.id, 'person_hash plugin row is unique by path');
     const { data: pluginRows } = await worker.query(
       "select id, transforms from plugin where path='@engine9/schemas/person_hash'"

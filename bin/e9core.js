@@ -50,15 +50,6 @@
         create/alter tables. Not the same as the stack named "standard" unless
         you pass that --stack (or set the warehouse default_stack setting).
 
-    e9core migratePackageRename --db sqlite://./engine9.db [--dryRun]
-        Rewrite stored plugin paths (plugin, segment, setting rows): @engine9/interfaces/...
-        becomes @engine9/schemas/... and a local$ prefix is dropped. Prints counts
-        before and after.
-
-    e9core package-rename-sql [--dialect sqlite|mysql] > rename-schemas.sql
-        Print the same updates as plain SQL, for D1:
-        wrangler d1 execute <database> --remote --file rename-schemas.sql
-
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
         Write the plugin registry module a Cloudflare Worker is bundled with.
         `e9core setup` puts this in wrangler's build step; it is not run by hand.
@@ -97,7 +88,6 @@ import {
   assertValidKeyScopes,
 } from '../auth/index.js';
 import { buildCreateTable } from '../lib/sql/sqliteDDL.js';
-import { packageRenameStatements } from '../lib/packageRename.js';
 import { standardizeSchema } from '../lib/sql/standardizeSchema.js';
 import sqliteDialect from '../lib/sql/dialects/SQLite.js';
 import { setupKeys, readEnvValue } from './setupKeys.js';
@@ -515,21 +505,6 @@ async function main() {
       }
       break;
     }
-    case 'migratePackageRename': {
-      const worker = getPluginWorker(args);
-      try {
-        console.log(JSON.stringify(await worker.migratePackageRename({ dryRun: args.dryRun === true }), null, 2));
-      } finally {
-        await worker.destroy();
-      }
-      break;
-    }
-    case 'package-rename-sql': {
-      const dialect = args.dialect && args.dialect !== true ? String(args.dialect) : 'sqlite';
-      console.log('-- @engine9/interfaces -> @engine9/schemas, drop local$ (PluginWorker.migratePackageRename)');
-      for (const s of packageRenameStatements({ dialect, inline: true })) console.log(`${s.updateSql};`);
-      break;
-    }
     case 'installDefaultPlugins': {
       const worker = getPluginWorker(args);
       try {
@@ -562,7 +537,7 @@ async function main() {
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|migratePackageRename|package-rename-sql|build-plugins>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|build-plugins>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

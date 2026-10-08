@@ -151,12 +151,7 @@ npx wrangler deploy
 
 Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed.
 
-The package was named `@engine9/interfaces` through 1.8.1. Plugin paths
-match exactly: core does not read `@engine9/interfaces/...` or `local$...`
-paths, and a row that still uses one fails to load. Do not add aliases for
-them. `PluginWorker.migratePackageRename` rewrites the stored paths
-(`npx e9core migratePackageRename`, or `npx e9core package-rename-sql` for a
-D1 `execute --file`). Write new code and docs with `@engine9/schemas`.
+Plugin paths match exactly. Do not add alias spellings or prefixes for them.
 
 ## Plugins
 

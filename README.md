@@ -27,9 +27,7 @@ Other libraries that speak it:
 `@engine9/schemas` is a peer of this package. Install both in the site.
 `@engine9/schemas` publishes on its own; upgrade it and redeploy (wrangler
 rebuilds the plugin registry as part of the deploy). A core release is for
-changes to core. It was named `@engine9/interfaces` through 1.8.1. Details,
-including moving a site off the old name:
-[docs/deploy.md](docs/deploy.md#schemas).
+changes to core. Details: [docs/deploy.md](docs/deploy.md#schemas).
 
 ## Pick a platform
 
@@ -411,9 +409,7 @@ Everything under `/api` in the shipped Worker and `serve`.
 
 `@engine9/core/pluginPaths` treats plugin rows and stack `include` / `exclude`
 lists as **package identity only** (`@engine9/schemas/person`).
-The plugin registry maps that identity to a module. Paths match exactly; a
-`local$` or `@engine9/interfaces` path fails to load until
-`migratePackageRename` rewrites it.
+The plugin registry maps that identity to a module. Paths match exactly.
 
 ### How plugins are loaded
 

@@ -59,33 +59,6 @@ bundle is rebuilt by wrangler's build step (`e9core setup` put
 plugins. Leave the `@engine9/core` version as it is when only
 `@engine9/schemas` changed.
 
-### Renamed from `@engine9/interfaces`
-
-The package was named `@engine9/interfaces` through 1.8.1. Core 1.9 does not
-read the old name anywhere, so a site that used it moves over in three steps
-before it runs on 1.9:
-
-1. Replace the dependency: `npm uninstall @engine9/interfaces && npm install @engine9/schemas`.
-2. In `package.json`, change `"engine9": { "pluginPackages": ["@engine9/interfaces"] }`
-   to `@engine9/schemas`. The old name is not a package core can load.
-3. Rewrite the plugin paths stored in the database. Rows that still say
-   `@engine9/interfaces/...`, or start with the old `local$` prefix, fail to
-   load until this runs.
-
-   ```bash
-   # Node / SQLite / MySQL
-   npx e9core migratePackageRename --db sqlite://./engine9.db --dryRun
-   npx e9core migratePackageRename --db sqlite://./engine9.db
-
-   # D1
-   npx e9core package-rename-sql > rename-schemas.sql
-   npx wrangler d1 execute <database> --remote --file rename-schemas.sql
-   ```
-
-   The updates touch `plugin.path`, `plugin_history.path`,
-   `segment.definition_path`, `segment.search`, `setting.value`, and
-   `plugin.schema`. No IDs change. Running them again changes nothing.
-
 ## The project database
 
 The database you deploy here is the **primary database for the project**.
