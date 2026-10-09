@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import PersonWorker from '../lib/PersonWorker.js';
 import { DEFAULT_CORE_SCHEMAS } from '../lib/stackMetadata.js';
+import { readIdentifierStoreKind } from '../lib/id/storeKind.js';
 
 test('installDefaultPlugins bootstraps a SQLite database for the person pipeline', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -14,7 +15,6 @@ test('installDefaultPlugins bootstraps a SQLite database for the person pipeline
     for (const t of [
       'plugin',
       'person',
-      'person_identifier',
       'person_email',
       'person_phone',
       'person_address',
@@ -25,9 +25,10 @@ test('installDefaultPlugins bootstraps a SQLite database for the person pipeline
     ]) {
       assert.ok(tables.indexOf(t) >= 0, `expected table ${t}, got ${tables.join(',')}`);
     }
-    for (const t of ['timeline', 'transaction']) {
+    for (const t of ['timeline', 'transaction', 'person_identifier']) {
       assert.ok(tables.indexOf(t) < 0, `did not expect table ${t} from no-arg installDefaultPlugins`);
     }
+    assert.equal(await readIdentifierStoreKind(worker), 'compact', 'new accounts use compact person ids');
     const { data: pluginRows } = await worker.query('select path from plugin order by path');
     assert.equal(pluginRows.length, DEFAULT_CORE_SCHEMAS.length);
     assert.deepEqual(

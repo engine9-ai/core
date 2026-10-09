@@ -38,8 +38,7 @@ binding = "LOG_BUCKET"
 bucket_name = "engine9-modification-logs"
 
 # Compact person identifier lookups via Durable Object (optional).
-# Without this binding, D1/SQLite still uses compact person_id_<id_type> tables;
-# MySQL deployments use the full person_identifier table.
+# Without this binding, D1 uses the person_id_<id_type> tables.
 [[durable_objects.bindings]]
 name = "PERSON_IDS"
 class_name = "PersonIdentifierDO"

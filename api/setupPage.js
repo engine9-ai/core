@@ -5,10 +5,6 @@
 
 import { setupStep } from './setupSteps.js';
 
-const META_TABLE = 'e9core_meta';
-const KEY_FINISHED = 'setup_finished';
-const KEY_ORIGINS = 'allowed_origins';
-
 export function parseOriginList(value) {
   if (Array.isArray(value)) {
     return value.map((v) => String(v || '').trim()).filter(Boolean);
@@ -17,86 +13,6 @@ export function parseOriginList(value) {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-export function mergeOrigins(...lists) {
-  const out = [];
-  const seen = new Set();
-  for (const list of lists) {
-    for (const origin of parseOriginList(list)) {
-      if (seen.has(origin)) continue;
-      seen.add(origin);
-      out.push(origin);
-    }
-  }
-  return out;
-}
-
-export async function ensureSetupMeta(worker) {
-  if (!worker) return;
-  try {
-    await worker.query({ sql: `SELECT 1 AS ok FROM ${META_TABLE} LIMIT 1` });
-  } catch {
-    await worker.createTable({
-      table: META_TABLE,
-      columns: [
-        { name: 'key', type: 'string' },
-        { name: 'value', type: 'text' }
-      ],
-      indexes: [{ columns: ['key'], primary: true }]
-    });
-  }
-}
-
-export async function getMeta(worker, key) {
-  if (!worker) return null;
-  await ensureSetupMeta(worker);
-  const { data } = await worker.query({
-    sql: `SELECT value FROM ${META_TABLE} WHERE key = ?`,
-    values: [key]
-  });
-  return data?.[0]?.value ?? null;
-}
-
-export async function setMeta(worker, key, value) {
-  if (!worker) return;
-  await ensureSetupMeta(worker);
-  const existing = await getMeta(worker, key);
-  if (existing == null) {
-    await worker.query({
-      sql: `INSERT INTO ${META_TABLE} (key, value) VALUES (?, ?)`,
-      values: [key, String(value)]
-    });
-  } else {
-    await worker.query({
-      sql: `UPDATE ${META_TABLE} SET value = ? WHERE key = ?`,
-      values: [String(value), key]
-    });
-  }
-}
-
-export async function isSetupFinished(worker) {
-  const value = await getMeta(worker, KEY_FINISHED);
-  return Boolean(value);
-}
-
-export async function markSetupFinished(worker) {
-  await setMeta(worker, KEY_FINISHED, new Date().toISOString());
-}
-
-export async function getStoredOrigins(worker) {
-  const raw = await getMeta(worker, KEY_ORIGINS);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return parseOriginList(parsed);
-  } catch {
-    return parseOriginList(raw);
-  }
-}
-
-export async function setStoredOrigins(worker, origins) {
-  await setMeta(worker, KEY_ORIGINS, JSON.stringify(parseOriginList(origins)));
 }
 
 export function timingSafeEqualString(a, b) {
@@ -328,5 +244,3 @@ export function renderWizardHtml({ token }) {
 </body>
 </html>`;
 }
-
-export { KEY_FINISHED, KEY_ORIGINS, META_TABLE };

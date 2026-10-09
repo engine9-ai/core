@@ -251,6 +251,14 @@ Those published names are the contract. `person` stays `person`. `event` stays
 `event`. Columns on those tables stay as published. Other engine9 libraries
 join on these names.
 
+People are matched by identifier: an email hash, a phone hash, a plugin's
+`remote_person_id`, or the identity provider's id (`delegate`). Each type has
+its own lookup table, `person_id_<id_type>` (`person_id_email_hash_v1`,
+`person_id_phone_hash_v1`, `person_id_remote_person_id`,
+`person_id_delegate`), holding a 16-byte hash of the value and the
+`person_id`. This is the same on SQLite, D1, and MySQL. `installDefaultPlugins`
+records it as the core setting `identifier_store_kind=compact`.
+
 A local schema may live in the same database. Its table names must differ
 from every published engine9 table (`person`, `event`, `message`,
 `transaction`, `segment`, `plugin`, `timeline`, `input`, `api_key`, and the
@@ -483,7 +491,7 @@ plugin in a package the project lists.
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
 - `bin/buildPlugins.js` (`e9core build-plugins`) — the same discovery serialized for a Cloudflare bundle
 - `lib/PersonWorker.js`, `lib/peoplePipeline/` — inbound person pipeline. See [lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)
-- `lib/id/` — person identifier stores (compact SQLite, legacy MySQL, Durable Objects)
+- `lib/id/` — person identifier stores (`person_id_<id_type>` tables, Durable Objects)
 - `auth/` — API keys, policy, HMAC helpers. See [auth/README.md](auth/README.md)
 - `auth/delegate.js` — default identity provider. See [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)
 - `api/` — framework-agnostic endpoint handlers (`handleFetch`, `expressHandler`)

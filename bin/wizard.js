@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ENV_PUBLIC_KEY, readEnvValue } from './setupKeys.js';
-import { getStoredOrigins, parseOriginList } from '../api/setupPage.js';
+import { parseOriginList } from '../api/setupPage.js';
 import { readWizardState, runSetupStep } from './setupFlow.js';
 
 function readEnvFile(cwd) {
@@ -43,14 +43,7 @@ export function createWizard(ctx) {
         apiOk = false;
       }
     }
-    let origins = parseOriginList(readEnvValue(env, 'E9_ALLOWED_ORIGINS'));
-    if (ctx.worker) {
-      try {
-        origins = [...new Set([...origins, ...(await getStoredOrigins(ctx.worker))])];
-      } catch {
-        /* database may not exist yet */
-      }
-    }
+    const origins = parseOriginList(readEnvValue(env, 'E9_ALLOWED_ORIGINS'));
     const dbFile = existsSync(path.join(cwd, 'engine9.db'));
     const wrangler = existsSync(path.join(cwd, 'wrangler.jsonc'));
     return {

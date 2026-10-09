@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
-import { applyStandardStack } from './helpers/applySchemas.js';
+import { applyStandardStack, deployLegacyIdentifierTable } from './helpers/applySchemas.js';
 import { insertPersons } from '../lib/id/sqlStore.js';
 import { contiguousInsertIds } from '../lib/id/sqlHelpers.js';
 import {
@@ -19,6 +19,7 @@ import {
   createIdentifierStoreForKind,
   createDurableObjectIdentifierStore,
   personIdTableName,
+  pinIdentifierStoreKind,
   IDENTIFIER_STORE_KIND_COMPACT,
   IDENTIFIER_STORE_KIND_LEGACY
 } from '../lib/id/index.js';
@@ -107,6 +108,27 @@ describe('createDefaultIdentifierStore', () => {
     } finally {
       await worker.destroy();
     }
+  });
+
+  test('pinIdentifierStoreKind: new MySQL account → compact; existing legacy table → legacy', async () => {
+    const fakeWorker = (tables) => {
+      const written = [];
+      return {
+        written,
+        auth: { database_connection: 'mysql://u:p@h/db' },
+        getSettings: async () => ({}),
+        query: async () => ({ data: [] }),
+        tables: async () => ({ tables }),
+        setSetting: async (s) => written.push(s)
+      };
+    };
+    const fresh = fakeWorker(['plugin', 'setting', 'person']);
+    assert.equal(await pinIdentifierStoreKind(fresh), IDENTIFIER_STORE_KIND_COMPACT);
+    assert.equal(fresh.written[0].value, IDENTIFIER_STORE_KIND_COMPACT);
+
+    const existing = fakeWorker(['plugin', 'setting', 'person', 'person_identifier']);
+    assert.equal(await pinIdentifierStoreKind(existing), IDENTIFIER_STORE_KIND_LEGACY);
+    assert.equal(existing.written[0].value, IDENTIFIER_STORE_KIND_LEGACY);
   });
 
   test('createIdentifierStoreForKind consolidates dialect defaults', () => {
@@ -279,6 +301,7 @@ describe('compact SQL person_id_<id_type> store', () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
       await applyStandardStack(worker);
+      await deployLegacyIdentifierTable(worker);
       await worker.insertArray({ table: 'person', array: [{ id: 1 }, { id: 2 }] });
       const { data: people } = await worker.query('select id from person order by id');
       const p1 = people[0].id;
@@ -330,8 +353,8 @@ describe('compact SQL person_id_<id_type> store', () => {
       const { data: compact } = await worker.query('select person_id from person_id_email_hash_v1');
       assert.equal(compact.length, 1);
       assert.equal(compact[0].person_id, batch[0].person_id);
-      const { data: legacy } = await worker.query('select * from person_identifier');
-      assert.equal(legacy.length, 0);
+      const { tables } = await worker.tables();
+      assert.ok(!tables.includes('person_identifier'));
     } finally {
       await worker.destroy();
     }
@@ -341,6 +364,7 @@ describe('compact SQL person_id_<id_type> store', () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
       await applyStandardStack(worker);
+      await deployLegacyIdentifierTable(worker);
       const store = createPersonIdentifierSqlStore(worker);
       const inputId = '00000000-0000-0000-0000-000000000012';
       await assignPersonIds({
@@ -368,6 +392,7 @@ describe('bulkConvertPersonIdentifiers + assignPersonIds with injectable store',
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
       await applyStandardStack(worker);
+      await deployLegacyIdentifierTable(worker);
       await worker.insertArray({
         table: 'person',
         array: [{ id: 1 }, { id: 2 }]
@@ -424,8 +449,8 @@ describe('bulkConvertPersonIdentifiers + assignPersonIds with injectable store',
       // SQL person row exists; identifier lives in compact store only
       const { data: people } = await worker.query('select id from person');
       assert.equal(people.length, 1);
-      const { data: sqlIds } = await worker.query('select * from person_identifier');
-      assert.equal(sqlIds.length, 0);
+      const { tables } = await worker.tables();
+      assert.ok(!tables.includes('person_identifier'));
 
       const batch2 = await assignPersonIds({
         worker,

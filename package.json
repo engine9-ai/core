@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
@@ -73,7 +73,7 @@
     "uuid": "^14.0.1"
   },
   "peerDependencies": {
-    "@engine9/schemas": "^1.9.0",
+    "@engine9/schemas": "^1.9.1",
     "better-sqlite3": ">=11",
     "knex": ">=3",
     "mysql2": ">=3"

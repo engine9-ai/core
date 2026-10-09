@@ -37,6 +37,26 @@ export async function applySchemaPlugin(worker, pluginPath) {
   return plugins.install({ path: pluginPath, unique: true });
 }
 
+/** The table @engine9/plugins/person_identifier deploys, for conversion tests. */
+export async function deployLegacyIdentifierTable(worker) {
+  await worker.deploy({
+    schema: {
+      tables: [
+        {
+          name: 'person_identifier',
+          columns: {
+            id: 'id',
+            person_id: 'person_id',
+            source_input_id: 'uuid',
+            id_type: 'string',
+            id_value: 'id_string'
+          }
+        }
+      ]
+    }
+  });
+}
+
 export async function applyStandardStack(worker) {
   const plugins = asPluginWorker(worker);
   return plugins.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });

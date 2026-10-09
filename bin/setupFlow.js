@@ -6,11 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setupStep } from '../api/setupSteps.js';
-import {
-  markSetupFinished,
-  parseOriginList,
-  setStoredOrigins
-} from '../api/setupPage.js';
+import { parseOriginList } from '../api/setupPage.js';
 import {
   ENV_ALLOWED_ORIGINS,
   ENV_PUBLIC_KEY,
@@ -36,6 +32,19 @@ export function readWizardState(cwd) {
 export function writeWizardState(cwd, state) {
   mkdirSync(path.join(cwd, '.e9core'), { recursive: true });
   writeFileSync(path.join(cwd, '.e9core', WIZARD_FILE), `${JSON.stringify(state, null, 2)}\n`);
+}
+
+/** The wizard's finish step ran on this development machine. */
+export function isSetupFinished(cwd) {
+  return Boolean(readWizardState(cwd).setupFinished);
+}
+
+/** `setupFinished` holds the ISO time of the finish step; `false` reopens the wizard. */
+export function setSetupFinished(cwd, finished) {
+  const state = readWizardState(cwd);
+  if (finished) state.setupFinished = new Date().toISOString();
+  else delete state.setupFinished;
+  writeWizardState(cwd, state);
 }
 
 function readEnvFile(cwd) {
@@ -217,12 +226,6 @@ export async function runSetupStep(answers = {}, ctx = {}) {
 
   if (action === 'origins') {
     const origins = parseOriginList(answers.origins);
-    const opened = await openWorker(ctx);
-    try {
-      await setStoredOrigins(opened.worker, origins);
-    } finally {
-      if (opened.owned) await opened.worker.destroy();
-    }
     const env = upsertEnv(readEnvFile(cwd), { [ENV_ALLOWED_ORIGINS]: origins.join(',') });
     writeEnvFile(cwd, env);
     process.env.E9_ALLOWED_ORIGINS = origins.join(',');
@@ -258,12 +261,7 @@ export async function runSetupStep(answers = {}, ctx = {}) {
   }
 
   if (action === 'finish') {
-    const opened = await openWorker(ctx);
-    try {
-      await markSetupFinished(opened.worker);
-    } finally {
-      if (opened.owned) await opened.worker.destroy();
-    }
+    setSetupFinished(cwd, true);
     const env = removeEnvKeys(readEnvFile(cwd), [ENV_SETUP_TOKEN]);
     writeEnvFile(cwd, env);
     delete process.env.E9_SETUP_TOKEN;

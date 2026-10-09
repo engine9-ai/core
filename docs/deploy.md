@@ -247,7 +247,7 @@ separate key command.
 | `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser (`e9publickey_…`) |
 | `SESSION_SECRET` | HMAC key for a Core Session after login |
 | `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used by the production Worker |
-| `E9_ALLOWED_ORIGINS` | Optional comma-separated origins (independent hosts); setup page can also store origins in the database |
+| `E9_ALLOWED_ORIGINS` | Optional comma-separated origins (independent hosts). The wizard's origins step writes it here; the API reads only this value |
 
 `npx e9core setup --remote` copies these to Cloudflare secrets.
 To replace them: `npx e9core setup --rotate`, then `setup --remote` again.

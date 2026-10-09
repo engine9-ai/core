@@ -71,6 +71,7 @@ export {
   createIdentifierStoreForKind,
   readIdentifierStoreKind,
   writeIdentifierStoreKind,
+  pinIdentifierStoreKind,
   defaultIdentifierStoreKind,
   IDENTIFIER_STORE_KIND_SETTING,
   IDENTIFIER_STORE_KIND_COMPACT,

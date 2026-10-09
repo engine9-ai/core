@@ -73,7 +73,7 @@ import { addPeopleToSegment, removePeopleFromSegment } from '../auth/roles.js';
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
 import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
-import { getStoredOrigins, mergeOrigins, parseOriginList } from './setupPage.js';
+import { parseOriginList } from './setupPage.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
 
@@ -156,6 +156,10 @@ export function requestDomain(headers) {
  * `delegate.sessionSecret` is set — then createApi builds the default
  * delegate provider itself using `config.pluginId` and `config.roles`.
  * Without either, `/auth/*` answers 501 and every other route still works.
+ *
+ * `config.allowedOrigins` (CORS) is a comma-separated string, an array, or a
+ * function returning either, read on each request. Origins are configuration
+ * (`E9_ALLOWED_ORIGINS`), never read from the database.
  */
 export function createApi({
   worker,
@@ -195,19 +199,9 @@ export function createApi({
     });
   }
 
-  const envOrigins = parseOriginList(configAllowedOrigins);
-  let cachedOrigins = envOrigins.slice();
-
-  async function resolveAllowedOrigins() {
-    try {
-      const stored = await getStoredOrigins(worker);
-      cachedOrigins = mergeOrigins(envOrigins, stored);
-    } catch (e) {
-      debug('resolveAllowedOrigins:', e);
-      cachedOrigins = envOrigins.slice();
-    }
-    return cachedOrigins;
-  }
+  const fixedOrigins =
+    typeof configAllowedOrigins === 'function' ? null : parseOriginList(configAllowedOrigins);
+  const allowedOrigins = () => fixedOrigins || parseOriginList(configAllowedOrigins());
 
   function corsHeaders(reqHeaders, { includeOrigin = true } = {}) {
     const requestOrigin = getHeader(reqHeaders, 'Origin') || getHeader(reqHeaders, 'origin');
@@ -217,7 +211,8 @@ export function createApi({
       'access-control-max-age': '86400'
     };
     if (!includeOrigin || !requestOrigin) return headers;
-    if (cachedOrigins.includes(requestOrigin) || cachedOrigins.includes('*')) {
+    const origins = allowedOrigins();
+    if (origins.includes(requestOrigin) || origins.includes('*')) {
       headers['access-control-allow-origin'] = requestOrigin === '*' ? '*' : requestOrigin;
       headers.vary = 'Origin';
     }
@@ -790,7 +785,6 @@ export function createApi({
     const parts = (req.path || '/').replace(/^\/+|\/+$/g, '').split('/').filter(Boolean);
 
     if (method === 'OPTIONS') {
-      await resolveAllowedOrigins();
       return withCors(json(204, null), req.headers);
     }
 
@@ -877,7 +871,6 @@ export function createApi({
     } else {
       result = json(404, { error: `no route for ${method} /${parts.join('/')}` });
     }
-    await resolveAllowedOrigins();
     return withCors(result, req.headers);
   }
 
@@ -963,7 +956,7 @@ export function createApi({
     };
   }
 
-  return { handle, handleFetch, expressHandler, resolveAllowedOrigins };
+  return { handle, handleFetch, expressHandler };
 }
 
 export { SCOPES };

@@ -15,8 +15,9 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { JsonlFileLogger, NullLogger } from '../logging/index.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { renderWizardHtml, timingSafeEqualString, isSetupFinished, setMeta } from '../api/setupPage.js';
+import { renderWizardHtml, timingSafeEqualString } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
+import { isSetupFinished, setSetupFinished } from './setupFlow.js';
 import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
 import {
   ENV_SETUP_TOKEN,
@@ -181,23 +182,15 @@ export async function serve(options = {}) {
       pluginId,
       defaultRemoteInputId: 'website',
       upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
-      allowedOrigins: process.env.E9_ALLOWED_ORIGINS || ''
+      // The wizard's origins step updates the variable while this server runs.
+      allowedOrigins: () => process.env.E9_ALLOWED_ORIGINS || ''
     }
   });
 
   const envPath = path.join(cwd, '.env');
-  let finished = false;
-  try {
-    finished = await isSetupFinished(worker);
-  } catch {
-    finished = false;
-  }
+  let finished = isSetupFinished(cwd);
   if (options.reopenSetup) {
-    try {
-      await setMeta(worker, 'setup_finished', '');
-    } catch {
-      /* meta table appears on the next setup call */
-    }
+    setSetupFinished(cwd, false);
     finished = false;
     const token = mintSetupToken();
     const existing = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';

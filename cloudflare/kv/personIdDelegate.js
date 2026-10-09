@@ -5,8 +5,7 @@
  * `kvEnv` to `createApi` so Bearer Identity Tokens can resolve person_id
  * from this cache before SQL (`getPersonIdByDomainUnid` / `setDelegatePersonId`).
  *
- * Source of truth remains D1/SQLite (`person_id_delegate` or
- * `person_identifier` with id_type `delegate`). This KV is a read-through /
+ * Source of truth remains the D1 table `person_id_delegate`. This KV is a read-through /
  * write-through cache for that mapping. The cached id is the Domain UNID
  * (`domain:hex`, the Identity Token `sub`) — never the UNID.
  *
