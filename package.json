@@ -50,7 +50,7 @@
     "./cloudflare/kv": "./cloudflare/kv/index.js"
   },
   "bin": {
-    "e9core": "./bin/e9core.js"
+    "e9core": "bin/e9core.js"
   },
   "scripts": {
     "test": "node --import ./test/setup-plugins.js --test --test-concurrency=1 test/*.test.js",
