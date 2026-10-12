@@ -94,6 +94,19 @@ export interface DelegateSession {
   level?: number;
 }
 
+/**
+ * Delegate sign-in branding (`brand_name`, `brand_color`, `brand_logo`).
+ * Sent on each request; delegate stores none of it and shows the Domain
+ * next to the name. `logo` must be https on the Domain or a subdomain.
+ */
+export interface DelegateSignInBrand {
+  /** Up to 60 characters. */
+  name?: string;
+  /** `#rgb` or `#rrggbb`. */
+  color?: string;
+  logo?: string;
+}
+
 export function delegateIdentityUrl(options: {
   delegateUrl: string;
   /** JWT aud — host or host:port, not a full origin. */
@@ -106,6 +119,7 @@ export function delegateIdentityUrl(options: {
   optionalFields?: string[] | string;
   /** Delegate sign-in screen. `2` adds an email sign-in link; default Google only. */
   loginLevel?: 2 | 3 | 4;
+  brand?: DelegateSignInBrand;
   nonce?: string;
   state?: string;
   responseMode?: string;
@@ -236,6 +250,8 @@ export interface DelegateAuth {
      * Level 2 at most. Ignored by delegate when `minLevel` is 3 or more.
      */
     loginLevel?: 2 | 3 | 4;
+    /** Name, color, and logo on delegate's sign-in page and email. */
+    brand?: DelegateSignInBrand;
     nonce?: string;
     state?: string;
     responseMode?: string;

@@ -205,6 +205,7 @@ export function delegateIdentityUrl({
   fields,
   optionalFields,
   loginLevel,
+  brand,
   nonce,
   state,
   responseMode = 'query'
@@ -227,6 +228,10 @@ export function delegateIdentityUrl({
   }
   // Delegate sign-in screen: 2 adds an email sign-in link; default is Google only.
   if (loginLevel !== undefined) url.searchParams.set('login_level', String(loginLevel));
+  // Sign-in page and email branding. Delegate stores none of it.
+  if (brand?.name) url.searchParams.set('brand_name', brand.name);
+  if (brand?.color) url.searchParams.set('brand_color', brand.color);
+  if (brand?.logo) url.searchParams.set('brand_logo', brand.logo);
   if (nonce) url.searchParams.set('nonce', nonce);
   if (state) url.searchParams.set('state', state);
   if (responseMode) url.searchParams.set('response_mode', responseMode);
@@ -633,7 +638,7 @@ export function sessionNeedsRole(session) {
       sessionTtlSeconds: 86400
     });
 
-    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel? })
+    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, brand? })
     await auth.login(token)                 // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
     auth.verify(sessionToken)
@@ -811,6 +816,7 @@ export function createDelegateAuth({
     fields,
     optionalFields,
     loginLevel,
+    brand,
     nonce,
     state,
     responseMode
@@ -825,6 +831,7 @@ export function createDelegateAuth({
       fields,
       optionalFields,
       loginLevel,
+      brand,
       nonce,
       state,
       responseMode

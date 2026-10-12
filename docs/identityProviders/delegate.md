@@ -179,6 +179,22 @@ Rules delegate applies:
   `requiredAuth.minLevel: 3` still refuses an email-link login.
 - Visitors already signed in to delegate do not see either screen.
 
+### Branding the sign-in
+
+`auth.identityUrl({ …, brand: { name, color, logo } })` puts your name,
+button color, and logo on delegate's sign-in page and sign-in email.
+Delegate stores none of it, always shows your Domain next to the name, and
+takes a logo only from your Domain or a subdomain over https. The browser
+client takes the same `brand` option. Rules:
+[protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#branding).
+
+An emailed link may be opened in a different browser from the one that
+asked (a phone's mail app, an in-app browser). Delegate signs that browser
+in and sends the visitor to your site's origin instead of replaying your
+authorize request, whose `state` lives in the first browser. When your
+callback sees a `state` it does not recognize, start sign-in again (it will
+be silent) instead of telling the visitor the link expired.
+
 On the wire this is `login_level=2` on `/identity/authorize`
 ([protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#sign-in-screen-login_level)).
 

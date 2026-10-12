@@ -297,6 +297,16 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       loginLevel: 2
     });
     assert.equal(new URL(emailLinkUrl).searchParams.get('login_level'), '2');
+    assert.equal(new URL(authorizeUrl).searchParams.has('brand_name'), false);
+    const branded = new URL(
+      auth.identityUrl({
+        returnTo: 'https://site.example.com/auth/delegate',
+        brand: { name: 'Site', color: '#7c3aed', logo: 'https://site.example.com/logo.svg' }
+      })
+    ).searchParams;
+    assert.equal(branded.get('brand_name'), 'Site');
+    assert.equal(branded.get('brand_color'), '#7c3aed');
+    assert.equal(branded.get('brand_logo'), 'https://site.example.com/logo.svg');
 
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
