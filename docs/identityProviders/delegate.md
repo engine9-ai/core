@@ -185,7 +185,23 @@ Rules delegate applies:
 button color, and logo on delegate's sign-in page and sign-in email.
 Delegate stores none of it, always shows your Domain next to the name, and
 takes a logo only from your Domain or a subdomain over https. The browser
-client takes the same `brand` option. Rules:
+client takes the same `brand` option.
+
+The sign-in page also takes `background` and `text` (hex; text under 4.5:1
+contrast on the background is ignored), `font` (`system`, `sans`, `serif`,
+`rounded`, `mono`, or a Google Fonts family name), and `google`:
+`standard`, `brand` ("Continue with Google" in your color), or `skip`.
+`identityUrl` is a full-page redirect, so `skip` sends a signed-out visitor
+straight to Google when Google is the only choice (no `loginLevel: 2`).
+
+```js
+auth.identityUrl({
+  returnTo,
+  brand: { name: 'Solstice Wave', color: '#a855f7', background: '#0d0a1f', text: '#f1eeff', google: 'skip' }
+});
+```
+
+Rules:
 [protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#branding).
 
 An emailed link may be opened in a different browser from the one that

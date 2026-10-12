@@ -307,6 +307,17 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.equal(branded.get('brand_name'), 'Site');
     assert.equal(branded.get('brand_color'), '#7c3aed');
     assert.equal(branded.get('brand_logo'), 'https://site.example.com/logo.svg');
+    assert.equal(branded.has('brand_background'), false);
+    const page = new URL(
+      auth.identityUrl({
+        returnTo: 'https://site.example.com/auth/delegate',
+        brand: { background: '#0d0a1f', text: '#f1eeff', font: 'Space Grotesk', google: 'skip' }
+      })
+    ).searchParams;
+    assert.equal(page.get('brand_background'), '#0d0a1f');
+    assert.equal(page.get('brand_text'), '#f1eeff');
+    assert.equal(page.get('brand_font'), 'Space Grotesk');
+    assert.equal(page.get('brand_google'), 'skip');
 
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
