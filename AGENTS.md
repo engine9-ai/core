@@ -147,9 +147,37 @@ upgrade it in the site and redeploy:
 ```
 npm install @engine9/schemas@latest
 npx wrangler deploy
+npx e9core upgrade --url https://www.example.com
 ```
 
-Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed.
+Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed,
+unless the change needs a new upgrade in `lib/upgrades`.
+
+## Upgrades
+
+Install, deploy, then `e9core upgrade`, for every release and every database.
+A deploy never changes the database. Full process: [docs/upgrading.md](docs/upgrading.md).
+
+`e9core upgrade` runs `PluginWorker.upgrade` (`lib/upgrades`): ordered data
+upgrades, then a reinstall of the installed `@engine9/schemas` plugins, with
+an `upgrade.<id>` ledger row in `setting`. `--url` posts to the site's
+`POST /api/admin/upgrade` (admin key), so a Cloudflare site upgrades its own
+D1 inside the Worker. `--db` runs locally. The server uses
+`e9 pluginworker upgrade -a <account_id>` or MCP `plugin` `upgrade`.
+
+A schemas or core change that removes, renames, or moves a column, or
+changes an inbound step that saved snapshots name, ships an upgrade in the
+same release:
+
+- `lib/upgrades/<id>.js` with `{ id, since, description, run }`, appended to
+  `UPGRADES`. Never remove or reorder entries.
+- It must be safe to re-run and must use only `worker.query`, `describe`,
+  `list`, and `install`, so the same code runs on D1, SQLite, and MySQL.
+- New code must still work on a database that has not been upgraded.
+- Add `docs/upgrade-<version>.md` and tests on SQLite and the bundled Worker.
+
+Do not use `wrangler d1 migrations` for engine9 tables (see below).
+Additive changes need no upgrade; the reinstall step deploys them.
 
 Plugin paths match exactly. Do not add alias spellings or prefixes for them.
 
