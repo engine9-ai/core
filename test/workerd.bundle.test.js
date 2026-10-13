@@ -286,9 +286,10 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
     const body = await upgraded.json();
     assert.equal(upgraded.status, 200, JSON.stringify(body));
     assert.equal(body.upgrades[0].copied, 1);
+    assert.equal(body.upgrades[1].status, 'opt_in');
 
-    const columns = d1.db.prepare('pragma table_info(person)').all().map((c) => c.name);
-    assert.deepEqual(columns, ['id', 'created_at', 'modified_at']);
+    const columns = () => d1.db.prepare('pragma table_info(person)').all().map((c) => c.name);
+    assert.ok(columns().includes('given_name'), 'the default upgrade keeps the person columns');
     const after = await call('/people', publicKey, { people: [{ email: 'grace@example.com', given_name: 'Grace', family_name: 'Hopper' }] });
     assert.equal(after.status, 200, await after.clone().text());
     const names = d1.db.prepare('select given_name, family_name from person_name order by person_id').all();
@@ -296,6 +297,10 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
       { given_name: 'Ada', family_name: 'Lovelace' },
       { given_name: 'Grace', family_name: 'Hopper' }
     ]);
+
+    const dropped = await (await call('/admin/upgrade', adminKey, { drop_name_columns: true })).json();
+    assert.deepEqual(dropped.upgrades[1].dropped, ['person.given_name', 'person.family_name']);
+    assert.deepEqual(columns(), ['id', 'created_at', 'modified_at']);
   } finally {
     d1.db.close();
     await rm(built.dir, { recursive: true, force: true });

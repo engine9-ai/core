@@ -1,8 +1,8 @@
 /*
   PluginWorker.upgrade (lib/upgrades): accounts created before
-  @engine9/schemas/person_name get their names copied into person_name and the
-  columns dropped from person, through the worker, POST /admin/upgrade, and
-  the e9core upgrade --url client.
+  @engine9/schemas/person_name get their names copied into person_name, through
+  the worker, POST /admin/upgrade, and the e9core upgrade --url client. The
+  person columns are dropped only with drop_name_columns.
 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ async function addSite(worker, name) {
 const signup = (worker, pluginId, batch) =>
   worker.processPeople({ pluginId, remoteInputId: 'signup', inputType: 'api', batch });
 
-test('upgrade copies person names into person_name, drops the columns, and re-weaves inbound names', async () => {
+test('upgrade copies person names into person_name, keeps the person columns, and re-weaves inbound names', async () => {
   const worker = newWorker();
   try {
     await makeLegacyPersonNames(worker);
@@ -64,9 +64,13 @@ test('upgrade copies person names into person_name, drops the columns, and re-we
     assert.equal(done.status, 'applied');
     assert.equal(done.recorded.status, 'applied');
     assert.equal(done.copied, 2);
-    assert.deepEqual(done.dropped, ['person.given_name', 'person.family_name']);
+    assert.equal(done.dropped, undefined);
+    const drop = upgrades.find((u) => u.id === 'person_name_columns');
+    assert.equal(drop.status, 'opt_in');
+    assert.equal(drop.opt_in, 'drop_name_columns');
+    assert.equal(drop.recorded, undefined, 'an opt-in upgrade that did not run records nothing');
 
-    assert.deepEqual(await personColumns(worker), ['id', 'created_at', 'modified_at']);
+    assert.deepEqual(await personColumns(worker), ['id', 'created_at', 'modified_at', 'given_name', 'family_name']);
     const { data: names } = await worker.query(
       'select person_id, given_name, family_name, created_at from person_name order by person_id'
     );
@@ -110,6 +114,35 @@ test('upgrade copies person names into person_name, drops the columns, and re-we
       "select s.value from setting s join plugin p on p.id=s.plugin_id where p.path='@engine9/schemas/plugin' and s.name='upgrade.person_name'"
     );
     assert.deepEqual(JSON.parse(ledger[0].value), done.recorded);
+    const { data: stale } = await worker.query({ sql: 'select family_name from person where id=?', values: [graceId] });
+    assert.equal(stale[0].family_name, null, 'later loads no longer write the person columns');
+
+    const dryDrop = (await worker.upgrade({ dry_run: true, drop_name_columns: true })).upgrades[1];
+    assert.equal(dryDrop.status, 'pending');
+    assert.deepEqual(dryDrop.plan.slice(-2), ['drop person.given_name', 'drop person.family_name']);
+    const dropped = (await worker.upgrade({ drop_name_columns: true })).upgrades[1];
+    assert.equal(dropped.status, 'applied');
+    assert.deepEqual(dropped.dropped, ['person.given_name', 'person.family_name']);
+    assert.equal(dropped.recorded.status, 'applied');
+    assert.deepEqual(await personColumns(worker), ['id', 'created_at', 'modified_at']);
+    assert.equal((await worker.upgrade()).upgrades[1].status, 'current');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('drop_name_columns on a fresh legacy account copies first, then drops', async () => {
+  const worker = newWorker();
+  try {
+    await makeLegacyPersonNames(worker);
+    const pluginId = await addSite(worker, 'one-pass-site');
+    await signup(worker, pluginId, [{ email: 'ada@example.com', given_name: 'Ada' }]);
+    const { ok, upgrades } = await worker.upgrade({ drop_name_columns: true });
+    assert.equal(ok, true);
+    assert.equal(upgrades[0].copied, 1);
+    assert.deepEqual(upgrades[1].dropped, ['person.given_name', 'person.family_name']);
+    const { data } = await worker.query('select given_name from person_name');
+    assert.deepEqual(data, [{ given_name: 'Ada' }]);
   } finally {
     await worker.destroy();
   }
@@ -127,33 +160,40 @@ test('upgrade finishes a partial run without overwriting newer person_name rows'
       values: [personIds[0], 'Augusta']
     });
     const done = (await worker.upgrade()).upgrades.find((u) => u.id === 'person_name');
-    assert.equal(done.copied, 0);
+    assert.equal(done.status, 'current', 'every name on person already has a person_name row');
     const { data } = await worker.query('select given_name from person_name');
     assert.deepEqual(data, [{ given_name: 'Augusta' }]);
-    assert.ok(!(await personColumns(worker)).includes('given_name'));
+    const described = await worker.getInboundTransforms({ pluginId, describe: true });
+    assert.doesNotMatch(described, /upsertPerson\b/, 'the refresh step re-weaves the person snapshot');
+    assert.ok((await personColumns(worker)).includes('given_name'));
   } finally {
     await worker.destroy();
   }
 });
 
-test('PII-free account: upgrade refuses to discard names unless asked, never installs person_name', async () => {
+test('PII-free account: dropping the columns refuses to discard names unless asked, never installs person_name', async () => {
   const worker = newWorker();
   try {
     await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii' });
     const pluginId = await addSite(worker, 'pii-free-site');
     await signup(worker, pluginId, [{ email: 'ada@example.com', given_name: 'Ada' }]);
 
-    const dryRun = await worker.upgrade({ dry_run: true });
-    const dry = dryRun.upgrades[0];
+    const plain = await worker.upgrade();
+    assert.equal(plain.ok, true);
+    assert.equal(plain.upgrades[0].status, 'current', 'a PII-free account has nothing to copy');
+    assert.equal(plain.upgrades[1].status, 'opt_in');
+    assert.ok((await personColumns(worker)).includes('given_name'), 'the default upgrade drops nothing');
+
+    const dryRun = await worker.upgrade({ dry_run: true, drop_name_columns: true });
+    const dry = dryRun.upgrades[1];
     assert.equal(dryRun.ok, false);
     assert.equal(dry.status, 'blocked');
     assert.equal(dry.pii_free, true);
     assert.match(dry.blocked, /discard_names/);
-    await assert.rejects(worker.upgrade(), /PII-free.*discard_names/);
+    await assert.rejects(worker.upgrade({ drop_name_columns: true }), /PII-free.*discard_names/);
     assert.ok((await personColumns(worker)).includes('given_name'), 'a refused upgrade drops nothing');
 
-    const done = (await worker.upgrade({ discard_names: true })).upgrades[0];
-    assert.equal(done.copied, 0);
+    const done = (await worker.upgrade({ drop_name_columns: true, discard_names: true })).upgrades[1];
     assert.deepEqual(done.dropped, ['person.given_name', 'person.family_name']);
     assert.deepEqual(await personColumns(worker), ['id', 'created_at', 'modified_at']);
     assert.ok(!(await worker.tables()).tables.includes('person_name'));
@@ -173,12 +213,52 @@ test('PII-free account: upgrade refuses to discard names unless asked, never ins
   }
 });
 
-test('PII-free account with empty name columns drops them without discard_names', async () => {
+test('PII-free account with empty name columns: drop_name_columns drops them without discard_names', async () => {
   const worker = newWorker();
   try {
     await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii' });
-    const done = (await worker.upgrade()).upgrades[0];
+    const done = (await worker.upgrade({ drop_name_columns: true })).upgrades[1];
     assert.deepEqual(done.dropped, ['person.given_name', 'person.family_name']);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('person table without the person plugin row: upgrade is blocked and changes nothing', async () => {
+  const worker = newWorker();
+  try {
+    await makeLegacyPersonNames(worker);
+    await worker.query("delete from plugin where path='@engine9/schemas/person'");
+
+    const dry = (await worker.upgrade({ dry_run: true })).upgrades[0];
+    assert.equal(dry.status, 'blocked');
+    assert.equal(dry.person_plugin_installed, false);
+    await assert.rejects(worker.upgrade(), /plugin is not installed/);
+    assert.ok((await personColumns(worker)).includes('given_name'));
+    assert.ok(!(await worker.tables()).tables.includes('person_name'));
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('person as a view over an older table: upgrade is blocked and changes nothing', async () => {
+  const worker = newWorker();
+  try {
+    await makeLegacyPersonNames(worker);
+    await worker.query('create table legacy_person (id integer primary key, given_name text, family_name text)');
+    await worker.query("insert into legacy_person values (1, 'Ada', 'Lovelace')");
+    await worker.drop({ table: 'person' });
+    await worker.query('create view person as select id, given_name, family_name from legacy_person');
+
+    const dryRun = await worker.upgrade({ dry_run: true });
+    const dry = dryRun.upgrades[0];
+    assert.equal(dryRun.ok, false);
+    assert.equal(dry.status, 'blocked');
+    assert.equal(dry.person_is_view, true);
+    assert.match(dry.blocked, /person is a view/);
+    await assert.rejects(worker.upgrade(), /person is a view/);
+    assert.equal(await worker.tableType({ table: 'person' }), 'view');
+    assert.ok(!(await worker.tables()).tables.includes('person_name'), 'a blocked upgrade installs nothing');
   } finally {
     await worker.destroy();
   }

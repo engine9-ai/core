@@ -41,6 +41,11 @@ The JSON result has `ok`, and each upgrade has a `status`:
 | `applied` | This run changed the database |
 | `current` | Nothing to do |
 | `blocked` | Needs a decision. A real run stops here and changes nothing for this upgrade |
+| `opt_in` | A removal that runs only with its switch (`opt_in` names it, e.g. `drop_name_columns`). Nothing changed |
+
+An opt-in upgrade removes something site code may still read, such as a
+column whose data moved. The default run copies the data and leaves the old
+column. Run the opt-in step once nothing reads it.
 
 `refresh.failed` lists plugins that could not be reinstalled, usually a path
 that is no longer in the installed package. The command exits 1 when `ok` is
@@ -118,8 +123,10 @@ Do not add engine9 schema files to `migrations/` for `migrations apply`. The
 
 ## Rolling back
 
-An upgrade can drop columns. Rolling back the Worker alone leaves old code on
-a new database. Roll back both together:
+The default upgrade copies and does not drop, so rolling back the Worker
+alone runs the old code. An opt-in step can drop columns; after one, rolling
+back the Worker alone leaves old code on a new database. Roll back both
+together:
 
 ```bash
 npx wrangler d1 time-travel restore <database> --bookmark=<bookmark from before the upgrade>
@@ -145,8 +152,10 @@ column, new plugin in a stack) does not; the refresh deploys it.
 - Use only `worker.query`, `describe`, `list`, and `install`, so the same code
   runs on D1, SQLite, and MySQL. Install any plugin the upgrade needs itself.
   Split long statements into chunks (D1 limits how long one statement runs).
-- Copy, then check that nothing is left behind, then drop. Never drop data the
-  upgrade did not verify.
+- Copy, then check that nothing is left behind. Do not drop in the same
+  upgrade: put the drop in a separate entry with `optIn: '<option>'`, which
+  runs only when that option is true. Never drop data the upgrade did not
+  verify.
 - Keep the new code working against an un-upgraded database. Keep transforms
   that old snapshots name exported until the upgrade refreshes them.
 - Bump the `@engine9/schemas` minor version and core's peer range to match.

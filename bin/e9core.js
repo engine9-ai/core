@@ -50,19 +50,22 @@
         create/alter tables. Not the same as the stack named "standard" unless
         you pass that --stack (or set the warehouse default_stack setting).
 
-    e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--discard-names]
-    e9core upgrade --url https://www.example.com [--key e9key_...] [--dry-run] [--no-refresh] [--discard-names]
+    e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--drop-name-columns [--discard-names]]
+    e9core upgrade --url https://www.example.com [--key e9key_...] [--dry-run] [--no-refresh] [--drop-name-columns [--discard-names]]
         Run after every deploy that changes @engine9/core or @engine9/schemas
         (PluginWorker.upgrade, docs/upgrading.md). Applies pending account
-        upgrades in order (1.10.1: person names move into person_name and the
-        columns are dropped from person), records each in the setting table,
+        upgrades in order (1.10.1: person names are copied into person_name;
+        the person columns stay), records each in the setting table,
         then reinstalls the installed @engine9/schemas plugins so new tables,
         columns, and inbound snapshots reach the database. --db runs against
         that database. --url runs inside a deployed site (Cloudflare D1
         included) through POST /api/admin/upgrade, using --key or
         E9_ADMIN_API_KEY (environment or ./.env). Deploy the new code first.
         Safe to re-run. Exits 1 when an upgrade is blocked or a plugin fails.
-        --discard-names: PII-free accounts drop stored names without copying.
+        --drop-name-columns: also drop person.given_name / family_name. Only
+        once nothing reads them.
+        --discard-names: with --drop-name-columns, PII-free accounts drop
+        stored names without copying.
 
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
         Write the plugin registry module a Cloudflare Worker is bundled with.
@@ -534,6 +537,7 @@ async function main() {
       const options = {
         dry_run: args['dry-run'] === true,
         refresh: args['no-refresh'] !== true,
+        drop_name_columns: args['drop-name-columns'] === true,
         discard_names: args['discard-names'] === true
       };
       let result;

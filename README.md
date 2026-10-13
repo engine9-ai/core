@@ -413,7 +413,7 @@ account: [auth/README.md](auth/README.md).
 | `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
 | `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
-| `POST /admin/upgrade` | `{ dry_run?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database | `admin` |
+| `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database | `admin` |
 
 Everything under `/api` in the shipped Worker and `serve`.
 

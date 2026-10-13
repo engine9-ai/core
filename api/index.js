@@ -25,7 +25,7 @@
                                    { segment_id, person_id | email } (someone else)
                                    See docs/segments.md.
     POST /admin/upgrade         -- run pending account upgrades (admin scope)
-                                   body: { dry_run?, discard_names? }
+                                   body: { dry_run?, refresh?, drop_name_columns?, discard_names? }
                                    Same as PluginWorker.upgrade / e9core upgrade.
 
   Auth layers (see package README):
