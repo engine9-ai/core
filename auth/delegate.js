@@ -232,8 +232,11 @@ export function delegateIdentityUrl({
   if (brand?.name) url.searchParams.set('brand_name', brand.name);
   if (brand?.color) url.searchParams.set('brand_color', brand.color);
   if (brand?.logo) url.searchParams.set('brand_logo', brand.logo);
+  if (brand?.wordmark) url.searchParams.set('brand_wordmark', brand.wordmark);
   if (brand?.background) url.searchParams.set('brand_background', brand.background);
   if (brand?.text) url.searchParams.set('brand_text', brand.text);
+  if (brand?.card) url.searchParams.set('brand_card', brand.card);
+  if (brand?.cardText) url.searchParams.set('brand_card_text', brand.cardText);
   if (brand?.font) url.searchParams.set('brand_font', brand.font);
   if (brand?.google) url.searchParams.set('brand_google', brand.google);
   if (nonce) url.searchParams.set('nonce', nonce);

@@ -96,9 +96,10 @@ export interface DelegateSession {
 
 /**
  * Delegate sign-in branding (`brand_name`, `brand_color`, `brand_logo`,
- * `brand_background`, `brand_text`, `brand_font`, `brand_google`). Sent on
- * each request; delegate stores none of it, shows the Domain next to the
- * name, and ignores invalid values. `logo` must be https on the Domain or a
+ * `brand_wordmark`, `brand_background`, `brand_text`, `brand_card`,
+ * `brand_card_text`, `brand_font`, `brand_google`). Sent on each request;
+ * delegate stores none of it, shows the Domain next to the name, and ignores
+ * invalid values. `logo` and `wordmark` must be https on the Domain or a
  * subdomain.
  */
 export interface DelegateSignInBrand {
@@ -107,10 +108,16 @@ export interface DelegateSignInBrand {
   /** `#rgb` or `#rrggbb`. */
   color?: string;
   logo?: string;
+  /** Wide logo, up to 240px wide on the sign-in page in place of `logo`. */
+  wordmark?: string;
   /** `#rgb` or `#rrggbb` for the sign-in page (not the email). */
   background?: string;
   /** `#rgb` or `#rrggbb` text on `background`. Ignored below 4.5:1 contrast. */
   text?: string;
+  /** `#rgb` or `#rrggbb` for the card, in place of a tint of `background`. */
+  card?: string;
+  /** `#rgb` or `#rrggbb` text on `card`. Ignored below 4.5:1 contrast. */
+  cardText?: string;
   /** `system`, `sans`, `serif`, `rounded`, `mono`, or a Google Fonts family name. */
   font?: string;
   /**

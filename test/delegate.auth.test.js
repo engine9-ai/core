@@ -318,6 +318,20 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
     assert.equal(page.get('brand_text'), '#f1eeff');
     assert.equal(page.get('brand_font'), 'Space Grotesk');
     assert.equal(page.get('brand_google'), 'skip');
+    assert.equal(page.has('brand_card'), false);
+    const card = new URL(
+      auth.identityUrl({
+        returnTo: 'https://site.example.com/auth/delegate',
+        brand: {
+          wordmark: 'https://site.example.com/wordmark.svg',
+          card: '#4a1942',
+          cardText: '#f7e9f3'
+        }
+      })
+    ).searchParams;
+    assert.equal(card.get('brand_wordmark'), 'https://site.example.com/wordmark.svg');
+    assert.equal(card.get('brand_card'), '#4a1942');
+    assert.equal(card.get('brand_card_text'), '#f7e9f3');
 
     const { session, token } = await auth.login(await sign(true));
     assert.ok(session.personId > 0);
