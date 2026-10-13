@@ -128,7 +128,7 @@ const api = createApi({
   delegate: { sessionSecret: process.env.SESSION_SECRET },
   config: {
     pluginId: process.env.E9_PLUGIN_ID,
-    upsertTables: ["person_email", "person_phone", "person_address", "person_segment"],
+    upsertTables: ["person_name", "person_email", "person_phone", "person_address", "person_segment"],
     roles: {
       // "<segment-uuid>": { name: "Member", scopes: ["data:read"], requiredAuth: { minLevel: 1 } },
     },
@@ -243,8 +243,10 @@ a Next.js app, another schema) reads and writes that same database.
 
 **Table names are the engine9 standard, and they are immutable.**
 `installDefaultPlugins` creates the core person tables (`person`,
-`person_email`, `person_phone`, `person_address`, `segment`, `person_segment`,
-…). Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
+`person_name`, `person_email`, `person_phone`, `person_address`, `segment`,
+`person_segment`, …). `person` holds only the id and timestamps; names and
+contact details are in their own tables so a PII-free account
+(`@engine9/schemas/stacks/limited-pii`) can leave them out. Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
 `timeline`, `transaction`, and related schema plugins. Pass `--stack` / `path`, or
 set the warehouse `default_stack` setting on `@engine9/schemas/plugin`.
 Those published names are the contract. `person` stays `person`. `event` stays
@@ -324,6 +326,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
 | `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person` | Print one schema's SQL |
+| `npx e9core upgrade --url <site>` or `--db <url>` | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
 | `npx e9core build-plugins [--check]` | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
@@ -410,6 +413,7 @@ account: [auth/README.md](auth/README.md).
 | `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
 | `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
+| `POST /admin/upgrade` | `{ dry_run?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database | `admin` |
 
 Everything under `/api` in the shipped Worker and `serve`.
 

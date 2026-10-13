@@ -46,18 +46,27 @@ npm install @engine9/core @engine9/schemas
 
 `installDefaultPlugins` and `e9core sqlite-ddl` read the `@engine9/schemas`
 package that this install resolved. When you upgrade it, install the new
-version and redeploy:
+version, deploy, then upgrade each database:
 
 ```bash
 npm install @engine9/schemas@latest
 npx wrangler deploy
+npx e9core upgrade --url https://www.example.com      # production Cloudflare site (D1)
+npx e9core upgrade --url http://localhost:8787        # local wrangler dev (local D1)
+npx e9core upgrade --db sqlite://./engine9.db         # the local database file, or a Node site's database
 ```
 
 Node commands read plugins from `node_modules` when they start. The Worker
 bundle is rebuilt by wrangler's build step (`e9core setup` put
 `npx e9core build-plugins` there), so the deploy picks up the new schema
-plugins. Leave the `@engine9/core` version as it is when only
-`@engine9/schemas` changed.
+plugins. The deploy does not change the database. `e9core upgrade` does: it
+runs any data upgrades the release needs, then reinstalls the installed
+schema plugins so new tables, columns, and inbound pipelines reach D1. Add
+`--dry-run` to see the plan first. It is safe to run again.
+
+Read the release guide first. The process, CI, and rollback are in
+[upgrading.md](upgrading.md); 1.10.1 (person names move to `person_name`) is
+[upgrade-1.10.md](upgrade-1.10.md).
 
 ## The project database
 
@@ -364,7 +373,7 @@ Configuration failures are not fixed by signing in again.
 new `@engine9/schemas` version reaches the Worker. Leave the `@engine9/core`
 version as it is when only `@engine9/schemas` changed. The deploy rebuilds
 `engine9.plugins.js` from the `@engine9/schemas` package this project has
-installed.
+installed. Then run `npx e9core upgrade --url <site>` ([upgrading.md](upgrading.md)).
 
 Technical reference (KV caches, R2 logs, endpoint table):
 [cloudflare/README.md](../cloudflare/README.md) and the

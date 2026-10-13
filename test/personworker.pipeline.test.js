@@ -48,9 +48,17 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
     assert.equal(emails[0].email, 'Alice@Example.com');
     assert.equal(emails[0].subscription_status, 'Subscribed');
 
-    const { data: people } = await worker.query('select id, given_name, family_name from person order by id');
+    const { data: people } = await worker.query('select id from person order by id');
     assert.equal(people.length, 2);
-    assert.equal(people.find((p) => p.id === aliceId).given_name, 'Alice');
+    const { data: names } = await worker.query(
+      'select person_id, given_name, family_name, source_input_id from person_name order by person_id'
+    );
+    assert.equal(names.length, 2);
+    const aliceName = names.find((n) => n.person_id === aliceId);
+    assert.equal(aliceName.given_name, 'Alice');
+    assert.equal(aliceName.family_name, 'Anderson');
+    assert.ok(aliceName.source_input_id, 'name row records the input that wrote it');
+    assert.equal(names.find((n) => n.person_id === bobId).family_name, 'Baker');
 
     const { data: sc } = await worker.query("select source_code_id, source_code from source_code_dictionary where source_code='WEB_SIGNUP'");
     assert.equal(sc.length, 1);
@@ -60,12 +68,16 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
       pluginId,
       remoteInputId: 'signup-form',
       inputType: 'api',
-      batch: [{ email: 'alice@example.com', given_name: 'Alicia', family_name: 'Anderson' }]
+      batch: [{ email: 'alice@example.com', given_name: 'Alicia' }]
     });
     assert.equal(second.personIds[0], aliceId, 'dedupes by email hash to the same person');
-    const { data: people2 } = await worker.query('select id, given_name from person');
+    const { data: people2 } = await worker.query('select id from person');
     assert.equal(people2.length, 2, 'no new person row created');
-    assert.equal(people2.find((p) => p.id === aliceId).given_name, 'Alicia', 'name updated');
+    const { data: names2 } = await worker.query('select person_id, given_name, family_name from person_name');
+    assert.equal(names2.length, 2, 'one name row per person');
+    const alice2 = names2.find((n) => n.person_id === aliceId);
+    assert.equal(alice2.given_name, 'Alicia', 'name updated');
+    assert.equal(alice2.family_name, 'Anderson', 'a name the row did not send is kept');
 
     // doNotUpsert: identifies without modification
     const readOnly = await worker.processPeople({

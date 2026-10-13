@@ -15,6 +15,7 @@ test('installDefaultPlugins bootstraps a SQLite database for the person pipeline
     for (const t of [
       'plugin',
       'person',
+      'person_name',
       'person_email',
       'person_phone',
       'person_address',
@@ -99,6 +100,7 @@ test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting',
       () => worker.install({ path: '@engine9/schemas/stacks/standard' }),
       /exclude_pii/
     );
+    await assert.rejects(() => worker.install({ path: '@engine9/schemas/person_name' }), /exclude_pii/);
   } finally {
     await worker.destroy();
   }

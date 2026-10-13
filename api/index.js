@@ -24,6 +24,9 @@
                                    an entry is a segment id (yourself) or
                                    { segment_id, person_id | email } (someone else)
                                    See docs/segments.md.
+    POST /admin/upgrade         -- run pending account upgrades (admin scope)
+                                   body: { dry_run?, discard_names? }
+                                   Same as PluginWorker.upgrade / e9core upgrade.
 
   Auth layers (see package README):
     1. API key (required on all routes except /ok)
@@ -43,7 +46,7 @@
       config: {
         pluginId,
         defaultRemoteInputId: 'website',
-        upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
+        upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         roles: { '<segment-uuid>': { name: 'VIP', scopes: ['data:read'] } },
                           // or roles: 'standard' (auth/roleNames.js, ids from worker.accountId)
         reads: {
@@ -176,7 +179,7 @@ export function createApi({
     pluginId,
     defaultRemoteInputId = 'website',
     defaultInputType = 'api',
-    upsertTables = ['person_email', 'person_phone', 'person_address', 'person_segment'],
+    upsertTables = ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
     reads = {},
     maxBatchSize = 500,
     maxReadLimit = 1000,
@@ -419,6 +422,29 @@ export function createApi({
       roleId: ctx.roleId
     });
     return json(200, { table, records: rows.length });
+  }
+
+  async function postAdminUpgrade({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    let result;
+    try {
+      result = await worker.upgrade(body || {});
+    } catch (e) {
+      debug('postAdminUpgrade error:', e);
+      return json(422, { error: String(e.message || e) });
+    }
+    if (!result.dry_run) {
+      const applied = result.upgrades.filter((u) => u.status === 'applied').map((u) => u.id);
+      await logModification({
+        action: 'upgrade',
+        apiKeyId: apiKey?.id,
+        roleId: ctx.roleId,
+        meta: { upgrades: applied, refreshed: result.refresh.plugins, schemas: result.schemas_version }
+      });
+    }
+    return json(200, result);
   }
 
   async function getRead({ name, query, apiKey, session }) {
@@ -866,6 +892,8 @@ export function createApi({
         query: req.query || {},
         session
       });
+    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
+      result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'read') {
       result = await getRead({ name: parts[1], query: req.query || {}, apiKey, session });
     } else {

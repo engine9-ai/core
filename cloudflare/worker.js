@@ -67,7 +67,7 @@ export default {
       config: {
         pluginId: env.E9_PLUGIN_ID,
         defaultRemoteInputId: 'website',
-        upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
+        upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         allowedOrigins: env.E9_ALLOWED_ORIGINS || '',
         roles: {
           // '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } }

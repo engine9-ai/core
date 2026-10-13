@@ -181,7 +181,7 @@ export async function serve(options = {}) {
     config: {
       pluginId,
       defaultRemoteInputId: 'website',
-      upsertTables: ['person_email', 'person_phone', 'person_address', 'person_segment'],
+      upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
       // The wizard's origins step updates the variable while this server runs.
       allowedOrigins: () => process.env.E9_ALLOWED_ORIGINS || ''
     }

@@ -124,12 +124,16 @@ assign    core   person.appendPersonId
 assign    core   person.appendEntryTypeId
 assign    core   person.validateSourceCodeAscii table=source_code_dictionary
 assign    core   person.appendSourceCodeId
-upsert    woven  @engine9/schemas/person:transforms:upsertPerson
 upsert    woven  @engine9/schemas/person_address:transforms:upsertPersonAddress
 upsert    woven  @engine9/schemas/person_email:transforms:upsertPersonEmail
+upsert    woven  @engine9/schemas/person_name:transforms:upsertPersonName
 upsert    woven  @engine9/schemas/person_phone:transforms:upsertPersonPhone
 upsert    woven  @engine9/schemas/person_remote:transforms:upsertPersonRemote
 ```
+
+If the listing shows `@engine9/schemas/person:transforms:upsertPerson`, the
+account's `person` row has an old snapshot from before names moved to
+`person_name`. Run `e9core upgrade` (or `PluginWorker.upgrade`).
 
 On the private server, once the database is engine9-capable:
 `e9 personworker getInboundTransforms --plugin_id=<id> --describe=true`.

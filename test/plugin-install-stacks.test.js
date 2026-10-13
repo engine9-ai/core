@@ -16,6 +16,16 @@ test('limited-pii stack excludes person_email; standard stack is blocked after',
     assert.ok(!tables.includes('person_email'));
     assert.ok(!tables.includes('person_phone'));
     assert.ok(!tables.includes('person_address'));
+    assert.ok(!tables.includes('person_name'));
+
+    await assert.rejects(
+      () => plugins.install({ path: '@engine9/schemas/person_name' }),
+      /excluded by @engine9\/schemas\/stacks\/limited-pii/
+    );
+    await assert.rejects(
+      () => plugins.install({ path: '@engine9/schemas/transaction/contact_details' }),
+      /excluded by @engine9\/schemas\/stacks\/limited-pii/
+    );
 
     await assert.rejects(() => plugins.installDefaultPlugins(), /excluded by/);
     await assert.rejects(

@@ -1,7 +1,7 @@
 /*
   Inbound people pipeline weaver: the chain is built from installed plugins.
-  Standard stack must equal the historical hardcoded chain; limited-pii must
-  contain no plaintext contact plugin; guards fail loudly instead of skipping.
+  Standard stack weaves every person plugin (names go to person_name); limited-pii
+  must contain no plaintext name or contact plugin; guards fail loudly instead of skipping.
 */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,7 +18,7 @@ function newWorker() {
 }
 const paths = (steps) => steps.map((s) => s.path);
 
-test('standard stack weave equals the historical hardcoded chain', async () => {
+test('standard stack weaves every person plugin, names into person_name', async () => {
   const worker = newWorker();
   try {
     await applyStandardStack(worker);
@@ -34,9 +34,9 @@ test('standard stack weave equals the historical hardcoded chain', async () => {
       'person.appendEntryTypeId',
       'person.validateSourceCodeAscii',
       'person.appendSourceCodeId',
-      `${I}/person:transforms:upsertPerson`,
       `${I}/person_address:transforms:upsertPersonAddress`,
       `${I}/person_email:transforms:upsertPersonEmail`,
+      `${I}/person_name:transforms:upsertPersonName`,
       `${I}/person_phone:transforms:upsertPersonPhone`,
       `${I}/person_remote:transforms:upsertPersonRemote`
     ]);
@@ -65,7 +65,7 @@ test('limited-pii stack weaves person_hash and no plaintext contact plugin', asy
     await ensurePluginRow(worker, { id: pluginId, path: 'pii-free-site', name: 'PII free site' });
 
     const described = await worker.getInboundTransforms({ pluginId, describe: true });
-    assert.doesNotMatch(described, /person_email|person_phone|person_address/, described);
+    assert.doesNotMatch(described, /person_name|person_email|person_phone|person_address|upsertPerson\b/, described);
     assert.match(described, /^id {8}woven {2}@engine9\/schemas\/person_hash:transforms:extractContactHashes$/m);
     assert.match(described, /^upsert {4}woven {2}@engine9\/schemas\/person_hash:transforms:upsertPersonHash$/m);
 
@@ -81,6 +81,13 @@ test('limited-pii stack weaves person_hash and no plaintext contact plugin', asy
     assert.equal(hashes[0].person_id, summary.personIds[0]);
     const { tables } = await worker.tables();
     assert.ok(!tables.includes('person_email') && !tables.includes('person_phone'), 'no plaintext tables exist');
+    assert.ok(!tables.includes('person_name'), 'no name table exists');
+    const { columns } = await worker.describe({ table: 'person' });
+    assert.deepEqual(columns.map((c) => c.name), ['id', 'created_at', 'modified_at'], 'person holds no name');
+    const { columns: transactionColumns } = await worker.describe({ table: 'transaction' });
+    for (const pii of ['given_name', 'family_name', 'email', 'phone', 'street_1']) {
+      assert.ok(!transactionColumns.some((c) => c.name === pii), `transaction has no ${pii}`);
+    }
   } finally {
     await worker.destroy();
   }
@@ -114,7 +121,7 @@ test('omitTransforms drops a woven step for one job; extraTransforms append by s
     });
     const { data: emails } = await worker.query('select * from person_email');
     assert.equal(emails.length, 0, 'omitted upsert wrote nothing');
-    const { data: people } = await worker.query('select given_name from person');
+    const { data: people } = await worker.query('select given_name from person_name');
     assert.equal(people[0].given_name, 'Skip', 'other upserts still ran');
 
     await assert.rejects(

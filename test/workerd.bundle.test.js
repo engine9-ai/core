@@ -10,8 +10,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import esbuild from 'esbuild';
 import { buildPlugins } from '../bin/buildPlugins.js';
+import PersonWorker from '../lib/PersonWorker.js';
+import { SqlApiKeyStore } from '../auth/index.js';
+import { getPluginUUID } from '../lib/utilities.js';
+import { ensurePluginRow } from './helpers/applySchemas.js';
+import { makeLegacyPersonNames } from './helpers/legacyPersonNames.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -200,6 +206,98 @@ test('bundled plugin registry compiles plugins, transforms, and schemas with no 
     assert.equal(out.errors.notDeclared, 'PLUGIN_PACKAGE_NOT_DECLARED');
     assert.match(out.errors.notFound, /compiled into this build.*nearby: @engine9\/schemas\/person/);
   } finally {
+    await rm(built.dir, { recursive: true, force: true });
+    await rm(siteDir, { recursive: true, force: true });
+  }
+});
+
+/* A D1Database stand-in over a SQLite file: prepare / bind / all / run. */
+function sqliteD1(file) {
+  const db = new DatabaseSync(file);
+  return {
+    db,
+    prepare(sql) {
+      let args = [];
+      const stmt = {
+        bind(...values) {
+          args = values;
+          return stmt;
+        },
+        async all() {
+          return { results: db.prepare(sql).all(...args) };
+        },
+        async run() {
+          const r = db.prepare(sql).run(...args);
+          return { meta: { changes: Number(r.changes), last_row_id: Number(r.lastInsertRowid) } };
+        }
+      };
+      return stmt;
+    }
+  };
+}
+
+test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then signups write person_name', async () => {
+  const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-upgrade-'));
+  const registryFile = path.join(siteDir, 'engine9.plugins.js');
+  const dbFile = path.join(siteDir, 'engine9.db');
+  buildPlugins({ cwd: root, packages: ['@engine9/schemas'], out: registryFile });
+  const accountId = 'cf-site';
+  const pluginId = getPluginUUID(accountId, 'website');
+  const setupWorker = new PersonWorker({ accountId, auth: { database_connection: `sqlite://${dbFile}` } });
+  let adminKey;
+  let publicKey;
+  try {
+    await makeLegacyPersonNames(setupWorker);
+    await ensurePluginRow(setupWorker, { id: pluginId, path: 'website', name: 'Website' });
+    const keyStore = new SqlApiKeyStore({ worker: setupWorker });
+    await keyStore.deploy();
+    adminKey = (await keyStore.create({ name: 'admin', scopes: ['admin'] })).key;
+    publicKey = (await keyStore.create({ name: 'public', scopes: ['public'] })).key;
+  } finally {
+    await setupWorker.destroy();
+  }
+  const built = await bundleWorkerd({
+    aliases: { '@engine9/core/plugins/site': registryFile },
+    contents: "export { default } from '@engine9/core/cloudflare/worker';\n",
+    sourcefile: 'site-worker.js'
+  });
+  const d1 = sqliteD1(dbFile);
+  try {
+    const mod = await import(built.href);
+    const fetch = mod.default?.fetch || mod.default?.default?.fetch;
+    const env = { DB: d1, E9_ACCOUNT_ID: accountId, E9_PLUGIN_ID: pluginId };
+    const call = (route, key, body) =>
+      fetch(
+        new Request(`https://www.example.test/api${route}`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body)
+        }),
+        env
+      );
+
+    const before = await call('/people', publicKey, { people: [{ email: 'ada@example.com', given_name: 'Ada', family_name: 'Lovelace' }] });
+    assert.equal(before.status, 200, await before.clone().text());
+    assert.equal(d1.db.prepare('select given_name from person').get().given_name, 'Ada', 'pre-upgrade signup still lands on person');
+
+    const denied = await call('/admin/upgrade', publicKey, {});
+    assert.equal(denied.status, 403);
+    const upgraded = await call('/admin/upgrade', adminKey, {});
+    const body = await upgraded.json();
+    assert.equal(upgraded.status, 200, JSON.stringify(body));
+    assert.equal(body.upgrades[0].copied, 1);
+
+    const columns = d1.db.prepare('pragma table_info(person)').all().map((c) => c.name);
+    assert.deepEqual(columns, ['id', 'created_at', 'modified_at']);
+    const after = await call('/people', publicKey, { people: [{ email: 'grace@example.com', given_name: 'Grace', family_name: 'Hopper' }] });
+    assert.equal(after.status, 200, await after.clone().text());
+    const names = d1.db.prepare('select given_name, family_name from person_name order by person_id').all();
+    assert.deepEqual(names.map((n) => ({ ...n })), [
+      { given_name: 'Ada', family_name: 'Lovelace' },
+      { given_name: 'Grace', family_name: 'Hopper' }
+    ]);
+  } finally {
+    d1.db.close();
     await rm(built.dir, { recursive: true, force: true });
     await rm(siteDir, { recursive: true, force: true });
   }

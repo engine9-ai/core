@@ -50,6 +50,20 @@
         create/alter tables. Not the same as the stack named "standard" unless
         you pass that --stack (or set the warehouse default_stack setting).
 
+    e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--discard-names]
+    e9core upgrade --url https://www.example.com [--key e9key_...] [--dry-run] [--no-refresh] [--discard-names]
+        Run after every deploy that changes @engine9/core or @engine9/schemas
+        (PluginWorker.upgrade, docs/upgrading.md). Applies pending account
+        upgrades in order (1.10.1: person names move into person_name and the
+        columns are dropped from person), records each in the setting table,
+        then reinstalls the installed @engine9/schemas plugins so new tables,
+        columns, and inbound snapshots reach the database. --db runs against
+        that database. --url runs inside a deployed site (Cloudflare D1
+        included) through POST /api/admin/upgrade, using --key or
+        E9_ADMIN_API_KEY (environment or ./.env). Deploy the new code first.
+        Safe to re-run. Exits 1 when an upgrade is blocked or a plugin fails.
+        --discard-names: PII-free accounts drop stored names without copying.
+
     e9core build-plugins [--out engine9.plugins.js] [--plugins a,b] [--packages a,b] [--check]
         Write the plugin registry module a Cloudflare Worker is bundled with.
         `e9core setup` puts this in wrangler's build step; it is not run by hand.
@@ -94,6 +108,7 @@ import { setupKeys, readEnvValue } from './setupKeys.js';
 import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
+import { adminKey, upgradeSite } from './upgrade.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
@@ -515,6 +530,28 @@ async function main() {
       }
       break;
     }
+    case 'upgrade': {
+      const options = {
+        dry_run: args['dry-run'] === true,
+        refresh: args['no-refresh'] !== true,
+        discard_names: args['discard-names'] === true
+      };
+      let result;
+      if (args.url && args.url !== true) {
+        const key = adminKey({ key: args.key && args.key !== true ? String(args.key) : undefined });
+        result = await upgradeSite({ url: String(args.url), key, options });
+      } else {
+        const worker = getPluginWorker(args);
+        try {
+          result = await worker.upgrade(options);
+        } finally {
+          await worker.destroy();
+        }
+      }
+      console.log(JSON.stringify(result, null, 2));
+      if (result.ok === false) process.exitCode = 1;
+      break;
+    }
     case 'segment':
     case 'role': {
       if (command === 'role') console.error('e9core role is now e9core segment (--segment replaces --role).');
@@ -537,7 +574,7 @@ async function main() {
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|build-plugins>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|upgrade|build-plugins>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

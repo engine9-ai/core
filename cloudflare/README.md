@@ -89,8 +89,12 @@ one piece at a time.
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations
    > create tables but no rows, so `installDefaultPlugins` (which writes the rows and
    > their `transforms.inbound` snapshot) is required before people writes.
-   > Re-run it after upgrading `@engine9/schemas` to refresh the snapshots;
-   > the Worker cannot import schema plugins at runtime to fill them in.
+   > A deploy does not change D1. After upgrading `@engine9/core` or
+   > `@engine9/schemas`, deploy, then run `npx e9core upgrade --url https://<site>`.
+   > It posts to `POST /api/admin/upgrade` with `E9_ADMIN_API_KEY`, and the
+   > Worker upgrades its own D1: release data upgrades first, then a reinstall
+   > of the installed schema plugins (new tables, columns, and snapshots).
+   > Add `--dry-run` to see the plan. See [docs/upgrading.md](../docs/upgrading.md).
 
 4. **Create the plugin row and an API key**
 
