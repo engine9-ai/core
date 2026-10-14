@@ -27,7 +27,9 @@ test('limited-pii stack excludes person_email; standard stack is blocked after',
       /excluded by @engine9\/schemas\/stacks\/limited-pii/
     );
 
-    await assert.rejects(() => plugins.installDefaultPlugins(), /excluded by/);
+    const refreshed = await plugins.installDefaultPlugins();
+    assert.equal(refreshed.path, LIMITED_PII_STACK_PATH);
+    assert.ok(!((await plugins.tables()).tables.includes('person_name')));
     await assert.rejects(
       () => plugins.install({ path: '@engine9/schemas/person_email' }),
       /excluded by @engine9\/schemas\/stacks\/limited-pii/

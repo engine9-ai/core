@@ -106,12 +106,16 @@ test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting',
   }
 });
 
-test('PersonWorker.installStandard is a deprecated alias for installDefaultPlugins', async () => {
+test('installDefaultPlugins reinstalls an already-installed limited-pii stack', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    const r = await worker.installStandard();
+    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/limited-pii' });
+    const r = await worker.installDefaultPlugins();
     assert.equal(r.complete, true);
-    assert.deepEqual(r.installed, DEFAULT_CORE_SCHEMAS);
+    assert.equal(r.path, '@engine9/schemas/stacks/limited-pii');
+    const { tables } = await worker.tables();
+    assert.ok(tables.indexOf('person_hash_email') >= 0);
+    assert.ok(tables.indexOf('person_name') < 0);
   } finally {
     await worker.destroy();
   }
