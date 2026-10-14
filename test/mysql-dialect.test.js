@@ -74,6 +74,38 @@ test('supportsColumnLevelCheckConstraints is MariaDB-only (MySQL 8 has no LEVEL 
   assert.equal(supportsColumnLevelCheckConstraints(undefined), false);
 });
 
+test('person_id matches when MySQL returns string default "0"', () => {
+  const fromDescribe = dialectToStandard(
+    {
+      name: 'person_id',
+      column_type: 'bigint',
+      length: null,
+      nullable: false,
+      default_value: '0',
+      auto_increment: false
+    },
+    {}
+  );
+  assert.equal(fromDescribe.type, 'person_id');
+  assert.equal(fromDescribe.default_value, 0);
+  assert.equal(typeof fromDescribe.default_value, 'number');
+});
+
+test('person_id matches quoted numeric default from some drivers', () => {
+  const fromDescribe = dialectToStandard(
+    {
+      name: 'person_id',
+      column_type: 'bigint(20)',
+      nullable: false,
+      default_value: "'0'",
+      auto_increment: false
+    },
+    {}
+  );
+  assert.equal(fromDescribe.type, 'person_id');
+  assert.equal(fromDescribe.default_value, 0);
+});
+
 test('id_u128 maps MySQL binary(16) from compact person_id_* tables', () => {
   assert.equal(getType('id_u128').column_type, 'binary(16)');
   const fromDescribe = dialectToStandard(
