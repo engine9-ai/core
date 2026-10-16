@@ -6,7 +6,7 @@
 */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ENV_ADMIN_KEY, readEnvValue } from './setupKeys.js';
+import { ENV_ADMIN_KEY, readEnvValue, remoteEnvPath } from './setupKeys.js';
 
 /** https://www.example.com -> https://www.example.com/api/admin/upgrade (an /api base is kept). */
 export function upgradeEndpoint(url) {
@@ -17,12 +17,32 @@ export function upgradeEndpoint(url) {
   return u.toString();
 }
 
-/** --key, then E9_ADMIN_API_KEY in the environment, then in ./.env */
-export function adminKey({ key, cwd = process.cwd(), env = process.env } = {}) {
+function isLocalUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * --key, then E9_ADMIN_API_KEY in the environment, then the deployed
+ * environment's file (.env.<target>; .env.production for a non-local URL),
+ * then ./.env. Deployed environments have their own admin key.
+ */
+export function adminKey({ key, target, url, cwd = process.cwd(), env = process.env } = {}) {
   if (key) return key;
   if (env[ENV_ADMIN_KEY]) return env[ENV_ADMIN_KEY];
-  const envPath = path.join(cwd, '.env');
-  return existsSync(envPath) ? readEnvValue(readFileSync(envPath, 'utf8'), ENV_ADMIN_KEY) : '';
+  const files = [];
+  if (target) files.push(remoteEnvPath(cwd, target));
+  else if (url && !isLocalUrl(url)) files.push(remoteEnvPath(cwd));
+  if (!target) files.push(path.join(cwd, '.env'));
+  for (const file of files) {
+    const value = existsSync(file) ? readEnvValue(readFileSync(file, 'utf8'), ENV_ADMIN_KEY) : '';
+    if (value) return value;
+  }
+  return '';
 }
 
 export async function upgradeSite({ url, key, options = {}, fetchImpl = fetch }) {

@@ -324,7 +324,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core serve [--api-only] [--setup]` | Local site + `/api`; `--setup` reopens the wizard |
 | `npx e9core installDefaultPlugins --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
-| `npx e9core setup-keys [--remote]` | Regenerate `.env` keys; `--remote` pushes them as Cloudflare secrets |
+| `npx e9core setup-keys [--remote [--env staging]]` | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets |
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person` | Print one schema's SQL |
 | `npx e9core upgrade --url <site>` or `--db <url>` | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
 | `npx e9core build-plugins [--check]` | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below) |
@@ -400,6 +400,12 @@ provider. The browser can instead send the Identity Token as
 `Authorization: Bearer` on each request together with `X-API-Key`. Full
 account: [auth/README.md](auth/README.md).
 
+The `roles` in a session are a copy of `person_segment` made when the token
+was minted, so use them for what to show. A privileged decision in your own
+code (an admin page, an admin action) reads membership at that moment with
+`auth.rolesForPerson(personId)`. Core's own membership routes already do.
+Details: [Permissions](auth/README.md#permissions).
+
 ### Endpoints
 
 | Endpoint | Purpose | Needs |
@@ -407,15 +413,33 @@ account: [auth/README.md](auth/README.md).
 | `GET /ok` | Health check | nothing |
 | `POST /people` | `{ people: [...] }` through the inbound person pipeline | `people:write` or `public` |
 | `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
-| `GET /read/:name` | Configured read, optionally gated by `person_segment` (`?person_id=`) | `data:read` |
+| `GET /read/:name` | Configured read, optionally gated by `person_segment`. With a session it reads the signed-in person; another `?person_id=` needs `admin` | `data:read` |
 | `POST /auth/login` | `{ delegate_token }` → `{ session, token }` | API key; 501 until `SESSION_SECRET` / `delegate` is set |
 | `GET /auth/me` | `{ personId, roles, level, domainUnid, fields? }` | API key + session or Identity Token |
-| `POST /auth/logout` | `{ loggedOut: true }` (the host clears its cookie) | API key |
+| `POST /auth/logout` | `{ loggedOut, revoked }` (the host clears its cookie; `revoked` with `delegate.sessionRevocations`) | API key |
 | `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
 | `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database | `admin` |
+| `POST /admin/erase` | `{ person_ids, dry_run?, keep?, domain_unids? }` — erase people (`PersonWorker.erasePeople`); returns rows per table | `admin` |
 
 Everything under `/api` in the shipped Worker and `serve`.
+
+A request may pick its acting role with `role_id` (query or body) only when
+it holds that role: the session's `roles`, or the key's `default_role_id`. An
+unknown or unheld `role_id` is a 403, not the key's own scopes.
+
+### Erasing a person
+
+`POST /api/admin/erase` (or `worker.erasePeople({ personIds })`) deletes
+every row with those `person_id`s, in every table that has a `person_id`
+column (found when it runs, so tables a later release adds are included),
+then the `person` row. Their identifiers go too, so a later sign-in with the
+same email or Domain UNID makes a new person. Send `dry_run: true` first to
+see the row counts. `keep: ["transaction"]` leaves tables you must retain.
+With `PERSON_ID_DELEGATE_KV` bound, the cached Domain UNID is dropped as well.
+Person ids are not reused after deletion. Records already shipped to a
+modification log sink or an export are outside the database; erase them
+there.
 
 ### Plugin paths
 

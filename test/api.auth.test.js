@@ -400,3 +400,60 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
     await worker.destroy();
   }
 });
+
+/*
+  role_id on a request picks one of the caller's own roles. It cannot name a
+  role the session does not hold, or an unknown role (which used to mean
+  "no role": the key's full scopes, no requiredAuth).
+*/
+test('API role_id: only roles the caller holds', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await applyStandardStack(worker);
+    const pluginId = getPluginUUID('engine9.test', 'website-role-id');
+    await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
+    const viewerRoleId = getVersionedUUID();
+    const editorRoleId = getVersionedUUID();
+    const strictRoleId = getVersionedUUID();
+    const roles = {
+      [viewerRoleId]: { name: 'Viewer', scopes: ['data:read'] },
+      [editorRoleId]: { name: 'Editor', scopes: ['people:write'] },
+      [strictRoleId]: { name: 'Strict', scopes: ['people:write'], requiredAuth: { minLevel: 3 } }
+    };
+    const keyStore = new SqlApiKeyStore({ worker });
+    await keyStore.deploy();
+    const { key } = await keyStore.create({
+      name: 'narrowed',
+      scopes: ['people:write', 'data:read'],
+      defaultRoleId: viewerRoleId
+    });
+    const delegateAuth = createDelegateAuth({ worker, delegateUrl: DELEGATE_URL, domain: DOMAIN, sessionSecret: 's', pluginId, roles });
+    const api = createApi({ worker, keyStore, delegateAuth, config: { pluginId, roles } });
+    const headers = { authorization: `Bearer ${key}` };
+    const body = { people: [{ email: 'role-id@example.com' }] };
+    const post = (extra = {}) => api.handle({ method: 'POST', path: '/people', body, ...extra, headers: { ...headers, ...(extra.headers || {}) } });
+
+    assert.equal((await post()).status, 403, 'default role narrows the key');
+    const unknown = await post({ query: { role_id: 'not-a-role' } });
+    assert.equal(unknown.status, 403);
+    assert.equal(unknown.body.reason, 'unknown_role');
+    const notHeld = await post({ query: { role_id: editorRoleId } });
+    assert.equal(notHeld.status, 403);
+    assert.equal(notHeld.body.reason, 'role_not_held');
+    const inBody = await api.handle({ method: 'POST', path: '/people', headers, body: { ...body, role_id: editorRoleId } });
+    assert.equal(inBody.status, 403, 'body role_id is checked the same way');
+
+    const strictSession = delegateAuth.issueToken({ personId: 1, roles: [strictRoleId], level: 1, auth: {} });
+    const levelTooLow = await post({ headers: { 'x-engine9-session': strictSession } });
+    assert.equal(levelTooLow.status, 403, 'requiredAuth.minLevel applies');
+    const dodge = await post({ headers: { 'x-engine9-session': strictSession }, query: { role_id: 'not-a-role' } });
+    assert.equal(dodge.status, 403, 'an unknown role_id cannot skip requiredAuth');
+
+    const twoRoles = delegateAuth.issueToken({ personId: 1, roles: [viewerRoleId, editorRoleId], level: 1, auth: {} });
+    assert.equal((await post({ headers: { 'x-engine9-session': twoRoles } })).status, 403, 'first role acts by default');
+    const chosen = await post({ headers: { 'x-engine9-session': twoRoles }, query: { role_id: 'Editor' } });
+    assert.equal(chosen.status, 200, JSON.stringify(chosen.body));
+  } finally {
+    await worker.destroy();
+  }
+});

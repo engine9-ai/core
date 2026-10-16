@@ -223,6 +223,14 @@ function readJsonc(file) {
   return JSON5.parse(readFileSync(file, 'utf8'));
 }
 
+export function accountFromWhoami(text) {
+  const raw = String(text || '');
+  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (email) return email[0];
+  const line = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s && !/^wrangler/i.test(s));
+  return line || '';
+}
+
 function defaultExec(args, cwd) {
   return spawnSync('npx', args, { cwd, encoding: 'utf8' });
 }
@@ -265,6 +273,7 @@ function execOk(result, what) {
  *   name?: string,
  *   d1?: string,
  *   remote?: boolean,
+ *   env?: string,
  *   deploy?: boolean,
  *   domain?: string,
  *   node?: boolean,
@@ -337,10 +346,23 @@ export async function setup(options = {}) {
   }
 
   let cfg = readJsonc(wranglerPath) || {};
+  const envName = options.env ? String(options.env) : '';
+  const envFlag = envName ? ['--env', envName] : [];
+  if (envName && !options.remote) {
+    throw new Error('--env names a deployed wrangler environment; use it together with --remote.');
+  }
+  if (envName && !cfg.env?.[envName]?.d1_databases?.some((db) => db.binding === 'DB')) {
+    throw new Error(
+      `wrangler.jsonc has no env.${envName} with a DB binding. Add that environment (its own D1 database) first; setup does not create one.`
+    );
+  }
   let databaseId = cfg.d1_databases?.find((db) => db.binding === 'DB')?.database_id || '';
   if (!databaseId || databaseId.includes('PASTE')) databaseId = '';
 
   if (!databaseId) {
+    const who = exec(['wrangler', 'whoami'], cwd);
+    const account = who?.status === 0 ? accountFromWhoami(`${who.stdout || ''}\n${who.stderr || ''}`) : '';
+    if (account) notes.push(`Creating the D1 database on the Cloudflare account logged in as ${account}.`);
     let createdText = '';
     const created = exec(['wrangler', 'd1', 'create', databaseName], cwd);
     createdText = `${created.stdout || ''}\n${created.stderr || ''}`;
@@ -372,8 +394,9 @@ export async function setup(options = {}) {
 
   const sqlPath = path.join(cwd, 'migrations', '0001_engine9.sql');
   const needLocal = !options.skipInstall && (options.refreshSchema || !state.schemaLocal);
+  const remoteKey = envName ? `schemaRemote:${envName}` : 'schemaRemote';
   const needRemote = Boolean(options.remote) && !options.skipInstall
-    && (options.refreshSchema || !state.schemaRemote);
+    && (options.refreshSchema || !state[remoteKey]);
   if (needLocal || (needRemote && !existsSync(sqlPath))) {
     const dbUrl = options.db || 'sqlite://./engine9.db';
     const installed = await ensureDatabaseDrivers(cwd, dbUrl);
@@ -395,11 +418,11 @@ export async function setup(options = {}) {
   }
   if (needRemote) {
     execOk(
-      exec(['wrangler', 'd1', 'execute', databaseName, '--remote', '--file', sqlPath], cwd),
-      'load production D1'
+      exec(['wrangler', 'd1', 'execute', databaseName, '--remote', ...envFlag, '--file', sqlPath], cwd),
+      `load ${envName || 'production'} D1`
     );
-    state.schemaRemote = true;
-    notes.push('Loaded tables into production D1.');
+    state[remoteKey] = true;
+    notes.push(`Loaded tables into ${envName || 'production'} D1.`);
   }
 
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
@@ -409,14 +432,15 @@ export async function setup(options = {}) {
       cwd,
       d1: databaseName,
       remote: options.remote === true,
+      env: envName || undefined,
       rotate: options.rotate === true
     });
     notes.push(...keys.notes);
   }
 
   if (options.remote && options.deploy !== false) {
-    execOk(exec(['wrangler', 'deploy'], cwd), 'wrangler deploy');
-    notes.push('Deployed the Worker.');
+    execOk(exec(['wrangler', 'deploy', ...envFlag], cwd), 'wrangler deploy');
+    notes.push(envName ? `Deployed the ${envName} Worker.` : 'Deployed the Worker.');
   }
 
   return { notes, pluginId, databaseId };

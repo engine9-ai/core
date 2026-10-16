@@ -19,6 +19,7 @@
   Engine9 API hosts sign their own operator session with SESSION_SECRET.
   That is not this protocol.
 */
+import crypto from 'node:crypto';
 import { jwtVerify, createLocalJWKSet, errors as joseErrors } from 'jose';
 import {
   base64urlEncode,
@@ -82,6 +83,12 @@ const DELEGATE_LOGIN_ERRORS = {
   invalid_domain: {
     kind: 'auth',
     message: 'This identity token is not valid for this domain. Please sign in again.'
+  },
+  // Not an expiry: the return belongs to a sign-in this browser did not start
+  // (another browser, an old tab, a link someone sent). Start sign-in again.
+  state_mismatch: {
+    kind: 'auth',
+    message: 'Please sign in again.'
   }
 };
 
@@ -194,6 +201,13 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
   return error;
 }
 
+/**
+ * Identity Token lifetime core asks for. A host exchanges the token for its
+ * own Core Session at once, and with response_mode=query the token rides in
+ * the return URL (logs, history, Referer), so it should not outlive the hop.
+ */
+export const LOGIN_TOKEN_TTL_SECONDS = 300;
+
 /** Browser URL that starts Identity Token authorize. */
 export function delegateIdentityUrl({
   delegateUrl,
@@ -208,7 +222,8 @@ export function delegateIdentityUrl({
   brand,
   nonce,
   state,
-  responseMode = 'query'
+  responseMode = 'query',
+  expiresIn = LOGIN_TOKEN_TTL_SECONDS
 }) {
   if (!delegateUrl) throw new Error('delegateIdentityUrl requires delegateUrl');
   if (!domain) throw new Error('delegateIdentityUrl requires domain (JWT aud / host[:port])');
@@ -242,6 +257,8 @@ export function delegateIdentityUrl({
   if (nonce) url.searchParams.set('nonce', nonce);
   if (state) url.searchParams.set('state', state);
   if (responseMode) url.searchParams.set('response_mode', responseMode);
+  // null leaves the lifetime to Delegate (8 hours by default).
+  if (expiresIn != null) url.searchParams.set('expires_in', String(expiresIn));
   return url.toString();
 }
 
@@ -383,7 +400,9 @@ function mapJoseVerifyError(err) {
 /**
  * Verify a delegate Identity Token (JWT, ES256) via JWKS.
  * Fetches `{delegateUrl}/.well-known/jwks.json` unless `jwks` is passed.
- * Checks alg ES256, iss (default delegateUrl origin), aud === domain, exp (±60s).
+ * Checks alg ES256, iss (default delegateUrl origin), aud === domain, exp (±60s),
+ * and `nonce` when one is passed (the value this browser put in the
+ * authorize URL; a mismatch is `state_mismatch`).
  *
  * `sub` is the Domain UNID (`domain:hex`): the person on this Domain, and the
  * id an Engine9 API host stores. `fields` holds the values the User shared.
@@ -395,6 +414,7 @@ export async function verifyDelegateIdentityToken({
   domain,
   jwks,
   issuer,
+  nonce,
   fetchImpl = fetch
 } = {}) {
   if (!token || typeof token !== 'string') {
@@ -452,6 +472,12 @@ export async function verifyDelegateIdentityToken({
     } else {
       throw mapJoseVerifyError(err);
     }
+  }
+
+  if (nonce !== undefined && payload?.nonce !== nonce) {
+    throw createDelegateLoginFailure('state_mismatch', {
+      detail: 'identity token nonce does not match the sign-in this browser started'
+    });
   }
 
   const domainPrefix = `${domain}:`;
@@ -550,22 +576,38 @@ export async function resolveDelegatePersonId({
    Core has no server-side session storage; the session is a compact
    HMAC-SHA256-signed token in an HttpOnly cookie. The payload carries the
    person_id plus the credential level reported by delegate.
+
+   Every token names its purpose (`typ`). A reader accepts only its own
+   purpose, so a sign-in cookie, or anything else a host signs with the same
+   secret, is never read as a session.
 --------------------------------------------------------------------------- */
 
+export const SESSION_TOKEN_TYPE = 'e9.session';
+export const LOGIN_REQUEST_TOKEN_TYPE = 'e9.login';
+
+function randomToken() {
+  return crypto.randomBytes(16).toString('base64url');
+}
+
 /**
- * Create a signed session token. `payload` is any JSON-serializable object;
- * an `exp` (unix ms) is added from ttlSeconds.
+ * Create a signed token. `payload` is any JSON-serializable object; `typ`,
+ * `iat` and `exp` (unix ms) are added, and a session also gets a random `sid`.
  */
-export function createSessionToken(payload, { secret, ttlSeconds = 86400 }) {
+export function createSessionToken(payload, { secret, ttlSeconds = 86400, typ = SESSION_TOKEN_TYPE }) {
   if (!secret) throw new Error('createSessionToken requires a secret');
-  const encoded = base64urlEncode(
-    JSON.stringify({ ...payload, exp: Date.now() + ttlSeconds * 1000 })
-  );
+  const now = Date.now();
+  const body = { ...payload, typ, iat: now, exp: now + ttlSeconds * 1000 };
+  if (typ === SESSION_TOKEN_TYPE && !body.sid) body.sid = randomToken();
+  const encoded = base64urlEncode(JSON.stringify(body));
   return `${encoded}.${signPayload(encoded, secret)}`;
 }
 
-/** Verify a session token; returns the payload or null when invalid/expired. */
-export function verifySessionToken(token, { secret }) {
+/**
+ * Verify a signed token of one purpose; returns the payload or null when
+ * invalid, expired, or of another purpose. `acceptUntyped` reads tokens
+ * minted before `typ` existed (sessions only, for one session lifetime).
+ */
+export function verifySessionToken(token, { secret, typ = SESSION_TOKEN_TYPE, acceptUntyped = false }) {
   if (!secret) throw new Error('verifySessionToken requires a secret');
   const parts = splitSignedToken(token);
   if (!parts) return null;
@@ -577,7 +619,18 @@ export function verifySessionToken(token, { secret }) {
     return null;
   }
   if (!payload || typeof payload.exp !== 'number' || payload.exp <= Date.now()) return null;
+  if (payload.typ !== typ && !(acceptUntyped && payload.typ === undefined)) return null;
   return payload;
+}
+
+/** One cookie's value from a Cookie request header, or null. */
+export function readCookie(cookieHeader, name) {
+  for (const part of String(cookieHeader || '').split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return null;
 }
 
 /**
@@ -604,10 +657,13 @@ export function createSessionCookieHeaders(
 
    A delegate session payload is:
      { personId, roles: [role_id...], domainUnid, email?, level?,
-       auth: { signInProvider?, twoFactor?, signInSecondFactor?, authTime? }, exp }
+       auth: { signInProvider?, twoFactor?, signInSecondFactor?, authTime? },
+       typ, sid, iat, exp }
 
-   `roles` is an array of role_id values (segment UUIDs). Helpers below only
-   inspect whatever role ids the site put on the session.
+   `roles` is an array of role_id values (segment UUIDs) copied from
+   person_segment when the token was minted. Helpers below only inspect that
+   copy: use them for what to show, and rolesForPerson() for a privileged
+   decision (see auth/README.md, "Permissions").
 --------------------------------------------------------------------------- */
 
 /** True when the session holds any of the given role_ids (segment UUIDs). */
@@ -642,15 +698,21 @@ export function sessionNeedsRole(session) {
         '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 2 } }
       },
       // Legacy (deprecated): roleSegments: { admin: '<segment uuid>' },
-      sessionTtlSeconds: 86400
+      sessionTtlSeconds: 86400,
+      sessionRevocations: null,    // KV-like { get, put } for logout()
+      acceptLegacySessions: true   // sessions minted before `typ`; turn off a day after upgrading
     });
 
+    auth.beginLogin({ returnTo, ... })      // { url, cookie, state, nonce }
+    await auth.finishLogin(token, { state, cookie })  // checks state + nonce
     auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, brand? })
-    await auth.login(token)                 // Identity Token JWT
+    await auth.login(token, { nonce? })     // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
-    auth.verify(sessionToken)
+    auth.verify(sessionToken)               // signature, purpose, expiry
+    await auth.verifySession(sessionToken)  // + revocation
+    await auth.logout(sessionToken)         // revoke until it would expire
     auth.issueToken(session)
-    await auth.rolesForPerson(id)           // role_ids from person_segment
+    await auth.rolesForPerson(id)           // role_ids from person_segment, now
     await auth.grantRole(id, roleId, opts?)
     await auth.changeRole({ personId, roleId, exclusive?, session? })
     await auth.ensureSegments()             // create segment rows for the registry
@@ -665,6 +727,10 @@ export function sessionNeedsRole(session) {
 
   loadRolesOnLogin (default true): when false, login() always returns
   session.roles = [] so the site can re-prompt role selection every login.
+
+  A session's roles are a copy made when the token was minted. Removing
+  someone from a role does not change a token they already hold, so a
+  privileged decision reads person_segment with rolesForPerson().
 */
 export function createDelegateAuth({
   worker,
@@ -677,6 +743,8 @@ export function createDelegateAuth({
   roles,
   roleSegments = {},
   loadRolesOnLogin = true,
+  sessionRevocations = null,
+  acceptLegacySessions = true,
   fetchImpl = fetch,
   domain,
   issuer,
@@ -764,21 +832,45 @@ export function createDelegateAuth({
   }
 
   function issueToken(session) {
-    return createSessionToken(session, { secret: sessionSecret, ttlSeconds: sessionTtlSeconds });
+    const { typ: _typ, sid: _sid, iat: _iat, exp: _exp, ...rest } = session || {};
+    return createSessionToken(rest, { secret: sessionSecret, ttlSeconds: sessionTtlSeconds });
   }
 
   function verify(token) {
-    const payload = verifySessionToken(token, { secret: sessionSecret });
+    const payload = verifySessionToken(token, { secret: sessionSecret, acceptUntyped: acceptLegacySessions });
     if (!payload || !Number.isInteger(payload.personId)) return null;
     return {
       personId: payload.personId,
-      roles: Array.isArray(payload.roles) ? payload.roles : [],
+      roles: Array.isArray(payload.roles) ? payload.roles.filter((id) => typeof id === 'string') : [],
       domainUnid: payload.domainUnid,
       email: payload.email,
-      auth: payload.auth || {},
+      auth: payload.auth && typeof payload.auth === 'object' ? payload.auth : {},
+      sid: payload.sid,
+      iat: payload.iat,
       exp: payload.exp,
       level: payload.level
     };
+  }
+
+  const revokedKey = (sid) => `e9:revoked-session:${sid}`;
+
+  /** verify(), then null when the session was logged out (sessionRevocations). */
+  async function verifySession(token) {
+    const session = verify(token);
+    if (!session) return null;
+    if (sessionRevocations && session.sid && (await sessionRevocations.get(revokedKey(session.sid)))) {
+      return null;
+    }
+    return session;
+  }
+
+  /** Record the session as ended until it would have expired. No-op without sessionRevocations. */
+  async function logout(token) {
+    const session = verify(token);
+    if (!session?.sid || !sessionRevocations) return false;
+    const ttl = Math.max(60, Math.ceil((session.exp - Date.now()) / 1000));
+    await sessionRevocations.put(revokedKey(session.sid), '1', { expirationTtl: ttl });
+    return true;
   }
 
   /*
@@ -826,7 +918,8 @@ export function createDelegateAuth({
     brand,
     nonce,
     state,
-    responseMode
+    responseMode,
+    expiresIn
   } = {}) {
     return delegateIdentityUrl({
       delegateUrl,
@@ -841,8 +934,69 @@ export function createDelegateAuth({
       brand,
       nonce,
       state,
-      responseMode
+      responseMode,
+      ...(expiresIn !== undefined ? { expiresIn } : {})
     });
+  }
+
+  const LOGIN_REQUEST_TTL_SECONDS = 600;
+
+  function clearCookieHeader(cookieName, secure) {
+    return `${cookieName}=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
+  }
+
+  /*
+    Start a sign-in bound to this browser. Send the browser to `url` with
+    `cookie` as its Set-Cookie header. The cookie holds this request's state
+    and nonce, signed and tagged so nothing else reads as one.
+  */
+  function beginLogin({ returnTo, cookieName = 'e9_login', secure, ...urlOptions } = {}) {
+    const state = randomToken();
+    const nonce = randomToken();
+    const value = createSessionToken(
+      { state, nonce },
+      { secret: sessionSecret, ttlSeconds: LOGIN_REQUEST_TTL_SECONDS, typ: LOGIN_REQUEST_TOKEN_TYPE }
+    );
+    const isSecure = secure ?? String(returnTo || '').startsWith('https:');
+    return {
+      url: identityUrl({ ...urlOptions, returnTo, state, nonce }),
+      state,
+      nonce,
+      cookie: createSessionCookieHeaders(value, {
+        cookieName,
+        maxAge: LOGIN_REQUEST_TTL_SECONDS,
+        secure: isSecure
+      })
+    };
+  }
+
+  /*
+    Finish a sign-in from the return URL's `delegate_token` and `state`, and
+    the request's Cookie header. A return this browser did not start (no
+    cookie, other state, other nonce) throws `state_mismatch`: send the
+    browser to sign in again, do not show an error. Always send
+    `clearCookie` (also on the thrown error) so the request is used once.
+  */
+  async function finishLogin(token, { state, cookie, cookieName = 'e9_login', secure, ...loginOptions } = {}) {
+    const raw = readCookie(cookie, cookieName);
+    const pending = raw
+      ? verifySessionToken(raw, { secret: sessionSecret, typ: LOGIN_REQUEST_TOKEN_TYPE })
+      : null;
+    const clearCookie = clearCookieHeader(cookieName, Boolean(secure));
+    if (!pending || !state || pending.state !== state) {
+      const failure = createDelegateLoginFailure('state_mismatch', {
+        detail: pending ? 'state does not match this browser\'s sign-in' : 'no sign-in was started in this browser'
+      });
+      failure.clearCookie = clearCookie;
+      throw failure;
+    }
+    try {
+      const result = await login(token, { ...loginOptions, nonce: pending.nonce });
+      return { ...result, clearCookie };
+    } catch (err) {
+      if (err && typeof err === 'object') err.clearCookie = clearCookie;
+      throw err;
+    }
   }
 
   /*
@@ -853,7 +1007,7 @@ export function createDelegateAuth({
   */
   async function login(
     token,
-    { person = {}, returnTo, domain: domainOverride, fallbackDomain } = {}
+    { person = {}, returnTo, domain: domainOverride, fallbackDomain, nonce } = {}
   ) {
     if (classifyDelegateLoginToken(token) !== 'jwt') {
       throw createDelegateLoginFailure('invalid_identity_token', {
@@ -867,6 +1021,7 @@ export function createDelegateAuth({
       domain: jwtDomain,
       jwks,
       issuer,
+      nonce,
       fetchImpl
     });
 
@@ -897,8 +1052,12 @@ export function createDelegateAuth({
 
   return {
     identityUrl,
+    beginLogin,
+    finishLogin,
     login,
     verify,
+    verifySession,
+    logout,
     verifyIdentityToken,
     issueToken,
     rolesForPerson,
@@ -924,6 +1083,7 @@ export default {
   resolveDelegatePersonId,
   createSessionToken,
   verifySessionToken,
+  readCookie,
   createSessionCookieHeaders,
   sessionHasRole,
   sessionPrimaryRole,

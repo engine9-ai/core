@@ -89,6 +89,9 @@ export interface DelegateSession {
   domainUnid: string;
   email?: string;
   auth: CredentialLevel;
+  /** Random session id; what logout() revokes. */
+  sid?: string;
+  iat?: number;
   exp?: number;
   /** Identity Level from the Identity Token. */
   level?: number;
@@ -144,7 +147,22 @@ export function delegateIdentityUrl(options: {
   nonce?: string;
   state?: string;
   responseMode?: string;
+  /**
+   * Identity Token lifetime in seconds (`expires_in`). Default
+   * LOGIN_TOKEN_TTL_SECONDS (300); `null` leaves it to Delegate (8 hours).
+   */
+  expiresIn?: number | null;
 }): string;
+
+/** Identity Token lifetime core requests by default (seconds). */
+export const LOGIN_TOKEN_TTL_SECONDS: number;
+/** `typ` of a Core Session token. */
+export const SESSION_TOKEN_TYPE: "e9.session";
+/** `typ` of the beginLogin() cookie. */
+export const LOGIN_REQUEST_TOKEN_TYPE: "e9.login";
+
+/** One cookie's value from a Cookie request header, or null. */
+export function readCookie(cookieHeader: string | null | undefined, name: string): string | null;
 
 export function resolveDelegatePersonId(options: {
   worker: unknown;
@@ -186,6 +204,8 @@ export function verifyDelegateIdentityToken(options: {
   domain: string;
   jwks?: { keys: Record<string, unknown>[] } | Record<string, unknown>[];
   issuer?: string;
+  /** The nonce this browser sent; a different token nonce throws `state_mismatch`. */
+  nonce?: string;
   fetchImpl?: typeof fetch;
 }): Promise<DelegateUser>;
 
@@ -204,14 +224,16 @@ export function createSessionCookieHeaders(
   }
 ): string;
 
+/** Signed token with `typ` (default SESSION_TOKEN_TYPE), `iat`, `exp`, and for sessions a `sid`. */
 export function createSessionToken(
   payload: object,
-  options: { secret: string; ttlSeconds?: number }
+  options: { secret: string; ttlSeconds?: number; typ?: string }
 ): string;
 
+/** Payload of a valid, unexpired token of purpose `typ`, else null. */
 export function verifySessionToken(
   token: string | null | undefined,
-  options: { secret: string }
+  options: { secret: string; typ?: string; acceptUntyped?: boolean }
 ): Record<string, unknown> | null;
 
 /** True when the session holds any of the given role_ids (segment UUIDs). */
@@ -276,7 +298,42 @@ export interface DelegateAuth {
     nonce?: string;
     state?: string;
     responseMode?: string;
+    /** Default 300 seconds; `null` leaves it to Delegate. */
+    expiresIn?: number | null;
   }): string;
+  /**
+   * Start a sign-in bound to this browser: redirect to `url` and send
+   * `cookie` as Set-Cookie. Takes the identityUrl options.
+   */
+  beginLogin(options: Parameters<DelegateAuth["identityUrl"]>[0] & {
+    cookieName?: string;
+    /** Default: returnTo is https. */
+    secure?: boolean;
+  }): { url: string; state: string; nonce: string; cookie: string };
+  /**
+   * Finish a beginLogin() sign-in from the return's `delegate_token` and
+   * `state` and the request's Cookie header. Throws `state_mismatch` for a
+   * return this browser did not start (sign in again; not an error). Send
+   * `clearCookie` as Set-Cookie either way (it is also on the thrown error).
+   */
+  finishLogin(
+    identityToken: string,
+    options: {
+      state: string | null | undefined;
+      cookie: string | null | undefined;
+      cookieName?: string;
+      secure?: boolean;
+      person?: Record<string, unknown>;
+      returnTo?: string;
+      domain?: string;
+      fallbackDomain?: string;
+    }
+  ): Promise<{
+    session: DelegateSession;
+    token: string;
+    delegateUser: DelegateUser;
+    clearCookie: string;
+  }>;
   /**
    * Complete login from an Identity Token JWT. JWT aud is `options.domain`,
    * else the configured domain, else domainFromUrl(returnTo), else
@@ -289,14 +346,20 @@ export interface DelegateAuth {
       returnTo?: string;
       domain?: string;
       fallbackDomain?: string;
+      /** The nonce this browser sent; a different token nonce throws `state_mismatch`. */
+      nonce?: string;
     }
   ): Promise<{
     session: DelegateSession;
     token: string;
     delegateUser: DelegateUser;
   }>;
-  /** Verify a Core Session token; null when invalid or expired. Returns level and domainUnid. */
+  /** Verify a Core Session token (signature, purpose, expiry); null when invalid. Does not see revocations. */
   verify(token: string | null | undefined): DelegateSession | null;
+  /** verify(), plus the sessionRevocations check. */
+  verifySession(token: string | null | undefined): Promise<DelegateSession | null>;
+  /** Revoke the session until it would expire. False without sessionRevocations. */
+  logout(token: string | null | undefined): Promise<boolean>;
   /** Verify a delegate Identity Token using this auth's delegateUrl / domain / JWKS. */
   verifyIdentityToken(
     token: string,
@@ -310,7 +373,7 @@ export interface DelegateAuth {
   ): Promise<DelegateUser>;
   /** Re-sign an updated session payload. */
   issueToken(session: DelegateSession): string;
-  /** role_ids from person_segment membership for configured roles. */
+  /** role_ids the person holds now (person_segment, configured roles). Use for privileged decisions. */
   rolesForPerson(personId: number): Promise<string[]>;
   /**
    * Upsert the person_segment row for a role_id (segment UUID); returns refreshed roles.
@@ -391,6 +454,13 @@ export function createDelegateAuth(config: {
    * re-prompt role selection every login. Default true.
    */
   loadRolesOnLogin?: boolean;
+  /** KV-like store (Cloudflare KV works) that logout() writes revoked session ids to. */
+  sessionRevocations?: {
+    get(key: string): Promise<unknown>;
+    put(key: string, value: string, options?: { expirationTtl?: number }): Promise<unknown>;
+  } | null;
+  /** Accept sessions minted before `typ` existed. Default true; turn off one session lifetime after upgrading. */
+  acceptLegacySessions?: boolean;
   fetchImpl?: typeof fetch;
 }): DelegateAuth;
 
@@ -406,6 +476,7 @@ declare const _default: {
   resolveDelegatePersonId: typeof resolveDelegatePersonId;
   createSessionToken: typeof createSessionToken;
   verifySessionToken: typeof verifySessionToken;
+  readCookie: typeof readCookie;
   createSessionCookieHeaders: typeof createSessionCookieHeaders;
   sessionHasRole: typeof sessionHasRole;
   sessionPrimaryRole: typeof sessionPrimaryRole;

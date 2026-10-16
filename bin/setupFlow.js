@@ -15,7 +15,7 @@ import {
   removeEnvKeys,
   upsertEnv
 } from './setupKeys.js';
-import { setup } from './setup.js';
+import { accountFromWhoami, setup } from './setup.js';
 
 const WIZARD_FILE = 'wizard.json';
 
@@ -78,13 +78,7 @@ function defaultRunCommand(args, cwd, { detached = false } = {}) {
   });
 }
 
-export function accountFromWhoami(text) {
-  const raw = String(text || '');
-  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (email) return email[0];
-  const line = raw.split(/\r?\n/).map((s) => s.trim()).find((s) => s && !/^wrangler/i.test(s));
-  return line || '';
-}
+export { accountFromWhoami };
 
 export function configSource(publicKey) {
   return [

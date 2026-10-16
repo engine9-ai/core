@@ -5,13 +5,16 @@
     DB          -- D1 database (the engine9 database)
     API_KEYS    -- KV namespace for API keys (optional: use SqlApiKeyStore instead)
     LOG_BUCKET  -- R2 bucket for batch modification logs (optional)
+    SESSION_REVOCATIONS -- KV namespace (optional); logout revokes the Core
+                           Session instead of only clearing the cookie
 
   Vars / secrets:
     E9_ACCOUNT_ID      -- account identifier used in logs
     E9_PLUGIN_ID       -- plugin id (UUID) used for people writes
     E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
     SESSION_SECRET     -- secret; turns on login (/auth/*). `e9core setup --remote`
-                          copies it from .env. Without it /auth/* answers 501.
+                          stores production's own (.env.production). Without it
+                          /auth/* answers 501.
     DELEGATE_URL       -- optional; default https://delegate.engine9.ai
     E9_DOMAIN          -- optional JWT aud (host[:port]). Default: the request's
                           own Origin/Host, which is right when pages and /api
@@ -60,7 +63,8 @@ export default {
         ? {
             sessionSecret: env.SESSION_SECRET,
             delegateUrl: env.DELEGATE_URL,
-            domain: env.E9_DOMAIN
+            domain: env.E9_DOMAIN,
+            sessionRevocations: env.SESSION_REVOCATIONS || null
           }
         : null,
       kvEnv: env.PERSON_ID_DELEGATE_KV ? env : null,

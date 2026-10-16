@@ -206,7 +206,8 @@ you hold — checked with the same rules as `/auth/segments` — and it returns
 a **re-signed session token** with the new `roles`. Use it when the person
 picks a role and the browser needs the updated session at once
 (`@engine9/id` `core.changeRole`). With `admin` scope, `person_id` may name
-someone else.
+someone else. Changing someone else's roles does not change the session
+token they hold; see [Permissions](../auth/README.md#permissions).
 
 ### `POST /people` — signup and import
 

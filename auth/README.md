@@ -33,13 +33,80 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 1. **API key** (layer 1) — enables the caller. Empty `scopes` deny. `admin`
    grants every scope. Prefix `e9key_` or `e9publickey_` (`public` scope).
 2. **Role** (layer 2) — `role_id === segment_id`. Effective scopes =
-   key ∩ role (`intersectScopes`). Soft **declared roles** with the same
+   key ∩ role (`intersectScopes`). A request may name a `role_id` only when
+   the role is in the registry and the caller holds it (it is on the session's
+   `roles`, or it is the key's `default_role_id`). Any other `role_id` is a
+   403 (`unknown_role` or `role_not_held`), never a fall back to the key's
+   own scopes. Soft **declared roles** with the same
    `requiredAuth` shape (no `person_id`) are documented in
    `@engine9/id` [declared roles](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
    and demonstrated in `[demo-id](https://github.com/engine9-ai/demo-id)`.
 3. **Identity Level** (layer 3) — `requiredAuth.minLevel` and
    `requiredAuth.twoFactor` against the session / Identity Token. Levels are
    not authorization.
+
+## Permissions
+
+### Where each piece lives
+
+| What | Where | Changes when |
+| --- | --- | --- |
+| What a key may do | API key `scopes` | The key is created, edited, or rotated |
+| Who holds a role | `person_segment` rows (`person_id`, `segment_id`) | Membership is granted or removed |
+| What a role means | The role registry (`config.roles`): `scopes`, `requiredAuth` | You deploy |
+| The roles a session shows | `roles` inside the Core Session token, copied from `person_segment` | A token is minted (login, `POST /auth/role`) |
+
+`person_segment` is the only record of who holds a role. The `roles` in a
+token are a copy made when the token was minted. Nothing updates that copy
+afterwards.
+
+### How core decides
+
+- A request's scopes are the key's scopes intersected with the acting role's
+  scopes. The acting role is the `role_id` the request names (it must be
+  held), else the first role in the session, else the key's
+  `default_role_id`. A role only narrows the key. A request with no role gets
+  the key's scopes. So an out-of-date copy in a token can never give more API
+  access than the key already allows.
+- Membership changes (`POST /auth/role`, `POST /auth/segments`) and
+  segment-gated reads (`GET /read/:name` with `segmentId`) read
+  `person_segment` on the request itself.
+- A Bearer Identity Token carries no roles, so core reads them on each such
+  request.
+- `requiredAuth` (Identity Level, two-factor) is checked against the session
+  on every request.
+
+### What host code should do
+
+Use the session's `roles` to decide what to show: the Admin link, which page
+to land on after login (`sessionHasRole`, `sessionPrimaryRole`). Reading the
+session does not touch the database.
+
+For a privileged decision, such as entering an admin page or performing an
+admin action with the admin key, ask `person_segment` at that moment:
+
+```js
+const session = await auth.verifySession(token);
+const roles = session ? await auth.rolesForPerson(session.personId) : [];
+if (!roles.includes(ADMIN_ROLE_ID)) return redirect("/");
+```
+
+That is one indexed query, on those requests only. Check the role's
+`requiredAuth` against the session too (`meetsRequiredAuth`).
+
+Do not send a visitor's session with the admin key and rely on the role to
+restrict it: a session with no role gets the key's scopes. If server code
+must do that, give the key a `default_role_id` with only the scopes visitors
+need.
+
+### Removing someone
+
+Remove their `person_segment` row (`auth.removePeople`, or
+`POST /auth/segments`). Privileged checks see it on their next request. The
+copy in a token they already hold goes away when it expires or they log in
+again, so menus can show the old role until then. To end the session itself,
+use logout with `sessionRevocations` (below), or rotate `SESSION_SECRET` to
+end every session.
 
 ## Policy (`policy.js`)
 
@@ -74,14 +141,21 @@ createDelegateAuth({
   pluginId,
   roles, // { [segmentUuid]: { name, scopes, requiredAuth } }
   fetchImpl,
+  sessionRevocations, // optional KV-like store; logout revokes the session
+  acceptLegacySessions, // default true; false refuses sessions without `typ`
 });
 ```
 
-`login(token)` accepts an Identity Token (JWT). Verification uses the
-provider JWKS. No shared secret.
+`login(token, { nonce })` accepts an Identity Token (JWT). Verification uses
+the provider JWKS. No shared secret. With `nonce`, the token's `nonce` must
+match.
 
-`verify(sessionToken)` returns `personId`, `roles`, `domainUnid`,
-`email`, `auth`, `level`, `exp`.
+`verify(sessionToken)` returns `personId`, `roles`, `domainUnid`, `email`,
+`auth`, `level`, `sid`, `iat`, `exp`. `verifySession(sessionToken)` (async) is
+what `createApi` uses: `verify`, then the revocation check.
+`logout(sessionToken)` revokes. `rolesForPerson(personId)` reads the roles a
+person holds now ([Permissions](#permissions)). `beginLogin` / `finishLogin`
+bind a server-side sign-in to the browser.
 
 `verifyIdentityToken(jwt)` is the same JWKS check with constructor `domain` /
 `delegateUrl`.
@@ -151,11 +225,64 @@ only an API key; they never read `SESSION_SECRET`.
 
 ### Token shape
 
-`createSessionToken(payload, { secret, ttlSeconds })` builds
+`createSessionToken(payload, { secret, ttlSeconds, typ })` builds
 `base64url(JSON).base64url(HMAC-SHA256)`. The JSON is the payload plus
-`exp` in unix milliseconds (`Date.now() + ttlSeconds * 1000`). Default TTL
-is 86400 seconds. `verifySessionToken` returns the payload, or `null` when
-the signature, encoding, or `exp` fails. Core does not store sessions.
+`typ` (what the token is for: `e9.session`, or `e9.login` for the pending
+login cookie), `iat` and `exp` in unix milliseconds, and a random `sid` for
+sessions. Default TTL is 86400 seconds. `verifySessionToken(token, { secret, typ })`
+returns the payload, or `null` when the signature, encoding, `exp`, or `typ`
+fails, so a login cookie can never be replayed as a session. Core does not
+store sessions.
+
+Sessions minted before `typ` existed have none. `createDelegateAuth` accepts
+them until they expire (`acceptLegacySessions: true`, the default). Set it to
+`false` once a day has passed after upgrading.
+
+### Logout and revocation
+
+A Core Session is valid until `exp` unless the host remembers that it was
+revoked. Pass a KV-like store (`get`, `put` with `expirationTtl`, such as a
+Cloudflare KV binding) as `sessionRevocations`:
+
+```js
+createDelegateAuth({ sessionSecret, worker, sessionRevocations: env.SESSION_REVOCATIONS });
+```
+
+`POST /auth/logout` (or `delegateAuth.logout(token)`) then records the
+session's `sid` until it would have expired, and `verifySession` refuses it.
+Without a store, logout only clears the cookie, and a copied token works
+until `exp`. Rotating `SESSION_SECRET` ends every session at once.
+
+### Server-side sign-in (`beginLogin` / `finishLogin`)
+
+A host that receives the Identity Token on its own callback
+(`response_mode=query`) must check that this browser started the sign-in.
+Otherwise someone can send a victim a link carrying the attacker's token and
+sign the victim in as the attacker.
+
+```js
+// GET /login
+const { url, cookie } = delegateAuth.beginLogin({ returnTo: "https://www.example.com/auth/callback" });
+return redirect(url, { "Set-Cookie": cookie });
+
+// GET /auth/callback?delegate_token=…&state=…
+const { token, clearCookie } = await delegateAuth.finishLogin(query.delegate_token, {
+  state: query.state,
+  cookie: request.headers.get("cookie"),
+});
+```
+
+`beginLogin` makes a random `state` and `nonce`, signs them into a short-lived
+`HttpOnly` cookie (`typ: e9.login`, 10 minutes), and returns the authorize
+URL. `finishLogin` requires that cookie, the same `state`, and a token whose
+`nonce` matches, then calls `login`. A mismatch throws `state_mismatch`
+("Please sign in again"): start sign-in again, do not show an error. Send
+`clearCookie` either way. The authorize URL asks for `expires_in=300`, so a
+token in a query string is short-lived even if it leaks to logs or history.
+
+`@engine9/id` already checks `state` and `nonce` in the browser.
+`login(token, { nonce })` performs the same nonce check when you hold the
+nonce yourself.
 
 `createDelegateAuth({ sessionSecret })` requires the secret. `login()`
 verifies the Identity Token, resolves the person, and returns
@@ -165,12 +292,14 @@ object is:
 ```js
 {
   (personId, // person in this database
-    roles, // role_id values (segment UUIDs)
+    roles, // role_id values (segment UUIDs), copied when minted; see Permissions
     domainUnid, // the provider's id for this person on this Domain (token `sub`)
     email, // set when fields.email_verified is true (Google/Level 3
     // share of the provider email should mint that flag)
     auth, // { signInProvider, twoFactor, signInSecondFactor, authTime }
     level, // Identity Level from the provider
+    sid, // random session id (revocation)
+    iat, // unix milliseconds
     exp); // unix milliseconds
 }
 ```
@@ -189,8 +318,9 @@ createSessionCookieHeaders(token, {
 ```
 
 The other delivery is the `X-Engine9-Session` header. Logout
-(`POST /auth/logout`) returns `{ loggedOut: true }`. Clearing the cookie
-or dropping the header is the host's job.
+(`POST /auth/logout`) returns `{ loggedOut: true, revoked }`. `revoked` is
+true when a `sessionRevocations` store recorded it. Clearing the cookie or
+dropping the header is the host's job.
 
 ### Development
 
@@ -236,7 +366,7 @@ All routes except `GET /ok` require an API key.
 | ------------------- | ---------------------------------------------------------------------------------------- |
 | `POST /auth/login`  | API key; body `delegate_token`                                                           |
 | `GET /auth/me`      | session or JWT → `{ personId, roles, level, domainUnid, fields?, auth }` |
-| `POST /auth/logout` | API key; `{ loggedOut: true }`                                                           |
+| `POST /auth/logout` | API key; `{ loggedOut: true, revoked }`                                                  |
 | `POST /auth/role`   | session/JWT `personId` must match `body.person_id`, or `admin` scope                     |
 
 Error reasons include `invalid_identity_token` and `invalid_domain`.

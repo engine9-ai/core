@@ -102,10 +102,10 @@ export function ensureGitignore(text, entries) {
   return body;
 }
 
-export function apiKeyInsertSql({ id, name, key, scopes, defaultRoleId = null }) {
+export function apiKeyInsertSql({ id, name, key, scopes, defaultRoleId = null, orIgnore = false }) {
   const esc = (s) => String(s).replaceAll("'", "''");
   const roleSql = defaultRoleId ? `'${esc(defaultRoleId)}'` : 'NULL';
-  return `INSERT INTO api_key (id, name, key_hash, scopes, default_role_id, active) VALUES ('${id}', '${esc(name)}', '${hashApiKey(key)}', '${esc(JSON.stringify(scopes))}', ${roleSql}, 1);`;
+  return `INSERT${orIgnore ? ' OR IGNORE' : ''} INTO api_key (id, name, key_hash, scopes, default_role_id, active) VALUES ('${id}', '${esc(name)}', '${hashApiKey(key)}', '${esc(JSON.stringify(scopes))}', ${roleSql}, 1);`;
 }
 
 function wranglerDotenvOverrides(dir) {
@@ -178,6 +178,11 @@ export async function setupKeys(options = {}) {
   const gitignorePath = path.join(cwd, '.gitignore');
   const existingEnv = readText(envPath);
   const state = readState(cwd);
+  // Keys earlier releases copied to production, kept until production has its own.
+  if (state.remoteApplied && !state.legacyRemote) {
+    state.legacyRemote = { adminId: state.adminId, publicId: state.publicId };
+  }
+  const previousIds = { adminId: state.adminId, publicId: state.publicId };
 
   const rotate = options.rotate === true;
   let adminKey = rotate ? '' : readEnvValue(existingEnv, ENV_ADMIN_KEY);
@@ -202,7 +207,6 @@ export async function setupKeys(options = {}) {
     inserts.push(row.sql);
     state.adminId = row.id;
     state.localApplied = false;
-    state.remoteApplied = false;
   }
   if (!publicKey) {
     const row = {
@@ -217,7 +221,13 @@ export async function setupKeys(options = {}) {
     inserts.push(row.sql);
     state.publicId = row.id;
     state.localApplied = false;
-    state.remoteApplied = false;
+  }
+  if (rotate) {
+    const replaced = deactivateApiKeysSql([
+      created.admin && previousIds.adminId !== state.adminId ? previousIds.adminId : null,
+      created.public && previousIds.publicId !== state.publicId ? previousIds.publicId : null
+    ]);
+    if (replaced) inserts.push(replaced);
   }
   if (!sessionSecret) {
     sessionSecret = randomBytes(32).toString('hex');
@@ -311,24 +321,13 @@ export async function setupKeys(options = {}) {
     }
   }
 
+  let remote = null;
   if (options.remote) {
     if (!wranglerReady) {
       throw new Error('setup-keys --remote needs wrangler.jsonc or wrangler.toml in this folder.');
     }
-    const sqlToApply = inserts.length ? inserts : (state.pendingSql || []);
-    if (sqlToApply.length && !state.remoteApplied) {
-      for (const sql of sqlToApply) {
-        wrangler(['d1', 'execute', d1Name, '--remote', '--command', sql], cwd);
-      }
-      state.remoteApplied = true;
-      notes.push(`Stored key hashes in remote D1 database "${d1Name}".`);
-    }
-    for (const [name, value] of Object.entries(entries)) {
-      wrangler(['secret', 'put', name], cwd, value);
-    }
-    notes.push(
-      'Saved E9_ADMIN_API_KEY, E9_PUBLIC_API_KEY, SESSION_SECRET, and E9_SETUP_TOKEN as Cloudflare secrets.'
-    );
+    remote = remoteKeys({ cwd, d1Name, env: options.env, rotate, state, publicKey, run: options.wrangler || wrangler });
+    notes.push(...remote.notes);
   }
 
   writeState(cwd, state);
@@ -339,6 +338,110 @@ export async function setupKeys(options = {}) {
     setupToken,
     publicKey,
     notes,
+    remote: remote ? { target: remote.target, envPath: remote.envPath, created: remote.created } : null,
     reused: !created.admin && !created.public && !created.session && !created.setupToken
   };
+}
+
+/** Wrangler environment name, or `production` for the top-level Worker. */
+export function remoteTarget(env) {
+  return env ? String(env) : 'production';
+}
+
+/** `.env.production`, or `.env.<env>`: that environment's admin key and session secret. */
+export function remoteEnvPath(cwd, env) {
+  return path.join(cwd, `.env.${remoteTarget(env)}`);
+}
+
+export function deactivateApiKeysSql(ids) {
+  const list = ids.filter(Boolean).map((id) => `'${String(id).replaceAll("'", "''")}'`);
+  return list.length ? `UPDATE api_key SET active = 0 WHERE id IN (${list.join(', ')});` : '';
+}
+
+/*
+  A deployed environment gets its own admin key and SESSION_SECRET, never the
+  local development values. The public key is shared: it is public, and the
+  deployed engine9-config.js carries the one written from .env.
+  E9_SETUP_TOKEN stays local; the production Worker does not mount /setup.
+*/
+function remoteKeys({ cwd, d1Name, env, rotate, state, publicKey, run }) {
+  const target = remoteTarget(env);
+  const envFlag = env ? ['--env', String(env)] : [];
+  const filePath = remoteEnvPath(cwd, env);
+  const existing = readText(filePath);
+  state.remotes = state.remotes || {};
+  const prior = state.remotes[target] || {};
+  const next = { ...prior };
+  const notes = [];
+  const sql = [];
+  const retire = [];
+
+  // Earlier releases copied the local admin key and public key to production.
+  const legacy = target === 'production' && !state.remotes[target] ? state.legacyRemote : null;
+  if (legacy) {
+    if (legacy.adminId) retire.push(legacy.adminId);
+    if (legacy.publicId) next.publicId = legacy.publicId;
+    notes.push(
+      'Production used the local admin key and SESSION_SECRET. It now has its own; the old admin key is turned off there, and people signed in to production sign in again.'
+    );
+  }
+
+  let adminKey = rotate ? '' : readEnvValue(existing, ENV_ADMIN_KEY);
+  let sessionSecret = rotate ? '' : readEnvValue(existing, ENV_SESSION_SECRET);
+  const created = { admin: false, session: false };
+  if (!adminKey) {
+    adminKey = generateApiKey({ scopes: ['admin'] });
+    if (prior.adminId) retire.push(prior.adminId);
+    next.adminId = randomUUID();
+    created.admin = true;
+  }
+  if (!sessionSecret) {
+    sessionSecret = randomBytes(32).toString('hex');
+    created.session = true;
+  }
+  if (next.publicId && state.publicId && next.publicId !== state.publicId) retire.push(next.publicId);
+  next.publicId = state.publicId;
+
+  // Sent on every run (key_hash is unique), so a rebuilt database gets them back.
+  sql.push(
+    apiKeyInsertSql({ id: next.adminId || randomUUID(), name: 'site-admin', key: adminKey, scopes: ['admin'], orIgnore: true })
+  );
+  if (publicKey) {
+    sql.push(
+      apiKeyInsertSql({ id: next.publicId || randomUUID(), name: 'site-public', key: publicKey, scopes: ['public'], orIgnore: true })
+    );
+  }
+  const retireSql = deactivateApiKeysSql(retire);
+  if (retireSql) sql.push(retireSql);
+
+  writeFileSync(
+    filePath,
+    upsertEnv(existing, {
+      [ENV_ADMIN_KEY]: adminKey,
+      [ENV_PUBLIC_KEY]: publicKey,
+      [ENV_SESSION_SECRET]: sessionSecret
+    })
+  );
+
+  run(['d1', 'execute', d1Name, '--remote', ...envFlag, '--command', sql.join(' ')], cwd);
+  notes.push(`Stored key hashes in the ${target} D1 database "${d1Name}".`);
+  const secrets = { [ENV_ADMIN_KEY]: adminKey, [ENV_PUBLIC_KEY]: publicKey, [ENV_SESSION_SECRET]: sessionSecret };
+  for (const [name, value] of Object.entries(secrets)) {
+    run(['secret', 'put', name, ...envFlag], cwd, value);
+  }
+  notes.push(
+    `Saved ${Object.keys(secrets).join(', ')} as ${target} Cloudflare secrets. Its admin key is in ${path.basename(filePath)} (not committed).`
+  );
+  if (legacy) {
+    notes.push(
+      `E9_SETUP_TOKEN is no longer sent to Cloudflare. Remove an old copy with: npx wrangler secret delete E9_SETUP_TOKEN${env ? ` --env ${env}` : ''}`
+    );
+  }
+
+  state.remotes[target] = next;
+  if (legacy) {
+    delete state.legacyRemote;
+    delete state.remoteApplied;
+  }
+  return { target, envPath: filePath, created, notes };
 }

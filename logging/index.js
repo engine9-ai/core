@@ -10,9 +10,12 @@
                         object storage.
     BatchLogger      -- Cloudflare-style batch logging: buffers records in
                         memory and flushes batches to a sink you provide
-                        (R2 bucket, Queue, Logpush endpoint, console).
+                        (R2 bucket, Queue, Logpush endpoint).
                         Call `flush()` inside ctx.waitUntil() per request,
                         or let maxRecords trigger it.
+
+  Records carry person ids. Do not use console.log as a sink in production:
+  Worker logs are kept and readable by everyone with dashboard access.
 
   Log record shape (one per modification):
     { ts, accountId, action, table?, records?, personIds?, apiKeyId?, meta? }

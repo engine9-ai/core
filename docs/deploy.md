@@ -254,12 +254,28 @@ separate key command.
 | --- | --- |
 | `E9_ADMIN_API_KEY` | Full access. Server and scripts only. Never put this in page JavaScript |
 | `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser (`e9publickey_…`) |
-| `SESSION_SECRET` | HMAC key for a Core Session after login |
+| `SESSION_SECRET` | HMAC key for a Core Session after login. Production has its own (see below) |
 | `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used by the production Worker |
 | `E9_ALLOWED_ORIGINS` | Optional comma-separated origins (independent hosts). The wizard's origins step writes it here; the API reads only this value |
 
-`npx e9core setup --remote` copies these to Cloudflare secrets.
+`.env` is for this development machine. `npx e9core setup --remote` gives
+production its own admin key and `SESSION_SECRET`, saves them in
+`.env.production`, and stores them as Cloudflare secrets. The public key is the
+same everywhere, because it is already in page JavaScript. A leaked laptop
+`.env` therefore cannot call production as admin or mint production sessions.
+`.env.*` files are ignored by git.
+
+For another wrangler environment, add `--env staging`. It gets `.env.staging`,
+its own keys, and the `DB` binding under `env.staging` in `wrangler.jsonc`.
+`e9core upgrade --url … --env staging` reads its admin key from that file.
+
 To replace them: `npx e9core setup --rotate`, then `setup --remote` again.
+Rotating turns the old admin key off in that database.
+
+Sites set up by an earlier release copied the local admin key and
+`SESSION_SECRET` to production. The next `setup --remote` (or
+`setup-keys --remote`) gives production its own, turns the old admin key off
+there, and signs out everyone signed in to production.
 
 `public` allows signup. It is not `admin`.
 
@@ -319,7 +335,8 @@ commands below.
 | `--domain <host>` | Adds a custom domain route, then use with `--remote` |
 | `--no-deploy` | With `--remote`, update the database and secrets but do not deploy |
 | `--refresh-schema` | Load tables again (only safe on an empty database) |
-| `--rotate` | Replace the API keys and setup token in `.env` |
+| `--rotate` | Replace the API keys and setup token in `.env` (with `--remote`, that environment's keys too) |
+| `--env <name>` | With `--remote`, target that wrangler environment. Keys go to `.env.<name>` |
 | `--db sqlite://./engine9.db` | SQLite file used before the data is copied to D1 |
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
 

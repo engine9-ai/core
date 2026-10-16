@@ -17,10 +17,13 @@
         On an Engine9 server account use:
           e9 sqlworker createApiKey -a <account_id> --name … --scopes …
 
-    e9core setup [--name my-site] [--remote] [--domain example.com] [--node]
+    e9core setup [--name my-site] [--remote [--env staging]] [--domain example.com] [--node]
         Writes wrangler.jsonc (Cloudflare path), the engine9 database, and .env
         (API keys, SESSION_SECRET, E9_SETUP_TOKEN). Keys are part of setup.
         --remote also loads production D1, saves Cloudflare secrets, and deploys.
+        Production gets its own admin key and SESSION_SECRET (.env.production).
+        --env targets that wrangler environment instead (.env.<env>); it must
+        already be in wrangler.jsonc with a DB binding.
         --node skips Cloudflare (SQLite + .env); then use: e9core serve
         Do not add .dev.vars (Wrangler prefers it over .env).
 
@@ -28,12 +31,14 @@
         Local website plus the setup wizard at /setup. Listens on 127.0.0.1.
         --setup reopens the wizard after it has been finished.
 
-    e9core setup-keys [--d1 engine9] [--remote] [--rotate]
+    e9core setup-keys [--d1 engine9] [--remote [--env staging]] [--rotate]
         Create/reuse site keys and E9_SETUP_TOKEN (normally done by setup).
         Writes plaintext to .env only (gitignored). Do not add .dev.vars;
         Wrangler prefers that file and ignores the same names in .env.
-        Stores only hashes in local D1. --remote also stores hashes in
-        production D1 and saves the values as Cloudflare secrets.
+        Stores only hashes in local D1. --remote gives production its own
+        admin key and SESSION_SECRET (saved in .env.production, or .env.<env>
+        with --env), stores the hashes in that D1 database, and saves them as
+        that environment's Cloudflare secrets. The public key is shared.
 
     e9core create-api-key --print-sql --name "website" --scopes ... [--default-role-id <uuid>]
         No database: generate a key and print the INSERT statement for the
@@ -51,7 +56,7 @@
         you pass that --stack (or set the warehouse default_stack setting).
 
     e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--drop-name-columns [--discard-names]]
-    e9core upgrade --url https://www.example.com [--key e9key_...] [--dry-run] [--no-refresh] [--drop-name-columns [--discard-names]]
+    e9core upgrade --url https://www.example.com [--key e9key_... | --env staging] [--dry-run] [--no-refresh] [--drop-name-columns [--discard-names]]
         Run after every deploy that changes @engine9/core or @engine9/schemas
         (PluginWorker.upgrade, docs/upgrading.md). Applies pending account
         upgrades in order (1.10.1: person names are copied into person_name;
@@ -59,8 +64,10 @@
         then reinstalls the installed @engine9/schemas plugins so new tables,
         columns, and inbound snapshots reach the database. --db runs against
         that database. --url runs inside a deployed site (Cloudflare D1
-        included) through POST /api/admin/upgrade, using --key or
-        E9_ADMIN_API_KEY (environment or ./.env). Deploy the new code first.
+        included) through POST /api/admin/upgrade, using --key, or
+        E9_ADMIN_API_KEY from the environment, then .env.<--env> (or
+        .env.production for a non-local URL), then ./.env. Deploy the new
+        code first.
         Safe to re-run. Exits 1 when an upgrade is blocked or a plugin fails.
         --drop-name-columns: also drop person.given_name / family_name. Only
         once nothing reads them.
@@ -384,6 +391,7 @@ async function main() {
         db: args.db && args.db !== true ? String(args.db) : undefined,
         domain: args.domain && args.domain !== true ? String(args.domain) : undefined,
         remote: args.remote === true,
+        env: args.env && args.env !== true ? String(args.env) : undefined,
         deploy: args['no-deploy'] ? false : undefined,
         node: args.node === true,
         rotate: args.rotate === true,
@@ -428,6 +436,7 @@ async function main() {
           cwd: process.cwd(),
           d1: args.d1 && args.d1 !== true ? String(args.d1) : 'engine9',
           remote: args.remote === true,
+          env: args.env && args.env !== true ? String(args.env) : undefined,
           rotate: args.rotate === true,
           applySql: worker
             ? async (sql) => {
@@ -542,7 +551,11 @@ async function main() {
       };
       let result;
       if (args.url && args.url !== true) {
-        const key = adminKey({ key: args.key && args.key !== true ? String(args.key) : undefined });
+        const key = adminKey({
+          key: args.key && args.key !== true ? String(args.key) : undefined,
+          target: args.env && args.env !== true ? String(args.env) : undefined,
+          url: String(args.url)
+        });
         result = await upgradeSite({ url: String(args.url), key, options });
       } else {
         const worker = getPluginWorker(args);

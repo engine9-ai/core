@@ -14,7 +14,8 @@
                                    by person_segment membership
     POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth)
     GET  /auth/me               -- current User from session or Identity Token
-    POST /auth/logout           -- { loggedOut: true }; cookie clear is the host's job
+    POST /auth/logout           -- { loggedOut, revoked }; revokes the Core Session when
+                                   delegate.sessionRevocations is set. Cookie clear is the host's job
     POST /auth/role             -- change the caller's role (requires delegateAuth)
                                    body: { role_id, person_id?, exclusive?, session_token? }
                                    Same membership rules as /auth/segments, then
@@ -27,6 +28,9 @@
     POST /admin/upgrade         -- run pending account upgrades (admin scope)
                                    body: { dry_run?, refresh?, drop_name_columns?, discard_names? }
                                    Same as PluginWorker.upgrade / e9core upgrade.
+    POST /admin/erase           -- erase people from every person_id table (admin scope)
+                                   body: { person_ids, dry_run?, keep?, domain_unids? }
+                                   Same as PersonWorker.erasePeople.
 
   Auth layers (see package README):
     1. API key (required on all routes except /ok)
@@ -149,6 +153,7 @@ export function requestDomain(headers) {
  *     delegateUrl?: string,
  *     domain?: string,
  *     sessionTtlSeconds?: number,
+ *     sessionRevocations?: { get(key: string): Promise<unknown>, put(key: string, value: string, opts?: object): Promise<unknown> } | null,
  *     fetchImpl?: typeof fetch
  *   } | null,
  *   kvEnv?: object | null,
@@ -195,6 +200,7 @@ export function createApi({
       domain: delegate.domain || undefined,
       sessionSecret: delegate.sessionSecret,
       sessionTtlSeconds: delegate.sessionTtlSeconds,
+      sessionRevocations: delegate.sessionRevocations || null,
       pluginId,
       roles: configRoles,
       roleSegments: configRoleSegments,
@@ -236,12 +242,13 @@ export function createApi({
     });
 
   function authContextFor({ apiKey, query, body, session }) {
-    const roleId =
+    const requested =
       body?.role_id ||
       body?.roleId ||
       query?.role_id ||
       query?.roleId ||
       null;
+    const roleId = requested ? resolveRoleId(rolesRegistry, requested) || requested : null;
     return resolveAuthContext({
       apiKey,
       roleId,
@@ -251,6 +258,15 @@ export function createApi({
   }
 
   function requireAnyScope(ctx, scopes) {
+    if (ctx.roleDenied) {
+      return json(403, {
+        error:
+          ctx.roleDenied === 'unknown_role'
+            ? `role_id '${ctx.roleId}' is not a configured role`
+            : `role_id '${ctx.roleId}' is not held by this session`,
+        reason: ctx.roleDenied
+      });
+    }
     if (!ctx.authSatisfied) {
       return json(403, { error: 'delegate credential level does not meet role requiredAuth' });
     }
@@ -424,6 +440,36 @@ export function createApi({
     return json(200, { table, records: rows.length });
   }
 
+  async function postAdminErase({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const dryRun = Boolean(body?.dry_run);
+    let result;
+    try {
+      result = await worker.erasePeople({
+        personIds: body?.person_ids,
+        keep: Array.isArray(body?.keep) ? body.keep : [],
+        domainUnids: Array.isArray(body?.domain_unids) ? body.domain_unids : [],
+        dryRun,
+        kvEnv: kvEnv?.PERSON_ID_DELEGATE_KV ? kvEnv : null
+      });
+    } catch (e) {
+      debug('postAdminErase error:', e);
+      return json(422, { error: String(e.message || e) });
+    }
+    if (!dryRun) {
+      await logModification({
+        action: 'people.erase',
+        apiKeyId: apiKey?.id,
+        roleId: ctx.roleId,
+        personIds: result.personIds,
+        meta: { tables: result.tables }
+      });
+    }
+    return json(200, { person_ids: result.personIds, dry_run: result.dryRun, tables: result.tables });
+  }
+
   async function postAdminUpgrade({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
     const denied = requireScope(ctx, SCOPES.ADMIN);
@@ -453,10 +499,20 @@ export function createApi({
     if (denied) return denied;
     const read = reads[name];
     if (!read) return json(404, { error: `no configured read named '${name}'` });
-    const personId = query.person_id ? parseInt(query.person_id, 10) : null;
+    const requestedPersonId = query.person_id ? parseInt(query.person_id, 10) : null;
+    const sessionPersonId = Number.isInteger(session?.personId) ? session.personId : null;
+    if (
+      sessionPersonId != null &&
+      requestedPersonId != null &&
+      requestedPersonId !== sessionPersonId &&
+      !scopesAllow(ctx.scopes, SCOPES.ADMIN)
+    ) {
+      return json(403, { error: 'person_id does not match session' });
+    }
+    // With a session the person is the session's; without one, a server-held
+    // key names the person.
+    const personId = sessionPersonId ?? requestedPersonId;
     if (read.segmentId) {
-      // Content is gated by person_segment membership.  person_id is provided
-      // by the caller (e.g. via delegate) -- no person lookups are performed.
       if (!personId) return json(401, { error: 'person_id is required for segment-gated content' });
       const { data: membership } = await worker.query({
         sql: 'select person_id from person_segment where segment_id=? and person_id=?',
@@ -573,10 +629,20 @@ export function createApi({
     return json(200, me);
   }
 
-  function postAuthLogout() {
-    // Core sessions are stateless HMAC tokens. Clearing the host cookie is
-    // the host's job (Set-Cookie Max-Age=0). This route only acknowledges logout.
-    return json(200, { loggedOut: true });
+  async function postAuthLogout({ body, headers }) {
+    // Clearing the host cookie is the host's job (Set-Cookie Max-Age=0). With
+    // sessionRevocations configured, the session token also stops working.
+    const sessionToken =
+      body?.session_token || getHeader(headers, 'X-Engine9-Session') || getHeader(headers, 'x-engine9-session');
+    const revoked =
+      sessionToken && typeof delegateAuth?.logout === 'function' ? await delegateAuth.logout(sessionToken) : false;
+    return json(200, { loggedOut: true, revoked });
+  }
+
+  function readSessionToken(token) {
+    return typeof delegateAuth.verifySession === 'function'
+      ? delegateAuth.verifySession(token)
+      : delegateAuth.verify(token);
   }
 
   async function postAuthRole({ body, apiKey, headers, session, query }) {
@@ -593,12 +659,14 @@ export function createApi({
         getHeader(headers, 'X-Engine9-Session') ||
         getHeader(headers, 'x-engine9-session');
       if (sessionToken) {
-        session = delegateAuth.verify(sessionToken);
+        session = await readSessionToken(sessionToken);
         if (!session) return json(401, { error: 'invalid session' });
       }
     }
 
-    const ctx = authContextFor({ apiKey, query, body, session });
+    // body.role_id is the role to grant, not the role the caller acts as.
+    const ctx = authContextFor({ apiKey, query, body: null, session });
+    if (ctx.roleDenied) return requireAnyScope(ctx, []);
     const isAdmin = scopesAllow(ctx.scopes, SCOPES.ADMIN);
     const requestedPersonId = body?.person_id || body?.personId;
     const requestedNum = requestedPersonId != null ? Number(requestedPersonId) : null;
@@ -708,6 +776,7 @@ export function createApi({
    */
   async function postAuthSegments({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
+    if (ctx.roleDenied) return requireAnyScope(ctx, []);
     const isAdmin = scopesAllow(ctx.scopes, SCOPES.ADMIN);
     if (body && (body.join !== undefined || body.leave !== undefined)) {
       return json(400, { error: 'join and leave are not accepted; use add and remove with a bare segment id for yourself' });
@@ -835,7 +904,7 @@ export function createApi({
         req.body?.session_token ||
         getHeader(req.headers, 'X-Engine9-Session') ||
         getHeader(req.headers, 'x-engine9-session');
-      if (sessionToken) session = delegateAuth.verify(sessionToken);
+      if (sessionToken) session = await readSessionToken(sessionToken);
 
       if (!session) {
         const bearer = extractBearer(req.headers);
@@ -866,7 +935,7 @@ export function createApi({
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
-      result = await postAuthLogout();
+      result = await postAuthLogout({ body: req.body, headers: req.headers });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'segments') {
       result = await postAuthSegments({
         body: req.body,
@@ -892,6 +961,8 @@ export function createApi({
         query: req.query || {},
         session
       });
+    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'erase') {
+      result = await postAdminErase({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
       result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'read') {

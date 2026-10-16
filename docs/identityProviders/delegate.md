@@ -226,11 +226,22 @@ const { session, token } = await auth.login(identityToken, {
 });
 ```
 
+When the token arrives on your own server callback
+(`response_mode=query`), start with `auth.beginLogin({ returnTo })` and
+finish with `auth.finishLogin(delegate_token, { state, cookie })` instead.
+They tie the callback to the browser that started sign-in (a signed cookie
+holding `state` and `nonce`), so a link carrying someone else's token cannot
+sign a visitor in as them. The authorize URL asks for a 5-minute token.
+Details: [auth/README.md](../../auth/README.md#server-side-sign-in-beginlogin--finishlogin).
+The browser client already checks `state` and `nonce`.
+
 Verification steps:
 
 1. Fetch `{delegateUrl}/.well-known/jwks.json` (cached in memory).
 2. Verify ES256, `iss`, `aud === domain`, `exp`.
-3. Require `sub` to start with `domain:`. Read `merged_from`, `level`,
+3. When a nonce was given (`finishLogin`, or `login(token, { nonce })`),
+   require the token's `nonce` to match.
+4. Require `sub` to start with `domain:`. Read `merged_from`, `level`,
    `fields`, and `auth` from the token.
 
 Person resolution uses the Domain UNID. When Delegate merges a second
@@ -266,6 +277,9 @@ read so the earlier id is linked in SQL.
 | --- | --- |
 | `delegate:<domain_unid>` | `person_id` |
 | `person:<person_id>` | Domain UNID |
+
+`POST /api/admin/erase` drops both keys for the people it erases. The reverse
+key holds one Domain UNID; pass `domain_unids` for others the person had.
 
 Wire format: [id protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
 Browser library: [id deploy](https://github.com/engine9-ai/id/blob/main/docs/deploy.md).

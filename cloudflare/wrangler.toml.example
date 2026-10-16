@@ -32,6 +32,12 @@ binding = "PERSON_SEGMENT_VK"
 id = "<your kv namespace id>"
 # Cache of person_segment: seg:<segment_id>:<person_id> -> joinedAt
 
+# Revoked Core Sessions (optional). With it, POST /api/auth/logout ends the
+# session token itself, not only the cookie. Entries expire with the session.
+[[kv_namespaces]]
+binding = "SESSION_REVOCATIONS"
+id = "<your kv namespace id>"
+
 # Batch modification logs in R2 (optional)
 [[r2_buckets]]
 binding = "LOG_BUCKET"

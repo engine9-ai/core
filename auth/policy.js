@@ -87,6 +87,11 @@ export function meetsRequiredAuth(requiredAuth, credentialLevel) {
  *
  * Role id priority: explicit `roleId` → first session role → apiKey.default_role_id
  *
+ * An explicit `roleId` is a choice among roles the caller already has: it
+ * must be in the registry and either on `session.roles` or the key's
+ * `default_role_id`. Anything else yields no scopes and `roleDenied`, never
+ * "no role" (which would lift the key's default role and requiredAuth).
+ *
  * @param {{
  *   apiKey?: { id?: string, scopes?: string[], default_role_id?: string|null },
  *   roleId?: string|null,
@@ -102,6 +107,21 @@ export function resolveAuthContext({
 } = {}) {
   const registry = rolesRegistry && typeof rolesRegistry === 'object' ? rolesRegistry : {};
   const sessionRoles = Array.isArray(session?.roles) ? session.roles : [];
+  if (roleId) {
+    const held = sessionRoles.includes(roleId) || roleId === apiKey?.default_role_id;
+    if (!registry[roleId] || !held) {
+      return {
+        apiKey,
+        roleId,
+        role: null,
+        scopes: [],
+        requiredAuth: {},
+        credentialLevel: { ...(session?.auth || {}), level: session?.level ?? session?.auth?.level },
+        authSatisfied: false,
+        roleDenied: registry[roleId] ? 'role_not_held' : 'unknown_role'
+      };
+    }
+  }
   const resolvedRoleId =
     roleId ||
     sessionRoles[0] ||
