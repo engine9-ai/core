@@ -175,6 +175,146 @@ test('listSettings continues when one plugin fails to compile', async () => {
   }
 });
 
+const REMOTE_PLUGIN_PATH = '@acme-remote/bots/CrmBot';
+const REMOTE_PLUGIN_ID = '22222222-2222-4222-a222-222222222222';
+const REMOTE_CATALOG_ENTRY = {
+  path: REMOTE_PLUGIN_PATH,
+  name: 'CrmBot',
+  metadata: {
+    name: 'Acme CRM',
+    auth_fields: { api_key: { label: 'API key' } },
+    settings: [{ name: 'default_phone_type', type: 'string', values: ['home', 'mobile'], default: 'mobile' }]
+  },
+  submodules: {
+    Gifts: {
+      metadata: {
+        settings: [
+          { name: 'transaction_custom_fields', type: 'array', default: [], description: 'Custom fields to load' },
+          { name: 'default_phone_type', type: 'string', description: 'Duplicate name; plugin-level wins' }
+        ]
+      }
+    },
+    People: {
+      metadata: {
+        settings: [{ name: 'person_custom_fields', type: 'array', section: 'Constituents' }]
+      }
+    }
+  }
+};
+
+async function withRemotePlugin(plugins) {
+  await plugins.install({ path: '@engine9/schemas/plugin', unique: true });
+  await plugins.insertArray({
+    table: 'plugin',
+    array: [{ id: REMOTE_PLUGIN_ID, path: REMOTE_PLUGIN_PATH, name: 'CRM bot' }]
+  });
+  plugins.getPluginCatalogEntry = async ({ path }) => (path === REMOTE_PLUGIN_PATH ? REMOTE_CATALOG_ENTRY : null);
+}
+
+test('listSettings reads catalog settings for a plugin the host cannot compile', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  try {
+    await withRemotePlugin(plugins);
+    await plugins.setSetting({ pluginId: REMOTE_PLUGIN_ID, name: 'transaction_custom_fields', value: '["a","b"]' });
+
+    const catalog = await plugins.listSettings({ path: REMOTE_PLUGIN_PATH });
+    assert.deepEqual(catalog.errors, []);
+    const group = catalog.plugins[0];
+    assert.equal(group.path, REMOTE_PLUGIN_PATH);
+    assert.deepEqual(
+      group.settings.map((row) => row.name),
+      ['default_phone_type', 'transaction_custom_fields', 'person_custom_fields']
+    );
+
+    const phone = group.settings.find((row) => row.name === 'default_phone_type');
+    assert.equal(phone.section, undefined);
+    assert.equal(phone.default, 'mobile');
+
+    const fields = group.settings.find((row) => row.name === 'transaction_custom_fields');
+    assert.equal(fields.section, 'Gifts');
+    assert.equal(fields.declared, true);
+    assert.deepEqual(fields.value, ['a', 'b']);
+    assert.equal(group.form.properties.transaction_custom_fields.type, 'array');
+
+    assert.equal(group.settings.find((row) => row.name === 'person_custom_fields').section, 'Constituents');
+    assert.equal(group.settings.find((row) => row.name === 'api_key'), undefined);
+  } finally {
+    await plugins.destroyAll();
+  }
+});
+
+test('updateSetting validates against catalog declarations', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  try {
+    await withRemotePlugin(plugins);
+    await assert.rejects(
+      () => plugins.updateSetting({ plugin_id: REMOTE_PLUGIN_ID, name: 'default_phone_type', value: 'fax' }),
+      /must be one of/
+    );
+    await assert.rejects(
+      () => plugins.updateSetting({ plugin_id: REMOTE_PLUGIN_ID, name: 'transaction_custom_fields', value: '[oops' }),
+      /valid JSON/
+    );
+    const updated = await plugins.updateSetting({
+      plugin_id: REMOTE_PLUGIN_ID,
+      name: 'transaction_custom_fields',
+      value: ['renxt_custom_fund']
+    });
+    assert.deepEqual(updated.value, ['renxt_custom_fund']);
+  } finally {
+    await plugins.destroyAll();
+  }
+});
+
+test('catalog settings win over package settings with the same name', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  withSettingsPlugin(plugins, [
+    { name: 'color', values: ['blue', 'red'], default: 'blue' },
+    { name: 'size', default: 'm' }
+  ]);
+  plugins.getPluginCatalogEntry = async ({ path }) =>
+    path === TEST_PLUGIN_PATH ? { metadata: { settings: [{ name: 'color', values: ['green'], default: 'green' }] } } : null;
+  try {
+    await plugins.install({ path: TEST_PLUGIN_PATH, unique: true });
+    const catalog = await plugins.listSettings({ path: TEST_PLUGIN_PATH });
+    const group = catalog.plugins[0];
+    assert.deepEqual(group.settings.find((row) => row.name === 'color').values, ['green']);
+    assert.equal(group.settings.find((row) => row.name === 'size').default, 'm');
+  } finally {
+    await plugins.destroyAll();
+  }
+});
+
+test('PluginWorker.getPluginCatalogEntry hook supplies catalog entries', async () => {
+  const previous = PluginWorker.getPluginCatalogEntry;
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  try {
+    assert.equal(await plugins.getPluginCatalogEntry({ path: REMOTE_PLUGIN_PATH }), null);
+    PluginWorker.getPluginCatalogEntry = async function ({ path }) {
+      assert.equal(this, plugins);
+      return path === REMOTE_PLUGIN_PATH ? REMOTE_CATALOG_ENTRY : null;
+    };
+    assert.equal(await plugins.getPluginCatalogEntry({ path: REMOTE_PLUGIN_PATH }), REMOTE_CATALOG_ENTRY);
+    assert.equal(await plugins.getPluginCatalogEntry({ path: '@acme-remote/bots/Other' }), null);
+  } finally {
+    if (previous === undefined) delete PluginWorker.getPluginCatalogEntry;
+    else PluginWorker.getPluginCatalogEntry = previous;
+    await plugins.destroyAll();
+  }
+});
+
 test('normalizePluginSettings accepts array and object maps', () => {
   assert.deepEqual(
     normalizePluginSettings([{ name: 'a', default: 1 }]).map((row) => row.name),
