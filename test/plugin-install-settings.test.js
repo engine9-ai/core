@@ -189,8 +189,7 @@ const REMOTE_CATALOG_ENTRY = {
     Gifts: {
       metadata: {
         settings: [
-          { name: 'transaction_custom_fields', type: 'array', default: [], description: 'Custom fields to load' },
-          { name: 'default_phone_type', type: 'string', description: 'Duplicate name; plugin-level wins' }
+          { name: 'transaction_custom_fields', type: 'array', default: [], description: 'Custom fields to load' }
         ]
       }
     },
@@ -267,6 +266,47 @@ test('updateSetting validates against catalog declarations', async () => {
       value: ['renxt_custom_fund']
     });
     assert.deepEqual(updated.value, ['renxt_custom_fund']);
+  } finally {
+    await plugins.destroyAll();
+  }
+});
+
+test('duplicate setting names are an error', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  const duplicateEntry = {
+    path: REMOTE_PLUGIN_PATH,
+    metadata: {
+      settings: [{ name: 'default_phone_type', type: 'string', default: 'mobile' }]
+    },
+    submodules: {
+      Donations: {
+        metadata: {
+          settings: [{ name: 'people_custom_fields', type: 'array' }]
+        }
+      },
+      People: {
+        metadata: {
+          settings: [{ name: 'people_custom_fields', type: 'array' }]
+        }
+      }
+    }
+  };
+  try {
+    await withRemotePlugin(plugins);
+    plugins.getPluginCatalogEntry = async ({ path }) => (path === REMOTE_PLUGIN_PATH ? duplicateEntry : null);
+    const catalog = await plugins.listSettings({ path: REMOTE_PLUGIN_PATH });
+    assert.deepEqual(catalog.plugins, []);
+    assert.equal(catalog.errors.length, 1);
+    assert.match(catalog.errors[0].error, /Duplicate setting "people_custom_fields"/);
+    assert.match(catalog.errors[0].error, /Donations/);
+    assert.match(catalog.errors[0].error, /People/);
+    await assert.rejects(
+      () => plugins.updateSetting({ plugin_id: REMOTE_PLUGIN_ID, name: 'people_custom_fields', value: ['a'] }),
+      /Duplicate setting "people_custom_fields"/
+    );
   } finally {
     await plugins.destroyAll();
   }
