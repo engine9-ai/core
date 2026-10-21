@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import PluginWorker from '../lib/PluginWorker.js';
 import {
+  SETTING_VALUE_TEXT_MAX,
   normalizePluginSettings,
   settingFormFromDefs,
   validateSettingValue
@@ -383,4 +384,56 @@ test('validateSettingValue enforces enum and integer', () => {
     () => validateSettingValue({ name: 'kind', values: ['a', 'b'] }, 'c'),
     /must be one of/
   );
+});
+
+test('setSetting rejects values longer than setting.value', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  withSettingsPlugin(plugins, [{ name: 'blob', default: '' }]);
+  try {
+    const installed = await plugins.install({ path: TEST_PLUGIN_PATH, unique: true });
+    const valueCol = (await plugins.describe({ table: 'setting' })).columns.find((c) => c.name === 'value');
+    assert.ok(Number(valueCol.length) > 0);
+
+    const tooLong = 'x'.repeat(Number(valueCol.length) + 1);
+    await assert.rejects(
+      () => plugins.setSetting({ pluginId: installed.id, name: 'blob', value: tooLong }),
+      /Setting value is too long/
+    );
+
+    const ok = 'y'.repeat(Math.min(Number(valueCol.length), SETTING_VALUE_TEXT_MAX));
+    await plugins.setSetting({ pluginId: installed.id, name: 'blob', value: ok });
+    const settings = await plugins.getSettings({ pluginId: installed.id });
+    assert.equal(settings.blob, ok);
+  } finally {
+    await plugins.destroyAll();
+  }
+});
+
+test('setSetting uses live column length (varchar still rejects oversize)', async () => {
+  const plugins = new PluginWorker({
+    accountId: 'test',
+    auth: { database_connection: 'sqlite://:memory:' }
+  });
+  withSettingsPlugin(plugins, [{ name: 'blob', default: '' }]);
+  try {
+    const installed = await plugins.install({ path: TEST_PLUGIN_PATH, unique: true });
+    const origDescribe = plugins.describe.bind(plugins);
+    plugins.describe = async (opts) => {
+      const desc = await origDescribe(opts);
+      if (opts?.table !== 'setting') return desc;
+      return {
+        ...desc,
+        columns: desc.columns.map((c) => (c.name === 'value' ? { ...c, length: 255, type: 'string', column_type: 'varchar' } : c))
+      };
+    };
+    await assert.rejects(
+      () => plugins.setSetting({ pluginId: installed.id, name: 'blob', value: 'x'.repeat(256) }),
+      /exceeds setting\.value limit of 255/
+    );
+  } finally {
+    await plugins.destroyAll();
+  }
 });

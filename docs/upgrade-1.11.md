@@ -1,4 +1,4 @@
-# Upgrading to @engine9/core 1.11.2 and @engine9/schemas 1.11.2
+# Upgrading to @engine9/core 1.11.3 and @engine9/schemas 1.11.3
 
 Instructions for an agent or an operator that maintains one or more sites
 built on `@engine9/core`, on Cloudflare (D1) or Node (SQLite or MySQL), or
@@ -12,7 +12,9 @@ is in [upgrading.md](upgrading.md).
   characters. MySQL truncated those writes silently. The
   `@engine9/schemas/plugin` schema now declares `value: 'text'`. The
   `setting_value_text` upgrade widens existing columns (MySQL `MODIFY COLUMN`,
-  SQLite/D1 table rebuild).
+  SQLite/D1 table rebuild). `setSetting` checks the live column length and
+  throws before insert when a value would exceed it (TEXT max 65535), so
+  oversized JSON is never sliced into unreadable debris.
 
 New installs get `text` from the schema. Accounts that already ran a manual
 `ALTER` are detected as current.
@@ -32,7 +34,7 @@ bookmark. MySQL: a dump or snapshot.
 ## 3. Install and deploy
 
 ```bash
-npm install @engine9/core@^1.11.2 @engine9/schemas@^1.11.2
+npm install @engine9/core@^1.11.3 @engine9/schemas@^1.11.3
 npx wrangler deploy   # or restart the Node service / server release
 ```
 

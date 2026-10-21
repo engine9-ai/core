@@ -11,7 +11,7 @@ installs plugins or changes tables, and a Node site changes them only when you
 run a command. New tables, new columns, refreshed inbound pipelines, and data
 moves all wait for `e9core upgrade`.
 
-Release guides: [1.11.2](upgrade-1.11.md) (`setting.value` widens to text),
+Release guides: [1.11.3](upgrade-1.11.md) (`setting.value` widens to text),
 [1.10.1](upgrade-1.10.md) (person names move to `person_name`),
 [1.9.1](upgrade-1.9.md) (package rename; written before `e9core upgrade`
 existed, so it is a manual runbook).

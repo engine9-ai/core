@@ -360,6 +360,47 @@ Wire `createApi` into your HTTP app. A short sketch is in the
 
 ---
 
+## Scripting: use Node.js, not Python
+
+Write deploy, seed, import, and maintenance scripts in Node.js. Python is not
+the preferred scripting language here.
+
+- You already have Node.js. `npx e9core`, Wrangler, and `@engine9/core` all
+  need it, so a script adds no second runtime to install, pin, or deploy.
+- Scripts can `import` the same packages the site uses (`@engine9/core`,
+  `@engine9/schemas`, `@engine9/id`). They get the same table definitions,
+  the same SQL dialects (D1, SQLite, MySQL), and the same plugin registry
+  with no re-implementation.
+- Cloudflare Workers, CI, and your own servers run JavaScript the same way.
+  A Python script has nothing to share with the Worker and is one more thing
+  to keep in step with a schema change.
+
+Prefer, in this order:
+
+1. An `e9core` command (`setup`, `upgrade`, `create-api-key`, …). Do not
+   script what a command already does.
+2. A small Node.js script (ES modules, `node script.js`) that calls the
+   core library or the site's HTTP API (`POST /api/people`, …).
+3. Python only when a task truly needs a Python-only library, and then keep
+   it out of the deploy path: have it write a file or call the HTTP API, and
+   let Node.js do the loading.
+
+```js
+// scripts/add-person.js — node scripts/add-person.js
+const res = await fetch(`${process.env.SITE_URL}/api/people`, {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    authorization: `Bearer ${process.env.E9_API_KEY}`,
+  },
+  body: JSON.stringify({ people: [{ email: 'alex@example.com', given_name: 'Alex' }] }),
+});
+if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+console.log(await res.json());
+```
+
+---
+
 ## After it is up
 
 | Task                | Call                                        |

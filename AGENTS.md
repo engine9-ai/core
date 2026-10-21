@@ -14,6 +14,13 @@ Do not copy code from those repositories under this license.
 First-time deployment setup (id vs core, Cloudflare + D1): [docs/deploy.md](docs/deploy.md).
 Browser-only identity: [`id/docs/deploy.md`](../id/docs/deploy.md).
 
+## Scripting language
+
+Node.js, not Python, is the preferred scripting language for deploying and
+operating a site with core. Use an `e9core` command first, then a small
+Node.js script. Do not write Python helper scripts for setup, deploy, import,
+or upgrade. See [docs/deploy.md](docs/deploy.md#scripting-use-nodejs-not-python).
+
 ## Setup wizard
 
 People should use the HTML wizard (`npx e9core serve`, then the printed
