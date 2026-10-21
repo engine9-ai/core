@@ -292,6 +292,97 @@ test('upgrade refresh deploys new columns, new stack includes, and inbound snaps
   }
 });
 
+test('upgrade widens setting.value from varchar(255) to text', async () => {
+  const worker = newWorker();
+  try {
+    // Pre-1.11.2 plugin schema: value is string (varchar 255), not text.
+    await worker.deploy({
+      schema: {
+        tables: [
+          {
+            name: 'plugin',
+            columns: {
+              id: 'id_uuid',
+              path: 'string',
+              name: 'string',
+              nickname: 'string',
+              table_prefix: 'string',
+              remote_plugin_id: 'string',
+              schema: 'json',
+              transforms: 'json',
+              created_at: 'created_at',
+              modified_at: 'modified_at'
+            },
+            indexes: [
+              { columns: 'id', primary: true },
+              { columns: 'remote_plugin_id', unique: true }
+            ]
+          },
+          {
+            name: 'setting',
+            columns: {
+              id: 'id_uuid',
+              plugin_id: 'foreign_uuid',
+              name: 'string',
+              value: 'string',
+              created_at: 'created_at',
+              modified_at: 'modified_at'
+            },
+            indexes: [
+              { columns: 'id', primary: true },
+              { columns: 'plugin_id,name', unique: true }
+            ]
+          }
+        ]
+      }
+    });
+    const coreId = '00000000-0000-4000-a000-0000000000c0';
+    await ensurePluginRow(worker, {
+      id: coreId,
+      path: '@engine9/schemas/plugin',
+      name: 'plugin'
+    });
+    const fields = Array.from({ length: 8 }, (_, i) => `cons_email_address.lifetime_gift_amount_${i}`);
+    const longValue = JSON.stringify(fields);
+    assert.ok(longValue.length > 255, 'repro value must exceed varchar(255)');
+
+    const before = (await worker.describe({ table: 'setting' })).columns.find((c) => c.name === 'value');
+    assert.equal(before.type, 'string');
+    assert.equal(before.length, 255);
+
+    const dry = (await worker.upgrade({ dry_run: true, refresh: false })).upgrades.find(
+      (u) => u.id === 'setting_value_text'
+    );
+    assert.equal(dry.status, 'pending');
+    assert.equal(dry.since, '1.11.2');
+    assert.deepEqual(dry.plan, ['rebuild setting with value as text']);
+
+    const done = (await worker.upgrade({ refresh: false })).upgrades.find((u) => u.id === 'setting_value_text');
+    assert.equal(done.status, 'applied');
+    assert.equal(done.recorded.status, 'applied');
+
+    const after = (await worker.describe({ table: 'setting' })).columns.find((c) => c.name === 'value');
+    // SQLite dialectToStandard maps TEXT → type string + column_type text + length 65535
+    assert.equal(after.column_type, 'text');
+    assert.ok(Number(after.length) > 255);
+
+    // stringToType slices to column length; after the widen, long JSON must round-trip.
+    await worker.setSetting({ pluginId: coreId, name: 'people_custom_fields', value: longValue });
+    const { data } = await worker.query({
+      sql: 'select value from setting where name=?',
+      values: ['people_custom_fields']
+    });
+    assert.equal(data[0].value, longValue);
+    assert.equal(JSON.parse(data[0].value).length, 8);
+
+    const again = (await worker.upgrade({ refresh: false })).upgrades.find((u) => u.id === 'setting_value_text');
+    assert.equal(again.status, 'current');
+    assert.deepEqual(again.recorded, done.recorded);
+  } finally {
+    await worker.destroy();
+  }
+});
+
 test('POST /admin/upgrade needs admin scope; e9core upgrade --url posts to it', async () => {
   const worker = newWorker();
   try {
