@@ -12,6 +12,8 @@
     E9_ACCOUNT_ID      -- account identifier used in logs
     E9_PLUGIN_ID       -- plugin id (UUID) used for people writes
     E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
+    E9_SUPERADMINS     -- optional comma-separated verified emails that act as this
+                          site's admin role (Identity Level 3 or higher)
     SESSION_SECRET     -- secret; turns on login (/auth/*). `e9core setup --remote`
                           stores production's own (.env.production). Without it
                           /auth/* answers 501.
@@ -35,6 +37,7 @@ import { createPluginRegistry } from '@engine9/core/pluginRegistry';
 import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';
 import { BatchLogger, NullLogger, r2Sink } from '@engine9/core/logging';
 import { createApi } from '@engine9/core/api';
+import { superadminsFromText } from '@engine9/core/auth/superadmins';
 import { PersonIdentifierDO } from '@engine9/core/id';
 
 export { PersonIdentifierDO };
@@ -76,6 +79,9 @@ export default {
         roles: {
           // '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } }
         },
+        // Verified emails (Level 3+) that act as this site's admin role. Set
+        // E9_SUPERADMINS in the Worker vars; changes take effect at deploy.
+        superadmins: superadminsFromText(env.E9_SUPERADMINS),
         reads: {
           // add site-specific read definitions here, e.g.:
           // content: { table: 'member_content', segmentId: '<segment uuid>' }

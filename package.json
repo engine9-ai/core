@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.11.3",
+  "version": "1.13.0",
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
@@ -33,6 +33,8 @@
     "./auth/hmac": "./auth/hmac.js",
     "./auth/policy": "./auth/policy.js",
     "./auth/roles": "./auth/roles.js",
+    "./auth/superadmins": "./auth/superadmins.js",
+    "./superadmins/node": "./bin/superadminsFile.js",
     "./auth/segmentAccess": "./auth/segmentAccess.js",
     "./auth/delegate": {
       "types": "./auth/delegate.d.ts",
@@ -62,7 +64,7 @@
   "author": "engine9",
   "license": "MIT",
   "dependencies": {
-    "@engine9/input-tools": "^2.5.1",
+    "@engine9/input-tools": "^2.6.0",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",

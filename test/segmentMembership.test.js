@@ -282,7 +282,7 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
     });
     assert.equal(noSession.status, 401);
     assert.equal(noSession.body.subject, 'self');
-    assert.ok(standardRoleRegistry(accountId)[adminId], 'standard registry still only admin/operator');
+    assert.ok(standardRoleRegistry(accountId)[adminId], 'standard registry still only admin');
   } finally {
     await worker.destroy();
   }

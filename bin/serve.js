@@ -19,6 +19,7 @@ import { renderWizardHtml, timingSafeEqualString } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
 import { isSetupFinished, setSetupFinished } from './setupFlow.js';
 import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
+import { createSuperadminsReader } from './superadminsFile.js';
 import {
   ENV_SETUP_TOKEN,
   upsertEnv
@@ -32,6 +33,7 @@ const BLOCKED_NAMES = new Set([
   '.gitignore',
   '.dev.vars',
   'engine9.db',
+  'engine9.superadmins.json',
   'wrangler.jsonc',
   'wrangler.json',
   'wrangler.toml',
@@ -183,7 +185,10 @@ export async function serve(options = {}) {
       defaultRemoteInputId: 'website',
       upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
       // The wizard's origins step updates the variable while this server runs.
-      allowedOrigins: () => process.env.E9_ALLOWED_ORIGINS || ''
+      allowedOrigins: () => process.env.E9_ALLOWED_ORIGINS || '',
+      // Verified emails that act as admin of this site: engine9.superadmins.json
+      // (or E9_SUPERADMINS_FILE) plus E9_SUPERADMINS, re-read on each request.
+      superadmins: createSuperadminsReader({ cwd })
     }
   });
 

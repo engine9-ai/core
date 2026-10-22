@@ -49,6 +49,12 @@ export {
   PUBLIC_SCOPE
 };
 export {
+  SUPERADMIN_MIN_LEVEL,
+  normalizeSuperadmins,
+  superadminsFromText,
+  isSuperadmin
+} from './superadmins.js';
+export {
   ROLE_NAMES,
   STANDARD_ROLES,
   ROLES_PLUGIN_PATH,

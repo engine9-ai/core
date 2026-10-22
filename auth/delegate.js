@@ -30,11 +30,14 @@ import {
 } from './hmac.js';
 import {
   standardRoleRegistry,
+  roleSegmentId,
   ensureRoleSegments,
   addPeopleToSegment,
   removePeopleFromSegment,
   listSegmentMembers
 } from './roles.js';
+import { ROLE_NAMES } from './roleNames.js';
+import { isSuperadmin } from './superadmins.js';
 
 /** In-memory JWKS (createLocalJWKSet) keyed by delegateUrl. */
 const delegateJwksCache = new Map();
@@ -219,6 +222,7 @@ export function delegateIdentityUrl({
   fields,
   optionalFields,
   loginLevel,
+  loginProviders,
   brand,
   nonce,
   state,
@@ -241,8 +245,14 @@ export function delegateIdentityUrl({
       Array.isArray(optionalFields) ? optionalFields.join(',') : optionalFields
     );
   }
-  // Delegate sign-in screen: 2 adds an email sign-in link; default is Google only.
+  // Delegate sign-in screen: 2 adds an email sign-in link; default is trusted providers.
   if (loginLevel !== undefined) url.searchParams.set('login_level', String(loginLevel));
+  // Sign-in buttons Delegate offers, in order. Default is Google only; Delegate
+  // drops any provider its operator has not enabled.
+  const providers = Array.isArray(loginProviders) ? loginProviders.join(',') : loginProviders;
+  if (typeof providers === 'string' && providers.trim()) {
+    url.searchParams.set('login_providers', providers.trim());
+  }
   // Sign-in page and email branding. Delegate stores none of it.
   if (brand?.name) url.searchParams.set('brand_name', brand.name);
   if (brand?.color) url.searchParams.set('brand_color', brand.color);
@@ -697,7 +707,9 @@ export function sessionNeedsRole(session) {
       roles: {
         '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 2 } }
       },
-      // Legacy (deprecated): roleSegments: { admin: '<segment uuid>' },
+      // Legacy (deprecated):       roleSegments: { admin: '<segment uuid>' },
+      superadmins,                 // optional: emails (array, or a function read on each
+                                   // request) that act as this account's admin role
       sessionTtlSeconds: 86400,
       sessionRevocations: null,    // KV-like { get, put } for logout()
       acceptLegacySessions: true   // sessions minted before `typ`; turn off a day after upgrading
@@ -705,7 +717,7 @@ export function sessionNeedsRole(session) {
 
     auth.beginLogin({ returnTo, ... })      // { url, cookie, state, nonce }
     await auth.finishLogin(token, { state, cookie })  // checks state + nonce
-    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, brand? })
+    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, loginProviders?, brand? })
     await auth.login(token, { nonce? })     // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
     auth.verify(sessionToken)               // signature, purpose, expiry
@@ -713,6 +725,7 @@ export function sessionNeedsRole(session) {
     await auth.logout(sessionToken)         // revoke until it would expire
     auth.issueToken(session)
     await auth.rolesForPerson(id)           // role_ids from person_segment, now
+    await auth.rolesForSession(session)     // the same, plus admin for a superadmin
     await auth.grantRole(id, roleId, opts?)
     await auth.changeRole({ personId, roleId, exclusive?, session? })
     await auth.ensureSegments()             // create segment rows for the registry
@@ -722,7 +735,7 @@ export function sessionNeedsRole(session) {
     auth.roleRegistry                       // normalized UUID-keyed map
 
     roles: 'standard' uses the canonical names in auth/roleNames.js
-    (admin, operator) with ids derived from worker.accountId
+    (admin) with ids derived from worker.accountId
     (see auth/roles.js). Other role names are site-specific.
 
   loadRolesOnLogin (default true): when false, login() always returns
@@ -742,6 +755,7 @@ export function createDelegateAuth({
   inputType = 'api',
   roles,
   roleSegments = {},
+  superadmins = null,
   loadRolesOnLogin = true,
   sessionRevocations = null,
   acceptLegacySessions = true,
@@ -754,7 +768,35 @@ export function createDelegateAuth({
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
   const accountId = worker.accountId;
   const roleRegistry = normalizeRoleRegistry({ roles, roleSegments, accountId });
+  /* Superadmins act as this account's `admin` role. Make sure the registry
+     knows that role even when the site listed its own roles. */
+  const superadminRoleId = superadmins && accountId ? roleSegmentId(accountId, ROLE_NAMES.ADMIN) : null;
+  if (superadminRoleId && !roleRegistry[superadminRoleId]) {
+    roleRegistry[superadminRoleId] = {
+      name: ROLE_NAMES.ADMIN,
+      scopes: ['admin'],
+      requiredAuth: { minLevel: 3 }
+    };
+  }
   const roleIds = Object.keys(roleRegistry);
+
+  /* A superadmin (a verified email on the list, Identity Level 3 or more)
+     holds the admin role first in `roles`. Re-evaluated on every verify,
+     and never written to person_segment or into a token, so removing an
+     email from the list ends it on the next request. */
+  function withSuperadmin(session) {
+    if (!session || !superadminRoleId) return session;
+    if (!isSuperadmin(superadmins, session.email, session.level)) return session;
+    const roles = Array.isArray(session.roles) ? session.roles : [];
+    const held = roles.filter((id) => id !== superadminRoleId);
+    // `superadmin` marks the role as granted by the list (not person_segment)
+    // so issueToken leaves it out of the token.
+    return {
+      ...session,
+      roles: [superadminRoleId, ...held],
+      superadmin: !roles.includes(superadminRoleId) || session.superadmin === true
+    };
+  }
 
   function requireRoleId(roleIdOrName, fn) {
     const roleId = resolveRoleId(roleRegistry, roleIdOrName);
@@ -808,6 +850,15 @@ export function createDelegateAuth({
     return roleIds.filter((id) => found.has(id));
   }
 
+  /* Roles this session holds now: person_segment, plus the admin role when
+     its verified email is a superadmin. Use this, not rolesForPerson, for a
+     privileged decision on a session. */
+  async function rolesForSession(session) {
+    if (!session) return [];
+    const held = Number.isInteger(session.personId) ? await rolesForPerson(session.personId) : [];
+    return withSuperadmin({ ...session, roles: held }).roles;
+  }
+
   async function grantRole(personId, roleIdOrName, { exclusive = false } = {}) {
     const roleId = resolveRoleId(roleRegistry, roleIdOrName);
     if (!roleId) {
@@ -832,14 +883,17 @@ export function createDelegateAuth({
   }
 
   function issueToken(session) {
-    const { typ: _typ, sid: _sid, iat: _iat, exp: _exp, ...rest } = session || {};
+    const { typ: _typ, sid: _sid, iat: _iat, exp: _exp, superadmin, ...rest } = session || {};
+    if (superadmin && superadminRoleId && Array.isArray(rest.roles)) {
+      rest.roles = rest.roles.filter((id) => id !== superadminRoleId);
+    }
     return createSessionToken(rest, { secret: sessionSecret, ttlSeconds: sessionTtlSeconds });
   }
 
   function verify(token) {
     const payload = verifySessionToken(token, { secret: sessionSecret, acceptUntyped: acceptLegacySessions });
     if (!payload || !Number.isInteger(payload.personId)) return null;
-    return {
+    return withSuperadmin({
       personId: payload.personId,
       roles: Array.isArray(payload.roles) ? payload.roles.filter((id) => typeof id === 'string') : [],
       domainUnid: payload.domainUnid,
@@ -849,7 +903,7 @@ export function createDelegateAuth({
       iat: payload.iat,
       exp: payload.exp,
       level: payload.level
-    };
+    });
   }
 
   const revokedKey = (sid) => `e9:revoked-session:${sid}`;
@@ -915,6 +969,7 @@ export function createDelegateAuth({
     fields,
     optionalFields,
     loginLevel,
+    loginProviders,
     brand,
     nonce,
     state,
@@ -931,6 +986,7 @@ export function createDelegateAuth({
       fields,
       optionalFields,
       loginLevel,
+      loginProviders,
       brand,
       nonce,
       state,
@@ -1047,7 +1103,9 @@ export function createDelegateAuth({
       },
       level: delegateUser.level
     };
-    return { session, token: issueToken(session), delegateUser };
+    // The token carries person_segment roles only; the superadmin role is
+    // added on the returned session and on every later verify().
+    return { session: withSuperadmin(session), token: issueToken(session), delegateUser };
   }
 
   return {
@@ -1060,6 +1118,8 @@ export function createDelegateAuth({
     logout,
     verifyIdentityToken,
     issueToken,
+    withSuperadmin,
+    rolesForSession,
     rolesForPerson,
     grantRole,
     changeRole,

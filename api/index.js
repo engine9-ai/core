@@ -53,6 +53,10 @@
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         roles: { '<segment-uuid>': { name: 'VIP', scopes: ['data:read'] } },
                           // or roles: 'standard' (auth/roleNames.js, ids from worker.accountId)
+        superadmins: ['ops@example.com'],
+                          // optional: verified emails (Level 3+) that act as this
+                          // account's admin role. An array, or a function read on
+                          // each request (@engine9/core/superadmins/node).
         reads: {
           content: { table: 'content', segmentId: null, columns: ['*'] }
         }
@@ -190,6 +194,7 @@ export function createApi({
     maxReadLimit = 1000,
     roles: configRoles,
     roleSegments: configRoleSegments,
+    superadmins: configSuperadmins = null,
     allowedOrigins: configAllowedOrigins = []
   } = config;
 
@@ -204,6 +209,7 @@ export function createApi({
       pluginId,
       roles: configRoles,
       roleSegments: configRoleSegments,
+      superadmins: configSuperadmins,
       ...(delegate.fetchImpl ? { fetchImpl: delegate.fetchImpl } : {})
     });
   }
@@ -574,7 +580,7 @@ export function createApi({
       }
     }
     const roles = await delegateAuth.rolesForPerson(personId);
-    return {
+    const session = {
       personId,
       roles,
       domainUnid: delegateUser.domainUnid,
@@ -583,6 +589,7 @@ export function createApi({
       level: delegateUser.level,
       fields: delegateUser.fields
     };
+    return typeof delegateAuth.withSuperadmin === 'function' ? delegateAuth.withSuperadmin(session) : session;
   }
 
   async function postAuthLogin({ body, headers }) {

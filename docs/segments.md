@@ -69,70 +69,47 @@ manager with `people:write` and allows the `add`.
 
 ## Standard roles
 
-`roles: 'standard'` in `createApi` or `createDelegateAuth` installs these
-two. Segment ids are `roleSegmentId(accountId, name)`, so every database for
-the same account has the same ids.
+`roles: 'standard'` in `createApi` or `createDelegateAuth` installs one role.
+Segment ids are `roleSegmentId(accountId, name)`, so every database for the
+same account has the same ids.
 
 | Role | Scopes | Login needed to use it | Add yourself | Remove yourself | Manager |
 | --- | --- | --- | --- | --- | --- |
 | `admin` | `admin` | Level 3 | no | no | none |
-| `operator` | `data:read`, `tasks:read`, `tasks:schedule` | Level 3 | no | no | none |
 
-Both are account-scoped; nothing in engine9 has a wider role. The role
-`admin` and the scope `admin` share a name on purpose: the role's only scope
-is that one, so "is an admin" and "has `admin`" mean the same thing.
+It is account-scoped. The role `admin` and the scope `admin` share a name on
+purpose: the role's only scope is that one, so "is an admin" and "has
+`admin`" mean the same thing.
 
 - **No role** — a signup. Can be added to `join_min_level: 0` segments by a form. That is all.
-- **`admin`** — **changes** the account. `admin` scope in this account's core API.
-- **`operator`** — **uses** the account through engine9's tools (MCP, Conductor, Task API). Read data, schedule and watch curated flows.
+- **`admin`** — **changes** the account. `admin` scope in this account's core API. On the engine9 server, may do everything in this account.
 
 Any other role name is **site-specific**. Choose it per deployment (or install
 it through a non-core mechanism), insert a `segment` row, and list it in
 `config.roles`. Core does not ship or recommend those names. No new concept
 is needed — only the three policy columns and a registry entry.
 
-### `admin` versus `operator`
+### `admin` versus `superadmin`
 
-The admin changes the account; the operator works in it.
-
-| | `admin` | `operator` |
+| | `admin` | `superadmin` |
 | --- | --- | --- |
-| One line | May change anything about this account: people, segments, who holds which role, keys. | May use this account's data and tasks through engine9's tools. May not change who has permission. |
-| Core scopes | `admin` | `data:read`, `tasks:read`, `tasks:schedule` |
-| In core, can add/remove people in any segment? | Yes. Bypasses the three columns. | No. Same rules as anyone: self at `join_min_level`, others only as a `manager_role_id`. |
-| In core, can write people (`POST /people`, `/upsert`)? | Yes. | No. |
-| Opens the account on the engine9 server (MCP, Conductor, Task API)? | Yes. | Yes. This is the role that exists for that. |
-| On the server, what can they change? | Everything (SQL writes, keys, plugins, on-demand tasks). | Read data (SELECT/WITH); run and watch curated flows; not keys, plugins, or arbitrary worker methods. |
-| Typical person | The organization's technical owner. The one person you would call if the account were breached. | Staff and analysts who run reports, schedule loads, and inspect data. |
+| Where it lives | `person_segment` in this account's database | A file of verified emails ([roles.md](roles.md#superadmins)) |
+| Reach | This account | Every account the process serves |
+| Who changes it | Anyone with `admin` here, or `npx e9core segment` | Whoever owns the file |
+| In core | `admin` scope (bypasses the three columns) | Holds the `admin` role on every verify; never written to `person_segment` |
+| On the engine9 server | Opens this account; everything in it | Opens every catalog account; everything in each |
+| Typical person | The organization's technical owner | Engine9 staff |
 
-So the difference is real in core and on the server. If a person will only
-ever open MCP for reports and flows, `operator` is enough. Give `admin` to
-people who should also write SQL, manage keys and plugins, or schedule
-arbitrary worker methods.
+There are no engine9-wide roles stored in a database. Engine9 staff are
+superadmins. An organization's staff are admins of its own account.
 
-An `admin` is not automatically an `operator`. Put a person in both when
-they should have both. The server's cache lists both roles for an account,
-so either one opens it there.
+### The server
 
-### The server, the access cache, and the system account
-
-Two more things sound like roles and are not.
-
-| | Question it answers | Where it lives |
-| --- | --- | --- |
-| the server's **account access cache** | Which accounts may **this operator** open on the server? (An index across accounts.) | one JSON document on the server host, `ENGINE9_ACCOUNT_ACCESS_CACHE_URI` (server repo `scripts/README.md`) |
-| the **system account** | Engine9's own account: holds the account catalog. | its own account database, like any account |
-
-There is no separate "engine9 staff" role. Engine9 staff are the system
-account's `admin` and `operator`, exactly as an
-organization's staff are theirs.
-
-The cache is compiled from segment membership and is not canonical: system
-account staff become its cross-account `admins` list (system-account
-`admin` **and** `operator` — both are admin on every other account; that is
-intentional for engine9 staff), each account's `admin` and `operator` become
-that account's role lists. Edit membership in the account database; rebuild
-or patch the cache to reflect it.
+The engine9 server asks each account database whether the signed-in email is
+a member of that account's `admin` segment (`rolesForEmail` in
+`@engine9/core/auth/roles`), and caches the answer briefly in memory. It reads
+superadmins from `ENGINE9_SUPERADMINS_URI`. Neither is a copy to keep in sync:
+membership changes in the account database and the file are the record.
 
 ## The decision
 
@@ -220,7 +197,7 @@ can subscribe someone to a newsletter. It cannot attach a role.
 
 Needs `tables:write`. Without `admin`, every `segment_id` in the batch must
 have `join_min_level` set (any value). Segments with no `join_min_level` —
-including both standard roles — reject the write. This route cannot remove
+including the standard `admin` role — reject the write. This route cannot remove
 people.
 
 ## Code and command line
@@ -240,12 +217,12 @@ These run with database access and skip the policy; the caller is the admin.
 ```bash
 npx e9core segment list    --account acme
 npx e9core segment add     --segment admin --email sam@example.com
-npx e9core segment remove  --segment operator --email sam@example.com
+npx e9core segment remove  --segment admin --email sam@example.com
 npx e9core segment members --segment admin
 npx e9core segment policy  --segment <id> --join 0 --leave 2 --manager <curator segment id>
 ```
 
-`--segment` is a standard role name (`admin`, `operator`) or any segment id.
+`--segment` is the standard role name (`admin`) or any segment id.
 `--account` (or `E9_ACCOUNT_ID`) picks the account the role ids derive from.
 `--db` (or `ENGINE9_DATABASE_CONNECTION`) picks the database. `policy` with
 no flags prints the current policy; `none` clears a value.
@@ -269,7 +246,7 @@ await ensureRoleSegments({
       requiredAuth: { minLevel: 1 }, joinMinLevel: 1, leaveMinLevel: 1, managerRole: 'curator' }
   ]
 });
-// Then pass { [curatorId]: {…}, [clubId]: {…}, …admin/operator… } in config.roles.
+// Then pass { [curatorId]: {…}, [clubId]: {…}, …admin… } in config.roles.
 ```
 
 Older docs and some sites used the names `moderator` / `member` for that
@@ -284,7 +261,7 @@ in core.
 | Event RSVP | join `1`, leave `2`, manager = your curator role | Signed-in Level 1: `add` yourself. Level 1 cannot `remove` themselves; Level 2 can. Ticketing backend with `tables:write`: `POST /upsert/person_segment`. |
 | Member / club area | a site role with join `1`, leave `1`, manager = curator | After login: `POST /auth/role` with that role id, or `add` yourself. Curator adds a holdout by email. |
 | Make a curator | site role (join `no`, leave `1`) | Admin key: `POST /auth/role` with `person_id`, or `ensureRoleSegments` + `addPeopleToSegment`. They cannot self-appoint; they can step down. |
-| Grant account admin or operator | closed | `npx e9core segment add --segment admin --email …`, or `POST /auth/segments` with the admin key. Site curator roles get `403 subject: other`. Public forms get `403 subject: self`. |
+| Grant account admin | closed | `npx e9core segment add --segment admin --email …`, or `POST /auth/segments` with the admin key. Site curator roles get `403 subject: other`. Public forms get `403 subject: self`. |
 | Level 1 may add themselves, only Level 2 may remove themselves | join `1`, leave `2` | No new role. Same as RSVP. |
 | Two teams manage one list | one `manager_role_id` | Put both teams in that one role. A segment has one manager role, like a Unix file has one group. |
 | A custom editor role | new `segment` (`category: 'role'`, `build_type: 'manual'`) + `config.roles` entry | Set `manager_role_id` on the segments editors curate. Do not give it `admin` unless it should bypass everything. |
@@ -293,21 +270,16 @@ in core.
 ## The server surface
 
 The private engine9 server (MCP, Conductor, Task API) is another door into
-the same account databases. MCP and Conductor read the operator's cache
-level (`admin` or `operator`) and enforce it: operators may run SELECT/WITH
-SQL and schedule published flows; changing the account (non-SELECT SQL,
-API keys, plugin install/settings, on-demand `path`+`method` tasks, and
-similar) needs the admin role. The Task API authenticates with `e9key_`
-keys and their scopes instead — keys are created by admins, so that path
-is an admin decision; the MCP `task` tool is stricter for operators than
-the HTTP Task API.
+the same account databases. An admin of an account, or a superadmin, may use
+every tool on that account. Anyone else is denied before any worker is built.
+The Task API authenticates with `e9key_` keys and their scopes instead; keys
+are created by admins.
 
 Membership changes still go through core: this account's
 `POST /auth/segments`, `addPeopleToSegment` /
-`removePeopleFromSegment`, or `npx e9core segment`. The server's account
-access cache answers a different question — which accounts an operator may
-open and at which level — and is compiled from segment membership, not
-maintained as a second copy of the rules.
+`removePeopleFromSegment`, or `npx e9core segment`. The server's MCP
+`account` tool wraps the same calls for the `admin` segment (`listAdmins`,
+`addAdmin`, `removeAdmin`).
 
 ## Upgrading an existing database
 

@@ -97,6 +97,9 @@ export interface DelegateSession {
   level?: number;
 }
 
+/** A sign-in provider Delegate can offer (`login_providers`). */
+export type DelegateLoginProvider = "google" | "facebook";
+
 /**
  * Delegate sign-in branding (`brand_name`, `brand_color`, `brand_logo`,
  * `brand_wordmark`, `brand_background`, `brand_text`, `brand_card`,
@@ -141,8 +144,14 @@ export function delegateIdentityUrl(options: {
   maxLevel?: number;
   fields?: string[] | string;
   optionalFields?: string[] | string;
-  /** Delegate sign-in screen. `2` adds an email sign-in link; default Google only. */
+  /** Delegate sign-in screen. `2` adds an email sign-in link; default trusted providers. */
   loginLevel?: 2 | 3 | 4;
+  /**
+   * Sign-in buttons Delegate offers (`login_providers`), in order:
+   * `['google', 'facebook']` or `'google,facebook'`. Default Google only.
+   * Delegate drops any provider its operator has not enabled.
+   */
+  loginProviders?: DelegateLoginProvider[] | string;
   brand?: DelegateSignInBrand;
   nonce?: string;
   state?: string;
@@ -289,10 +298,16 @@ export interface DelegateAuth {
     optionalFields?: string[] | string;
     /**
      * Delegate sign-in screen (`login_level`). Default (omit, `3`, or `4`):
-     * Google only. `2`: Google or an email sign-in link, which reaches
-     * Level 2 at most. Ignored by delegate when `minLevel` is 3 or more.
+     * trusted providers only. `2`: those or an email sign-in link, which
+     * reaches Level 2 at most. Ignored by delegate when `minLevel` is 3 or more.
      */
     loginLevel?: 2 | 3 | 4;
+    /**
+     * Sign-in buttons Delegate offers (`login_providers`), in order.
+     * Default Google only. Delegate drops any provider its operator has not
+     * enabled.
+     */
+    loginProviders?: DelegateLoginProvider[] | string;
     /** Name, colors, logo, font, and Google button on delegate's sign-in page (name, color, and logo in the email too). */
     brand?: DelegateSignInBrand;
     nonce?: string;
@@ -373,6 +388,10 @@ export interface DelegateAuth {
   ): Promise<DelegateUser>;
   /** Re-sign an updated session payload. */
   issueToken(session: DelegateSession): string;
+  /** Add the admin role to a session whose verified email is a superadmin. */
+  withSuperadmin<T extends DelegateSession>(session: T): T;
+  /** role_ids a session holds now: person_segment plus `admin` for a superadmin. Use for privileged decisions on a session. */
+  rolesForSession(session: DelegateSession): Promise<string[]>;
   /** role_ids the person holds now (person_segment, configured roles). Use for privileged decisions. */
   rolesForPerson(personId: number): Promise<string[]>;
   /**
@@ -440,10 +459,17 @@ export function createDelegateAuth(config: {
   /**
    * Preferred role registry. Keys are role_id === segment_id UUIDs.
    * `'standard'` derives the registry from worker.accountId with the names in
-   * auth/roleNames.js (admin, operator). Other role names are site-specific
+   * auth/roleNames.js (admin). Other role names are site-specific
    * and belong in an explicit registry, not in `'standard'`.
    */
   roles?: Record<string, RoleDefinition> | "standard";
+  /**
+   * Superadmins: verified emails (Identity Level 3 or more) that act as this
+   * account's `admin` role without a person_segment row. An array, or a
+   * function returning one, read on every request (see
+   * `@engine9/core/superadmins/node`).
+   */
+  superadmins?: string[] | (() => string[]);
   /**
    * @deprecated Prefer `roles` keyed by segment UUID.
    * Legacy map of display name -> segment id; normalized into `roleRegistry`.

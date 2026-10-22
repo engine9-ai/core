@@ -297,6 +297,22 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       loginLevel: 2
     });
     assert.equal(new URL(emailLinkUrl).searchParams.get('login_level'), '2');
+    assert.equal(new URL(authorizeUrl).searchParams.has('login_providers'), false, 'default: Google only');
+    const withFacebook = auth.identityUrl({
+      returnTo: 'https://site.example.com/auth/delegate',
+      loginProviders: ['google', 'facebook']
+    });
+    assert.equal(new URL(withFacebook).searchParams.get('login_providers'), 'google,facebook');
+    const asList = auth.identityUrl({
+      returnTo: 'https://site.example.com/auth/delegate',
+      loginProviders: ' facebook,google '
+    });
+    assert.equal(new URL(asList).searchParams.get('login_providers'), 'facebook,google');
+    const beginLogin = auth.beginLogin({
+      returnTo: 'https://site.example.com/auth/delegate',
+      loginProviders: ['google', 'facebook']
+    });
+    assert.equal(new URL(beginLogin.url).searchParams.get('login_providers'), 'google,facebook');
     assert.equal(new URL(authorizeUrl).searchParams.has('brand_name'), false);
     const branded = new URL(
       auth.identityUrl({

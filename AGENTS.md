@@ -228,6 +228,17 @@ node --test --test-concurrency=1 test/auth.policy.test.js test/delegate.auth.tes
 
 Do not start HTTP servers unless asked.
 
+## Permission levels
+
+[PERMISSIONS.md](PERMISSIONS.md) is the normative description of the permission
+levels (visitor, site role, admin, superadmin) and the requirements PL-1 to
+PL-12 that outside security checks measure sites against. Read it before
+changing roles, scopes, keys, sessions, or the superadmins file. A change that
+alters any requirement updates that page in the same change. There are two
+administrator tiers only: `admin` (database, `person_segment`) and
+`superadmin` (a file, never a database). Do not add an `operator` role, a
+third tier, or any API that edits the superadmins list.
+
 ## Identity
 
 An identity provider is optional. People writes need an API key only.

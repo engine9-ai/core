@@ -223,10 +223,16 @@ Core takes the token's Domain (JWT `aud`) from the request itself: the page
 hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
 (or `delegate.domain` in `createApi`).
 
+The permission levels (visitor, site role, admin, superadmin), the
+requirements sites are reviewed against, and how to convert or upgrade an
+existing site are in [PERMISSIONS.md](PERMISSIONS.md).
+
 Roles are segments. Add them in `config.roles` keyed by segment UUID, with
 `scopes` and an optional `requiredAuth.minLevel`, or set `roles: 'standard'`
-for the canonical pair (`admin`, `operator`). Other role names are
-per-deployment — not shipped or recommended by core. Who may add or remove
+for the canonical `admin` role. A **superadmin** is a verified email in a
+file (`npx e9core superadmin add --email …`) that acts as `admin` on every
+account the process serves; see [docs/roles.md](docs/roles.md). Other role
+names are per-deployment — not shipped or recommended by core. Who may add or remove
 themselves, and which role may add or remove others, is on the segment row
 (`join_min_level`, `leave_min_level`, `manager_role_id`). Grant and revoke by
 email with `npx e9core segment add|remove`, or over HTTP with

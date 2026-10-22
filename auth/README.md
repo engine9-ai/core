@@ -26,7 +26,12 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 | `delegate.d.ts`    | Types for `createDelegateAuth` and JWT verification                                                                    |
 | `roles.js`         | Role segments: standard names, deterministic ids, add/remove people by email ([docs/segments.md](../docs/segments.md)) |
 | `roleNames.js`     | `ROLE_NAMES`, `STANDARD_ROLES`                                                                                         |
+| `superadmins.js`   | Superadmin list logic: `normalizeSuperadmins`, `isSuperadmin` (a file of verified emails; [docs/roles.md](../docs/roles.md#superadmins)) |
 | `segmentAccess.js` | `canEditSegmentMembership` — join, leave, manager ([docs/segments.md](../docs/segments.md))                            |
+
+The permission levels (visitor, site role, admin, superadmin), the numbered
+requirements, and conversion steps are in
+[PERMISSIONS.md](../PERMISSIONS.md). This page is the module reference.
 
 ## Authentication vs authorization
 
@@ -161,9 +166,20 @@ bind a server-side sign-in to the browser.
 `delegateUrl`.
 
 `roles: 'standard'` builds the registry from `worker.accountId` with the
-canonical names in `roleNames.js` (`admin`, `operator`). Any other role
+canonical name in `roleNames.js` (`admin`). Any other role
 name is site-specific: put it in an explicit `config.roles` map (or install
-it outside core). `auth.ensureSegments()`, `auth.addPeople({ role, emails })`,
+it outside core).
+
+`superadmins` (an array, or a function read on each request such as
+`createSuperadminsReader()` from `@engine9/core/superadmins/node`) lists
+verified emails that act as this account's `admin` role. `superadmins.js` is
+the pure list logic (`isSuperadmin` needs Identity Level 3). The role is added
+to the session on every `verify`, never stored in `person_segment` or in the
+token. `auth.rolesForSession(session)` returns person_segment roles plus that
+role; use it, not `rolesForPerson`, for a privileged decision on a session.
+Details: [docs/roles.md](../docs/roles.md#superadmins).
+
+`auth.ensureSegments()`, `auth.addPeople({ role, emails })`,
 `auth.removePeople({ role, emails })`, and `auth.members({ role })` manage
 membership from server-side code. HTTP callers use `POST /auth/segments`
 (`add` / `remove`), which checks `canEditSegmentMembership`

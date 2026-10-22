@@ -86,7 +86,7 @@
     e9core segment remove  --segment admin --email a@x.org
     e9core segment policy  --segment <id> [--join 0-7|none] [--leave 1-7|none] [--manager <role name | id>|none]
         Membership of any segment. --segment takes a standard role name
-        (admin, operator; ids derive from --account or E9_ACCOUNT_ID,
+        (admin; ids derive from --account or E9_ACCOUNT_ID,
         default "local") or any segment id.
         `add` creates a standard role's segment row if missing, and any people
         who do not exist yet (under the site plugin: E9_PLUGIN_ID or
@@ -96,6 +96,17 @@
         themselves (join, leave: Identity Level) and which role may add or
         remove others (manager). Omitted flags keep their current value.
         These commands write directly; no membership check runs.
+
+    e9core superadmin list
+    e9core superadmin add    --email a@x.org[,b@y.org] [--emails file.txt] [--file engine9.superadmins.json]
+    e9core superadmin remove --email a@x.org
+        The superadmins file: verified emails that act as the admin role of
+        every account this site serves, kept in a file and never in a
+        database. Default engine9.superadmins.json in the current directory,
+        or E9_SUPERADMINS_FILE. `e9core serve` reads it on each request.
+        On Cloudflare set the E9_SUPERADMINS variable (comma-separated) in
+        the Worker's config. A superadmin signs in at Identity Level 3 or
+        higher with that verified email.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
 
@@ -134,6 +145,7 @@ import {
   listSegmentMembers
 } from '../auth/roles.js';
 import { membershipPolicyFromRow } from '../auth/segmentAccess.js';
+import { readSuperadminsFile, addSuperadmins, removeSuperadmins } from './superadminsFile.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -306,6 +318,32 @@ async function segmentCommand(args) {
     console.log(JSON.stringify({ ...label, ...result }, null, 2));
   } finally {
     await worker.destroy();
+  }
+}
+
+/** `e9core superadmin list|add|remove`: the file-based list (auth/superadmins.js). */
+function superadminCommand(args) {
+  const [, action = 'list'] = args._;
+  const file = args.file && args.file !== true ? String(args.file) : undefined;
+  try {
+    if (action === 'list') {
+      console.log(JSON.stringify(readSuperadminsFile({ file }), null, 2));
+      return;
+    }
+    if (action !== 'add' && action !== 'remove') {
+      console.error(`Unknown superadmin action '${action}'. Use list, add, or remove.`);
+      process.exit(1);
+    }
+    const emails = emailsFromArgs(args);
+    if (!emails.length) {
+      console.error(`superadmin ${action} requires --email <a@x.org[,b@y.org]> or --emails <file>`);
+      process.exit(1);
+    }
+    const result = action === 'add' ? addSuperadmins(emails, { file }) : removeSuperadmins(emails, { file });
+    console.log(JSON.stringify(result, null, 2));
+  } catch (e) {
+    console.error(String(e.message || e));
+    process.exit(1);
   }
 }
 
@@ -573,6 +611,10 @@ async function main() {
     case 'role': {
       if (command === 'role') console.error('e9core role is now e9core segment (--segment replaces --role).');
       await segmentCommand(args);
+      break;
+    }
+    case 'superadmin': {
+      superadminCommand(args);
       break;
     }
     case 'build-plugins': {

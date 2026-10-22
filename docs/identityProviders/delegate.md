@@ -138,8 +138,7 @@ A visitor who is not signed in to delegate yet sees one of two screens.
 
 Google only is the default because an emailed link proves only that the
 person reads that inbox: Level 2 (Contact Confirmed). Core roles that set
-`requiredAuth: { minLevel: 3 }` (the standard `admin` and `operator` roles
-do) can never be met by an email-link sign-in. Offering the link on those
+`requiredAuth: { minLevel: 3 }` (the standard `admin` role does) can never be met by an email-link sign-in. Offering the link on those
 logins would let people sign in and then be refused.
 
 Offer the email link when Level 2 or lower is all the site needs, such as

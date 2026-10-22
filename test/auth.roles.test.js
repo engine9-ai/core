@@ -37,15 +37,14 @@ test('standard role ids are deterministic per account and name', () => {
   const registry = standardRoleRegistry('acme');
   assert.deepEqual(
     Object.values(registry).map((r) => r.name),
-    ['admin', 'operator']
+    ['admin']
   );
   assert.deepEqual(Object.values(registry).map((r) => r.name), STANDARD_ROLES.map((r) => r.name));
   const adminId = roleSegmentId('acme', ROLE_NAMES.ADMIN);
   assert.equal(registry[adminId].name, 'admin');
   assert.deepEqual(registry[adminId].scopes, ['admin']);
   assert.equal(registry[adminId].requiredAuth.minLevel, 3);
-  const operatorId = roleSegmentId('acme', ROLE_NAMES.OPERATOR);
-  assert.deepEqual(registry[operatorId].scopes, ['data:read', 'tasks:read', 'tasks:schedule']);
+  assert.equal(ROLE_NAMES.OPERATOR, undefined, 'operator is not a standard role');
   assert.equal(roleSegmentId('acme', ROLE_NAMES.ADMIN), adminId, 'same inputs, same id');
   assert.notEqual(roleSegmentId('beta', ROLE_NAMES.ADMIN), adminId, 'different account, different id');
   assert.equal(rolesPluginId('acme'), getPluginUUID('acme', ROLES_PLUGIN_PATH));
