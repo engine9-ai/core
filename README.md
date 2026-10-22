@@ -17,12 +17,12 @@ MySQL). Same code, same tables, same API. This package is
 engine9 is the standard those tables, fields, pipeline, and scopes follow.
 Other libraries that speak it:
 
-| Library | What it is |
-| --- | --- |
-| [`@engine9/schemas`](https://github.com/engine9-ai/schemas) | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
-| [`@engine9/id`](https://github.com/engine9-ai/id) | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login` |
-| [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production) |
-| [`demo-id`](https://github.com/engine9-ai/demo-id) | Browser-only demo of id, no core |
+| Library                                                        | What it is                                                                                                               |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [`@engine9/schemas`](https://github.com/engine9-ai/schemas)    | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
+| [`@engine9/id`](https://github.com/engine9-ai/id)              | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login`             |
+| [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production)                                                 |
+| [`demo-id`](https://github.com/engine9-ai/demo-id)             | Browser-only demo of id, no core                                                                                         |
 
 `@engine9/schemas` is a peer of this package. Install both in the site.
 `@engine9/schemas` publishes on its own; upgrade it and redeploy (wrangler
@@ -31,9 +31,9 @@ changes to core. Details: [docs/deploy.md](docs/deploy.md#schemas).
 
 ## Pick a platform
 
-| Your production site will run on… | Database | Start here |
-| --- | --- | --- |
-| **Cloudflare** (Workers + D1) | D1 | [Install on Cloudflare](#install-on-cloudflare) |
+| Your production site will run on…                                                        | Database             | Start here                                                       |
+| ---------------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------- |
+| **Cloudflare** (Workers + D1)                                                            | D1                   | [Install on Cloudflare](#install-on-cloudflare)                  |
 | **Your own server** — a VPS, Docker, Render, Fly, Heroku, or a Node process behind nginx | SQLite file or MySQL | [Install on your own server](#install-on-your-own-server-nodejs) |
 
 Either way the local setup runs on your development machine first. You need
@@ -113,7 +113,12 @@ variables), or mount the API inside the app you already have:
 
 ```js
 import express from "express";
-import { PersonWorker, SqlApiKeyStore, JsonlFileLogger, createApi } from "@engine9/core";
+import {
+  PersonWorker,
+  SqlApiKeyStore,
+  JsonlFileLogger,
+  createApi,
+} from "@engine9/core";
 
 const worker = new PersonWorker({
   accountId: "my-site",
@@ -128,7 +133,13 @@ const api = createApi({
   delegate: { sessionSecret: process.env.SESSION_SECRET },
   config: {
     pluginId: process.env.E9_PLUGIN_ID,
-    upsertTables: ["person_name", "person_email", "person_phone", "person_address", "person_segment"],
+    upsertTables: [
+      "person_name",
+      "person_email",
+      "person_phone",
+      "person_address",
+      "person_segment",
+    ],
     roles: {
       // "<segment-uuid>": { name: "Member", scopes: ["data:read"], requiredAuth: { minLevel: 1 } },
     },
@@ -207,7 +218,9 @@ it at your API with the public key.
 </script>
 
 <button data-e9-login>Log in</button>
-<p data-e9-min-level="1" hidden>Welcome, <span data-e9-profile="given_name">member</span></p>
+<p data-e9-min-level="1" hidden>
+  Welcome, <span data-e9-profile="given_name">member</span>
+</p>
 ```
 
 What happens: delegate issues an Identity Token for your Domain; `id`
@@ -282,12 +295,14 @@ When a new build needs storage, decide in this order:
    the default stack, so install that schema when the project needs it
    (`e9core sqlite-ddl --schema @engine9/schemas/event`, or add the package
    to the stack). Keep the published table names.
+
 2. **Build an engine9 package when the feature is a primary extension of
    engine9.** If no schema plugin matches, and other engine9 projects should
    share the same contract, publish it. Shared tables are a schema plugin
    (`@engine9/schemas/<name>`). A deployable integration (workers, inbound
    transforms, a vendor) is a plugin (`@engine9/plugins/<name>`). The table
    names you publish there join the standard and stay fixed.
+
 3. **Self-scope tables that belong only to this project or a third-party
    plugin.** A blog, a CMS, or a vendor package names tables with a stable
    company+use-case stem: `acme_blog_post`, `cms_page`, `content_blog`. That
@@ -300,15 +315,15 @@ When a new build needs storage, decide in this order:
 
 ## What is in `.env`
 
-| Name | What it is |
-| --- | --- |
-| `E9_ADMIN_API_KEY` | Full access (`e9key_…`). Server and scripts only |
-| `E9_PUBLIC_API_KEY` | Signup forms and login (`e9publickey_…`). Safe in the browser |
-| `SESSION_SECRET` | HMAC key for Core Sessions. Present = login on |
-| `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used in production |
-| `E9_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call the API from another host (CORS) |
-| `E9_DOMAIN` | Optional. JWT `aud` when the API host differs from the page host |
-| `DELEGATE_URL` | Optional. Your own delegate deployment. Default `https://delegate.engine9.ai` |
+| Name                 | What it is                                                                    |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `E9_ADMIN_API_KEY`   | Full access (`e9key_…`). Server and scripts only                              |
+| `E9_PUBLIC_API_KEY`  | Signup forms and login (`e9publickey_…`). Safe in the browser                 |
+| `SESSION_SECRET`     | HMAC key for Core Sessions. Present = login on                                |
+| `E9_SETUP_TOKEN`     | Opens the local `/setup` wizard until you finish. Not used in production      |
+| `E9_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call the API from another host (CORS)    |
+| `E9_DOMAIN`          | Optional. JWT `aud` when the API host differs from the page host              |
+| `DELEGATE_URL`       | Optional. Your own delegate deployment. Default `https://delegate.engine9.ai` |
 
 `npx e9core setup --rotate` replaces the keys and secret; run `setup --remote`
 again afterwards on Cloudflare. `setup --remote` copies the two keys, the
@@ -322,18 +337,18 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 
 `@engine9/core` publishes npm `bin.e9core` → [`bin/e9core.js`](bin/e9core.js).
 
-| Command | What it does |
-| --- | --- |
-| `npx e9core setup` | Local Cloudflare project: `wrangler.jsonc`, local D1 tables, `.env` |
-| `npx e9core setup --remote [--domain host]` | Production D1, secrets, deploy |
-| `npx e9core setup --node [--db url]` | SQLite (or MySQL) tables and `.env`, no Wrangler |
-| `npx e9core serve [--api-only] [--setup]` | Local site + `/api`; `--setup` reopens the wizard |
-| `npx e9core installDefaultPlugins --db <url>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database |
-| `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once |
-| `npx e9core setup-keys [--remote [--env staging]]` | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets |
-| `npx e9core sqlite-ddl --schema @engine9/schemas/person` | Print one schema's SQL |
-| `npx e9core upgrade --url <site>` or `--db <url>` | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
-| `npx e9core build-plugins [--check]` | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below) |
+| Command                                                      | What it does                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npx e9core setup`                                           | Local Cloudflare project: `wrangler.jsonc`, local D1 tables, `.env`                                                                                                                                                                                    |
+| `npx e9core setup --remote [--domain host]`                  | Production D1, secrets, deploy                                                                                                                                                                                                                         |
+| `npx e9core setup --node [--db url]`                         | SQLite (or MySQL) tables and `.env`, no Wrangler                                                                                                                                                                                                       |
+| `npx e9core serve [--api-only] [--setup]`                    | Local site + `/api`; `--setup` reopens the wizard                                                                                                                                                                                                      |
+| `npx e9core installDefaultPlugins --db <url>`                | Tables and plugin rows into any SQLite, D1 file, or MySQL database                                                                                                                                                                                     |
+| `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once                                                                                                                                                                                                                        |
+| `npx e9core setup-keys [--remote [--env staging]]`           | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets                                                                          |
+| `npx e9core sqlite-ddl --schema @engine9/schemas/person`     | Print one schema's SQL                                                                                                                                                                                                                                 |
+| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
+| `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
 `npx e9core setup --help` lists every flag. People with an existing
@@ -359,14 +374,14 @@ Keys are SHA-256 hashed at rest (`SqlApiKeyStore` in the `api_key` table;
 non-empty), `default_role_id`, `active`, `expires_at`. `store.rotate()`
 creates a new key and revokes the old one.
 
-| Scope | Surface | Allows |
-| --- | --- | --- |
-| `people:write` | `POST /people` | Inbound people pipeline |
-| `tables:write` | `POST /upsert/:table` | Allowlisted table upserts |
-| `data:read` | `GET /read/:name` | Configured reads |
-| `tasks:read`, `tasks:schedule` | Private server Task API | Flows and task runs on an engine9-capable database |
-| `admin` | Any | All scopes |
-| `public` | Signup forms, `/auth/*` | Public ingest and login; keys use the `e9publickey_` prefix |
+| Scope                          | Surface                 | Allows                                                      |
+| ------------------------------ | ----------------------- | ----------------------------------------------------------- |
+| `people:write`                 | `POST /people`          | Inbound people pipeline                                     |
+| `tables:write`                 | `POST /upsert/:table`   | Allowlisted table upserts                                   |
+| `data:read`                    | `GET /read/:name`       | Configured reads                                            |
+| `tasks:read`, `tasks:schedule` | Private server Task API | Flows and task runs on an engine9-capable database          |
+| `admin`                        | Any                     | All scopes                                                  |
+| `public`                       | Signup forms, `/auth/*` | Public ingest and login; keys use the `e9publickey_` prefix |
 
 Empty scopes deny every check. Constants: `SCOPES` from `@engine9/core`.
 
@@ -377,7 +392,7 @@ roles: {
   '<segment-uuid>': {
     name: 'Admin',
     scopes: ['admin'],                        // or people:write, data:read, …
-    requiredAuth: { minLevel: 2, twoFactor: false }
+    requiredAuth: { minLevel: 3, twoFactor: false }
   }
 }
 ```
@@ -409,24 +424,26 @@ account: [auth/README.md](auth/README.md).
 The `roles` in a session are a copy of `person_segment` made when the token
 was minted, so use them for what to show. A privileged decision in your own
 code (an admin page, an admin action) reads membership at that moment with
-`auth.rolesForPerson(personId)`. Core's own membership routes already do.
-Details: [Permissions](auth/README.md#permissions).
+`auth.rolesForSession(session)`, which also includes superadmins
+(`rolesForPerson(personId)` reads the database only). Core's own membership
+routes already do. Details: [Permissions](auth/README.md#permissions) and
+[PERMISSIONS.md](PERMISSIONS.md).
 
 ### Endpoints
 
-| Endpoint | Purpose | Needs |
-| --- | --- | --- |
-| `GET /ok` | Health check | nothing |
-| `POST /people` | `{ people: [...] }` through the inbound person pipeline | `people:write` or `public` |
-| `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table | `tables:write` |
-| `GET /read/:name` | Configured read, optionally gated by `person_segment`. With a session it reads the signed-in person; another `?person_id=` needs `admin` | `data:read` |
-| `POST /auth/login` | `{ delegate_token }` → `{ session, token }` | API key; 501 until `SESSION_SECRET` / `delegate` is set |
-| `GET /auth/me` | `{ personId, roles, level, domainUnid, fields? }` | API key + session or Identity Token |
-| `POST /auth/logout` | `{ loggedOut, revoked }` (the host clears its cookie; `revoked` with `delegate.sessionRevocations`) | API key |
-| `POST /auth/role` | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments` | API key + session/token matching `person_id`, or `admin` |
+| Endpoint              | Purpose                                                                                                                                                    | Needs                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `GET /ok`             | Health check                                                                                                                                               | nothing                                                           |
+| `POST /people`        | `{ people: [...] }` through the inbound person pipeline                                                                                                    | `people:write` or `public`                                        |
+| `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table                                                                                                 | `tables:write`                                                    |
+| `GET /read/:name`     | Configured read, optionally gated by `person_segment`. With a session it reads the signed-in person; another `?person_id=` needs `admin`                   | `data:read`                                                       |
+| `POST /auth/login`    | `{ delegate_token }` → `{ session, token }`                                                                                                                | API key; 501 until `SESSION_SECRET` / `delegate` is set           |
+| `GET /auth/me`        | `{ personId, roles, level, domainUnid, fields? }`                                                                                                          | API key + session or Identity Token                               |
+| `POST /auth/logout`   | `{ loggedOut, revoked }` (the host clears its cookie; `revoked` with `delegate.sessionRevocations`)                                                        | API key                                                           |
+| `POST /auth/role`     | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments`                      | API key + session/token matching `person_id`, or `admin`          |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
-| `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database | `admin` |
-| `POST /admin/erase` | `{ person_ids, dry_run?, keep?, domain_unids? }` — erase people (`PersonWorker.erasePeople`); returns rows per table | `admin` |
+| `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database          | `admin`                                                           |
+| `POST /admin/erase`   | `{ person_ids, dry_run?, keep?, domain_unids? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                       | `admin`                                                           |
 
 Everything under `/api` in the shipped Worker and `serve`.
 
@@ -472,7 +489,7 @@ With no `engine9` setting, that list is `["@engine9/schemas"]`. The legacy
 `engine9.plugins` list of exact identities still works (stack includes and the
 core person schema plugins are added).
 
-Which plugins *run* is still decided per account at run time: the inbound
+Which plugins _run_ is still decided per account at run time: the inbound
 weaver reads the `plugin` rows, picks the steps, and looks each plugin up in
 the registry.
 
@@ -485,8 +502,8 @@ per-account plugins (old module instances are never freed), and it is Node
 only.
 
 ```js
-import { createNodePluginRegistry } from '@engine9/core/plugins/node';
-import { setDefaultPluginRegistry } from '@engine9/core/pluginRegistry';
+import { createNodePluginRegistry } from "@engine9/core/plugins/node";
+import { setDefaultPluginRegistry } from "@engine9/core/pluginRegistry";
 
 setDefaultPluginRegistry(createNodePluginRegistry({ cwd: process.cwd() }));
 ```
@@ -501,12 +518,12 @@ regenerates it; nobody runs it by hand. A project that lists
 
 Errors carry a `code` from `@engine9/core/pluginRegistry`:
 
-| Code | Meaning |
-| --- | --- |
-| `PLUGIN_CONFIG_INVALID` | a listed package is not installed, a package is in both lists, or no registry is configured |
-| `PLUGIN_PACKAGE_NOT_DECLARED` | the path's package is in neither list; the message prints the lists |
-| `PLUGIN_NOT_FOUND` | package declared, no such plugin; the message says restart / redeploy / the file it looked for, plus nearby plugins |
-| `PLUGIN_IMPORT_FAILED` | plugin found, importing it threw; the original error is `cause` |
+| Code                          | Meaning                                                                                                             |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN_CONFIG_INVALID`       | a listed package is not installed, a package is in both lists, or no registry is configured                         |
+| `PLUGIN_PACKAGE_NOT_DECLARED` | the path's package is in neither list; the message prints the lists                                                 |
+| `PLUGIN_NOT_FOUND`            | package declared, no such plugin; the message says restart / redeploy / the file it looked for, plus nearby plugins |
+| `PLUGIN_IMPORT_FAILED`        | plugin found, importing it threw; the original error is `cause`                                                     |
 
 Absolute paths and `install({ source })` are not supported anywhere. Put the
 plugin in a package the project lists.
