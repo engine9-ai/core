@@ -238,7 +238,9 @@ hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
 
 The permission levels (visitor, site role, admin, superadmin), the
 requirements sites are reviewed against, and how to convert or upgrade an
-existing site are in [PERMISSIONS.md](PERMISSIONS.md).
+existing site are in [PERMISSIONS.md](PERMISSIONS.md). Code that puts admins into
+an account's database from another system follows
+[docs/admin-provisioning.md](docs/admin-provisioning.md).
 
 Roles are segments. Add them in `config.roles` keyed by segment UUID, with
 `scopes` and an optional `requiredAuth.minLevel`, or set `roles: 'standard'`

@@ -237,7 +237,11 @@ changing roles, scopes, keys, sessions, or the superadmins file. A change that
 alters any requirement updates that page in the same change. There are two
 administrator tiers only: `admin` (database, `person_segment`) and
 `superadmin` (a file, never a database). Do not add an `operator` role, a
-third tier, or any API that edits the superadmins list.
+third tier, or any API that edits the superadmins list. Admin definitions are
+a core feature ([docs/admin-provisioning.md](docs/admin-provisioning.md)).
+Migrating another system's admin list is that system's job: do not add a
+migration, importer, or sync for an outside access list to core, and do not
+add one to `server`.
 
 ## Identity
 

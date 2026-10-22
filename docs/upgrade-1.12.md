@@ -66,5 +66,7 @@ id gets no scopes from it.
   token.
 - Engine9 server: this release is paired with the server change that reads
   per-account admins from each account database and superadmins from
-  `ENGINE9_SUPERADMINS_URI`. Seed both before removing the old access cache;
-  see the server `scripts/README.md`.
+  `ENGINE9_SUPERADMINS_URI`. Put admins in each account's `admin` segment
+  ([admin-provisioning.md](admin-provisioning.md)) and superadmins in that
+  file before removing any older access list. Moving an older list is done by
+  the system that owns it, not by core or the server.

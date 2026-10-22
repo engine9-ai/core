@@ -225,7 +225,9 @@ recorded reason.
    });
    ```
 
-3. **Name the first admin.** One of the account's own people:
+3. **Name the first admin.** One of the account's own people (a tool that
+   provisions many accounts follows
+   [docs/admin-provisioning.md](docs/admin-provisioning.md)):
 
    ```bash
    npx e9core segment add --segment admin --email owner@example.com
@@ -264,7 +266,8 @@ Find the row that describes the site. Several can apply.
 | An admin or site key is used in a browser, or a visitor's session is forwarded with the admin key | Move the key server-side. Issue a public key for the browser and, for server code that forwards sessions, a key with a narrow `default_role_id`. Rotate the exposed key. |
 | Custom roles with their own names | They stay valid. Check each against PL-1 (narrower than `admin`, `minLevel` set) and PL-6 on the policy columns. |
 | No login at all (keys only) | Nothing is required. Admin work happens server-side with the admin key (PL-5). Add login and the `admin` role when people need to sign in to administer. |
-| An account on the engine9 server | [The engine9 server](#the-engine9-server) covers the seed script. |
+| Admins are held in another system (a database, a vendor product, an earlier access cache) | Neither core nor the engine9 server migrates another system's list. The system that owns the list writes it into each account's `admin` segment with the calls in [docs/admin-provisioning.md](docs/admin-provisioning.md), once, then retires the old list. |
+| An account on the engine9 server | [The engine9 server](#the-engine9-server). |
 
 ### Upgrading to 1.12.0
 
@@ -398,12 +401,10 @@ The server applies the same two tiers across the accounts in its catalog.
   `removeAdmin`, or with core as above. A person cannot remove themselves
   unless they are a superadmin. `addAdmin` needs the person to exist in the
   account already.
-- **Moving off the old access cache:** `node scripts/seed-account-admins.mjs
-  --from <old-cache.json>` is a dry run that reports what would move, and
-  `--write` applies it. Old `admins` become superadmins, each account's old
-  `admin` list becomes that account's admin segment. Old `operator` entries are
-  not moved.
-- Run it after the new server is deployed and before the old cache is removed.
+- **Putting admins into an account** (first admin, or a one-time move from
+  another system's list): [docs/admin-provisioning.md](docs/admin-provisioning.md).
+  The server holds no migration code and no copy of any list. Superadmins are
+  added to the file by a person, never derived from another system's data.
 
 The server's own documentation is `api/mcp/accounts.md` and `scripts/README.md`
 in that repository.

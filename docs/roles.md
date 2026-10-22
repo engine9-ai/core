@@ -1,8 +1,9 @@
 # Roles
 
 The permission levels, the requirements sites are checked against, and how to
-convert or upgrade a site are in [PERMISSIONS.md](../PERMISSIONS.md). This
-page is the mechanism.
+convert or upgrade a site are in [PERMISSIONS.md](../PERMISSIONS.md). Writing
+admins from another system is in [admin-provisioning.md](admin-provisioning.md).
+This page is the mechanism.
 
 A role is a segment listed in `config.roles`. Its members get the entry's
 `scopes` and must log in at `requiredAuth.minLevel` to use them. Who may add
