@@ -7,6 +7,14 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.15.2: Test scripts
+
+No change to what a site runs, and no `lib/upgrades` entry. Contributors:
+`npm run test:auth` runs the auth tests, and `test:id-large` now loads the
+plugin registry setup, as `npm test` does. Running a test file without
+`--import ./test/setup-plugins.js` fails with "no plugin registry is
+configured"; see `AGENTS.md`.
+
 ## 1.15.1: Retirement date
 
 Documentation only; no code change and no `lib/upgrades` entry. 1.15.0 said

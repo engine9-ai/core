@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.15.1",
+  "version": "1.15.2",
   "publishConfig": {
     "access": "public"
   },
@@ -67,7 +67,8 @@
   },
   "scripts": {
     "test": "node --import ./test/setup-plugins.js --test --test-concurrency=1 test/*.test.js",
-    "test:id-large": "E9_LARGE_ID_TEST=1 node --test --test-concurrency=1 test/id.large.test.js"
+    "test:auth": "node --import ./test/setup-plugins.js --test --test-concurrency=1 test/auth.policy.test.js test/delegate.auth.test.js test/api.auth.test.js test/api.test.js test/setup.test.js",
+    "test:id-large": "E9_LARGE_ID_TEST=1 node --import ./test/setup-plugins.js --test --test-concurrency=1 test/id.large.test.js"
   },
   "engines": {
     "node": ">=18"

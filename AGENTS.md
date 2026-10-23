@@ -223,8 +223,21 @@ npm test
 Auth-related only:
 
 ```
-node --test --test-concurrency=1 test/auth.policy.test.js test/delegate.auth.test.js test/api.auth.test.js test/api.test.js test/setup.test.js
+npm run test:auth
 ```
+
+One file:
+
+```
+node --import ./test/setup-plugins.js --test test/<name>.test.js
+```
+
+Always run tests through an npm script or with `--import
+./test/setup-plugins.js`. That file registers the Node plugin registry. Without
+it, any test that loads a worker fails with `PluginLoadError: Plugin
+@engine9/schemas/plugin cannot load: no plugin registry is configured`. That
+error means the test was started without the import, not that the code under
+test is broken. Do not "fix" it in `lib/`.
 
 Do not start HTTP servers unless asked.
 
