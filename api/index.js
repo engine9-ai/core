@@ -23,11 +23,17 @@
     POST /auth/segments         -- add or remove people in segments
                                    body: { add?: [...], remove?: [...] }
                                    an entry is a segment id (yourself) or
-                                   { segment_id, person_id | email } (someone else)
-                                   See docs/segments.md.
+                                   { segment_id, person_id | email } (someone else);
+                                   segment_id may be a role name. With admin
+                                   scope a missing standard role row (admin)
+                                   is created first. See docs/segments.md.
     POST /admin/upgrade         -- run pending account upgrades (admin scope)
                                    body: { dry_run?, refresh?, drop_name_columns?, discard_names? }
                                    Same as PluginWorker.upgrade / e9core upgrade.
+    GET  /admin/segments        -- every segment and its membership policy (admin scope)
+    GET  /admin/segments/:id/members
+                                -- members of a segment (id or role name, e.g. admin)
+                                   with their emails (admin scope)
     POST /admin/erase           -- erase people from every person_id table (admin scope)
                                    body: { person_ids, dry_run?, keep?, domain_unids? }
                                    Same as PersonWorker.erasePeople.
@@ -80,7 +86,16 @@ import {
   resolveRoleId
 } from '../auth/delegate.js';
 import { canEditSegmentMembership, loadMembershipPolicies } from '../auth/segmentAccess.js';
-import { addPeopleToSegment, removePeopleFromSegment } from '../auth/roles.js';
+import {
+  addPeopleToSegment,
+  removePeopleFromSegment,
+  listSegmentMembers,
+  roleIdByName,
+  roleSegmentId,
+  standardRoleFor,
+  ensureStandardRoleSegment,
+  STANDARD_ROLES
+} from '../auth/roles.js';
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
 import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
@@ -499,6 +514,37 @@ export function createApi({
     return json(200, result);
   }
 
+  function roleNameOf(segmentId) {
+    return rolesRegistry?.[segmentId]?.name || standardRoleFor(worker.accountId, segmentId)?.name || null;
+  }
+
+  /** Every segment with its membership policy, and standard roles with no row yet. */
+  async function getAdminSegments({ apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body: null, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const { data } = await worker.query(
+      'select id, name, category, build_type, join_min_level, leave_min_level, manager_role_id from segment order by category, name'
+    );
+    const segments = data.map((row) => ({ ...row, role: roleNameOf(row.id) }));
+    const present = new Set(segments.map((row) => row.id));
+    const missingRoles = STANDARD_ROLES.filter((role) => !present.has(roleSegmentId(worker.accountId, role.name))).map(
+      (role) => role.name
+    );
+    return json(200, { account_id: worker.accountId, segments, missing_roles: missingRoles });
+  }
+
+  /** Members of one segment (id or role name), each with their emails. */
+  async function getAdminSegmentMembers({ segment, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body: null, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const segmentId = resolveSegmentId(decodeURIComponent(segment || ''));
+    if (!segmentId) return json(400, { error: 'a segment id or role name is required' });
+    const members = await listSegmentMembers({ worker, segmentId });
+    return json(200, { account_id: worker.accountId, segment_id: segmentId, role: roleNameOf(segmentId), members });
+  }
+
   async function getRead({ name, query, apiKey, session }) {
     const ctx = authContextFor({ apiKey, query, body: null, session });
     const denied = requireScope(ctx, SCOPES.DATA_READ);
@@ -748,6 +794,19 @@ export function createApi({
   }
 
   /**
+   * A segment id, or a role name: a configured role's name, else a standard
+   * role name (admin) resolved with this account's id.
+   */
+  function resolveSegmentId(value) {
+    const id = String(value || '').trim();
+    if (!id) return id;
+    const configured = roleIdByName(rolesRegistry, id);
+    if (configured) return configured;
+    const standard = standardRoleFor(worker.accountId, id);
+    return standard ? roleSegmentId(worker.accountId, standard.name) : id;
+  }
+
+  /**
    * Parse one list of membership edits. An entry is either a segment id
    * string (the session person) or { segment_id, person_id? | email? }.
    * No person_id and no email also means the session person.
@@ -757,12 +816,12 @@ export function createApi({
     if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
     return value.map((item) => {
       if (typeof item === 'string') {
-        const segmentId = item.trim();
+        const segmentId = resolveSegmentId(item);
         if (!segmentId) throw new Error(`${label} entries require segment_id`);
         return { segmentId, email: '', personId: null, self: true };
       }
       if (!item || typeof item !== 'object') throw new Error(`${label} entries must be a segment id or an object`);
-      const segmentId = String(item.segment_id || item.segmentId || '').trim();
+      const segmentId = resolveSegmentId(item.segment_id || item.segmentId);
       const email = item.email == null ? '' : String(item.email).trim();
       const rawPerson = item.person_id ?? item.personId;
       const personId = rawPerson == null || rawPerson === '' ? null : Number(rawPerson);
@@ -826,7 +885,20 @@ export function createApi({
     }
     const held = session?.personId ? await heldRoleIds(session.personId) : [];
     const caller = callerFrom({ ctx, session, roleIds: held });
-    const policies = await loadMembershipPolicies(worker, edits.map((item) => item.segmentId), rolesRegistry);
+    const segmentIds = edits.map((item) => item.segmentId);
+    let policies = await loadMembershipPolicies(worker, segmentIds, rolesRegistry);
+    if (isAdmin) {
+      // The first admin on a new database: a standard role's row is created
+      // with its standard policy, as `e9core segment add` does.
+      const missing = adds.filter((item) => !policies[item.segmentId]);
+      const creatable = missing.filter((item) => standardRoleFor(worker.accountId, item.segmentId));
+      if (creatable.length && creatable.length === missing.length) {
+        for (const name of new Set(creatable.map((item) => standardRoleFor(worker.accountId, item.segmentId).name))) {
+          await ensureStandardRoleSegment({ worker, accountId: worker.accountId, name });
+        }
+        policies = await loadMembershipPolicies(worker, segmentIds, rolesRegistry);
+      }
+    }
     for (const item of edits) {
       const decision = canEditSegmentMembership({
         policy: policies[item.segmentId] || null,
@@ -972,6 +1044,16 @@ export function createApi({
       result = await postAdminErase({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
       result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
+    } else if (method === 'GET' && parts[0] === 'admin' && parts[1] === 'segments' && parts.length === 2) {
+      result = await getAdminSegments({ apiKey, query: req.query || {}, session });
+    } else if (
+      method === 'GET' &&
+      parts[0] === 'admin' &&
+      parts[1] === 'segments' &&
+      parts[3] === 'members' &&
+      parts.length === 4
+    ) {
+      result = await getAdminSegmentMembers({ segment: parts[2], apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'read') {
       result = await getRead({ name: parts[1], query: req.query || {}, apiKey, session });
     } else {

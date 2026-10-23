@@ -24,6 +24,11 @@
   A plugin is a directory with index.js (identity: <package>/<dir>) or a
   file named *.plugin.js (identity: <package>/<dir>/<file>). Next to index.js,
   schema.js and settings.js are imported and ui.console.json5 is inlined.
+
+  The bundler resolves each specifier through the package's "exports", so only
+  exported paths are written: <dir>/index.js, else <dir> when that is what the
+  package exports. schema.js and settings.js are left out when not exported;
+  the registry then reads `schema` and `settings` from the index module.
 */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -113,17 +118,97 @@ function packageVersionsFor(cwd, packages, resolveOptions) {
   return out;
 }
 
-function entryFor(identity, fsPath, isFile) {
-  if (isFile) return { identity, index: identity, files: { index: fsPath } };
-  const entry = { identity, index: `${identity}/index.js`, files: { index: path.join(fsPath, 'index.js') } };
+const BUNDLE_CONDITIONS = ['workerd', 'worker', 'browser', 'import', 'module', 'default'];
+
+function conditionalTarget(target) {
+  if (typeof target === 'string') return target;
+  if (Array.isArray(target)) {
+    for (const t of target) {
+      const found = conditionalTarget(t);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (target && typeof target === 'object') {
+    for (const [condition, value] of Object.entries(target)) {
+      if (!BUNDLE_CONDITIONS.includes(condition)) continue;
+      const found = conditionalTarget(value);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * The file `./sub/path` resolves to under a package.json "exports" field,
+ * relative to the package root, or null when it is not exported. A package
+ * without "exports" exports every file.
+ */
+export function exportTarget(exportsField, subpath) {
+  if (exportsField === undefined) return subpath;
+  if (exportsField === null) return null;
+  const map =
+    typeof exportsField === 'string' ||
+    Array.isArray(exportsField) ||
+    !Object.keys(exportsField).some((k) => k.startsWith('.'))
+      ? { '.': exportsField }
+      : exportsField;
+  if (Object.prototype.hasOwnProperty.call(map, subpath)) return conditionalTarget(map[subpath]);
+  let best = null;
+  for (const key of Object.keys(map)) {
+    const star = key.indexOf('*');
+    if (star < 0 || key.indexOf('*', star + 1) >= 0) continue;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (subpath.length < key.length || !subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    if (!best || prefix.length > best.prefix.length || (prefix.length === best.prefix.length && key.length > best.key.length)) {
+      best = { key, prefix, suffix };
+    }
+  }
+  if (!best) return null;
+  const target = conditionalTarget(map[best.key]);
+  if (!target) return null;
+  return target.split('*').join(subpath.slice(best.prefix.length, subpath.length - best.suffix.length));
+}
+
+function readExports(root) {
+  try {
+    return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).exports;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The first candidate specifier the package exports as exactly `file`, or null. */
+function exportedSpecifier(pkg, candidates, file) {
+  for (const rel of candidates) {
+    const target = exportTarget(pkg.exports, `./${rel}`);
+    if (target && path.resolve(pkg.root, target) === file) return `${pkg.name}/${rel}`;
+  }
+  return null;
+}
+
+function entryFor(pkg, rel, fsPath, isFile) {
+  const identity = `${pkg.name}/${rel}`;
+  if (isFile) {
+    return { identity, index: exportedSpecifier(pkg, [rel], fsPath), files: { index: fsPath } };
+  }
+  const indexFile = path.join(fsPath, 'index.js');
+  const entry = {
+    identity,
+    index: exportedSpecifier(pkg, [`${rel}/index.js`, rel], indexFile),
+    files: { index: indexFile }
+  };
   const schema = path.join(fsPath, 'schema.js');
   if (existsSync(schema)) {
-    entry.schema = `${identity}/schema.js`;
+    const specifier = exportedSpecifier(pkg, [`${rel}/schema.js`, `${rel}/schema`], schema);
+    if (specifier) entry.schema = specifier;
     entry.files.schema = schema;
   }
   const settings = path.join(fsPath, 'settings.js');
   if (existsSync(settings)) {
-    entry.settings = `${identity}/settings.js`;
+    const specifier = exportedSpecifier(pkg, [`${rel}/settings.js`, `${rel}/settings`], settings);
+    if (specifier) entry.settings = specifier;
     entry.files.settings = settings;
   }
   const consoleFile = path.join(fsPath, 'ui.console.json5');
@@ -136,29 +221,34 @@ function entryFor(identity, fsPath, isFile) {
   return entry;
 }
 
-function walk(root, name, rel, out) {
-  const dir = rel ? path.join(root, rel) : root;
+function walk(pkg, rel, out) {
+  const dir = rel ? path.join(pkg.root, rel) : pkg.root;
   for (const ent of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (ent.name.startsWith('.')) continue;
     const childRel = rel ? `${rel}/${ent.name}` : ent.name;
     if (ent.isFile() && ent.name.endsWith('.plugin.js')) {
-      out.push(entryFor(`${name}/${childRel}`, path.join(root, childRel), true));
+      out.push(entryFor(pkg, childRel, path.join(pkg.root, childRel), true));
       continue;
     }
     if (!ent.isDirectory() || SKIP_DIRS.has(ent.name)) continue;
-    const full = path.join(root, childRel);
+    const full = path.join(pkg.root, childRel);
     if (existsSync(path.join(full, 'index.js'))) {
-      out.push(entryFor(`${name}/${childRel}`, full, false));
+      out.push(entryFor(pkg, childRel, full, false));
     } else {
-      walk(root, name, childRel, out);
+      walk(pkg, childRel, out);
     }
   }
   return out;
 }
 
-/** Every plugin entry point in one installed package. */
+/**
+ * Every plugin entry point in one installed package. `index` (and `schema`,
+ * `settings`) are the specifiers a bundle may import; `index` is null when the
+ * package's "exports" does not expose the plugin. `files` are absolute paths.
+ */
 export function discoverPackagePlugins(cwd, name, resolveOptions) {
-  return walk(packageRoot(cwd, name, resolveOptions), name, '', []);
+  const root = packageRoot(cwd, name, resolveOptions);
+  return walk({ name, root, exports: readExports(root) }, '', []);
 }
 
 function selectEntries(discovered, requested) {
@@ -221,6 +311,15 @@ function indent(text, spaces) {
 /** Source text of the registry module. Deterministic for a given input. */
 export function renderPluginRegistry(entries, { packages = [], packageVersions = {} } = {}) {
   const sorted = [...entries].sort((a, b) => a.identity.localeCompare(b.identity));
+  const hidden = sorted.filter((e) => !e.index);
+  if (hidden.length) {
+    const list = hidden.map((e) => e.identity).join(', ');
+    throw new PluginLoadError(
+      PLUGIN_CONFIG_INVALID,
+      `build-plugins: ${list} cannot be imported by a bundle: the package's "exports" in package.json does not ` +
+        `export the plugin directory or its index.js. Add it to "exports" (for example "./<dir>": "./<dir>/index.js").`
+    );
+  }
   const versions = {};
   for (const name of Object.keys(packageVersions).sort()) versions[name] = packageVersions[name];
   const lines = [

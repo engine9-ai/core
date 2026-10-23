@@ -250,8 +250,8 @@ account the process serves; see [docs/roles.md](docs/roles.md). Other role
 names are per-deployment — not shipped or recommended by core. Who may add or remove
 themselves, and which role may add or remove others, is on the segment row
 (`join_min_level`, `leave_min_level`, `manager_role_id`). Grant and revoke by
-email with `npx e9core segment add|remove`, or over HTTP with
-`POST /auth/segments`. Details: [docs/segments.md](docs/segments.md),
+email with `npx e9core segment add|remove` (`--db`, or `--url` for a deployed
+site), or over HTTP with `POST /auth/segments`. Details: [docs/segments.md](docs/segments.md),
 [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md) and
 [auth/README.md](auth/README.md).
 
@@ -351,6 +351,7 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person`     | Print one schema's SQL                                                                                                                                                                                                                                 |
 | `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
 | `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
+| `npx e9core segment list\|members\|add\|remove --url <site>` or `--db <url>` | Segment membership, including the first admin (`add --segment admin --email …`). `--url` uses the site's API with the admin key, so it reaches D1. See [docs/segments.md](docs/segments.md) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
 `npx e9core setup --help` lists every flag. People with an existing
@@ -443,7 +444,9 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | `GET /auth/me`        | `{ personId, roles, level, domainUnid, fields? }`                                                                                                          | API key + session or Identity Token                               |
 | `POST /auth/logout`   | `{ loggedOut, revoked }` (the host clears its cookie; `revoked` with `delegate.sessionRevocations`)                                                        | API key                                                           |
 | `POST /auth/role`     | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments`                      | API key + session/token matching `person_id`, or `admin`          |
-| `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else). See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
+| `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else); `segment_id` may be a role name, and an `admin` key creates a missing standard role row. See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
+| `GET /admin/segments` | Every segment with its role name and membership policy, plus standard roles with no row yet                                                              | `admin`                                                           |
+| `GET /admin/segments/:segment/members` | Members of a segment (id or role name, e.g. `admin`) with their emails                                                              | `admin`                                                           |
 | `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database          | `admin`                                                           |
 | `POST /admin/erase`   | `{ person_ids, dry_run?, keep?, domain_unids? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                       | `admin`                                                           |
 
@@ -517,6 +520,15 @@ imports, so the same discovery runs at build time. `e9core setup` puts
 build artifact, like the bundle). Every `wrangler dev` and `wrangler deploy`
 regenerates it; nobody runs it by hand. A project that lists
 `dynamicPluginPackages` cannot build a bundle; `build-plugins` says so.
+
+The bundler resolves each import through the plugin package's `exports`, so
+`build-plugins` writes only paths the package exports: `<dir>/index.js`, or
+`<dir>` when only that is exported. `schema.js` and `settings.js` are left out
+when not exported, and the registry reads `schema` and `settings` from the
+plugin's `index.js` instead, so a plugin package with `exports` should
+re-export both there. A plugin the package does not export at all stops the
+build with `PLUGIN_CONFIG_INVALID`. A package without `exports` exposes every
+file.
 
 Errors carry a `code` from `@engine9/core/pluginRegistry`:
 

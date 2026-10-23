@@ -174,6 +174,23 @@ Either key may be omitted. An entry is:
 first; `403 { error, segment_id, operation, subject }` means nothing was
 written. `200` echoes both lists with `person_id` and `subject` filled in.
 
+`segment_id` may also be a role name: a name from `config.roles`, else a
+standard role name (`admin`), which resolves to
+`roleSegmentId(<this site's account id>, name)`. With `admin` scope, an `add`
+to a standard role whose segment row does not exist yet creates the row first
+(with the role's standard policy, and the `roles` plugin row), the same as
+`npx e9core segment add`. That is how a new Cloudflare site gets its first
+admin (`e9core segment add --url`). Any other unknown segment is still
+`403 unknown segment`, and then nothing is created.
+
+### `GET /admin/segments` and `GET /admin/segments/:segment/members` — read
+
+Admin scope. The first lists every segment with `role` (the role name, or
+null) and the three policy columns, plus `missing_roles`: standard roles with
+no row yet. The second lists the members of one segment (`:segment` is an id
+or a role name) as `[{ person_id, emails }]`. These are what
+`npx e9core segment list|members --url` read.
+
 ### `POST /auth/role` — take a role and refresh the session
 
 `{ role_id, exclusive?, person_id? }`. `role_id` is a segment id or a name
@@ -227,6 +244,12 @@ npx e9core segment policy  --segment <id> --join 0 --leave 2 --manager <curator 
 `--db` (or `ENGINE9_DATABASE_CONNECTION`) picks the database. `policy` with
 no flags prints the current policy; `none` clears a value.
 
+`--url https://www.example.com` runs `list`, `members`, `add` and `remove`
+on a deployed site instead (Cloudflare D1 included), through the routes above
+with the admin key (`--key`, `E9_ADMIN_API_KEY`, or `.env.production`). The
+site's own account id names the role, so `--account` is not used. `policy`
+has no HTTP route and needs `--db`.
+
 ## Example site roles
 
 The names below are **examples only** — not canonical, not recommended, and
@@ -261,7 +284,7 @@ in core.
 | Event RSVP | join `1`, leave `2`, manager = your curator role | Signed-in Level 1: `add` yourself. Level 1 cannot `remove` themselves; Level 2 can. Ticketing backend with `tables:write`: `POST /upsert/person_segment`. |
 | Member / club area | a site role with join `1`, leave `1`, manager = curator | After login: `POST /auth/role` with that role id, or `add` yourself. Curator adds a holdout by email. |
 | Make a curator | site role (join `no`, leave `1`) | Admin key: `POST /auth/role` with `person_id`, or `ensureRoleSegments` + `addPeopleToSegment`. They cannot self-appoint; they can step down. |
-| Grant account admin | closed | `npx e9core segment add --segment admin --email …`, or `POST /auth/segments` with the admin key. Site curator roles get `403 subject: other`. Public forms get `403 subject: self`. |
+| Grant account admin | closed | `npx e9core segment add --segment admin --email …` (`--url <site>` for a deployed site), or `POST /auth/segments` with the admin key. Site curator roles get `403 subject: other`. Public forms get `403 subject: self`. |
 | Level 1 may add themselves, only Level 2 may remove themselves | join `1`, leave `2` | No new role. Same as RSVP. |
 | Two teams manage one list | one `manager_role_id` | Put both teams in that one role. A segment has one manager role, like a Unix file has one group. |
 | A custom editor role | new `segment` (`category: 'role'`, `build_type: 'manual'`) + `config.roles` entry | Set `manager_role_id` on the segments editors curate. Do not give it `admin` unless it should bypass everything. |

@@ -207,6 +207,30 @@ function policyForRole(account, role) {
   };
 }
 
+/**
+ * The standard role (STANDARD_ROLES) whose segment id this is in the account,
+ * or null. Accepts the id or the role name.
+ */
+export function standardRoleFor(accountId, segmentIdOrName) {
+  const value = typeof segmentIdOrName === 'string' ? segmentIdOrName.trim() : '';
+  if (!accountId || !value) return null;
+  const lower = value.toLowerCase();
+  return STANDARD_ROLES.find((role) => role.name === lower || roleSegmentId(accountId, role.name) === value) || null;
+}
+
+/**
+ * Create a standard role's segment row (and its manager role's) if missing,
+ * with the role's standard policy. What `e9core segment add` and an admin
+ * `POST /auth/segments` do before the first member is added.
+ */
+export async function ensureStandardRoleSegment({ worker, accountId, name } = {}) {
+  const account = requireAccountId(accountId, worker, 'ensureStandardRoleSegment');
+  const role = STANDARD_ROLES.find((r) => r.name === name);
+  if (!role) throw new Error(`${name} is not a standard role`);
+  if (role.managerRole) await ensureRoleSegment({ worker, accountId: account, name: role.managerRole });
+  return ensureRoleSegment({ worker, accountId: account, name: role.name, policy: policyForRole(account, role) });
+}
+
 export async function ensureRoleSegments({ worker, accountId, roles = STANDARD_ROLES } = {}) {
   const account = requireAccountId(accountId, worker, 'ensureRoleSegments');
   for (const role of roles) {
@@ -414,6 +438,8 @@ export default {
   ensureRolesPlugin,
   ensureRoleSegment,
   ensureRoleSegments,
+  ensureStandardRoleSegment,
+  standardRoleFor,
   setMembershipPolicy,
   lookupPersonIdsByEmail,
   personIdsForEmails,

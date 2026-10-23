@@ -97,6 +97,17 @@
         remove others (manager). Omitted flags keep their current value.
         These commands write directly; no membership check runs.
 
+    e9core segment list    --url https://www.example.com [--key e9key_... | --env staging]
+    e9core segment members --url … --segment admin
+    e9core segment add     --url … --segment admin --email a@x.org
+    e9core segment remove  --url … --segment admin --email a@x.org
+        The same actions on a deployed site (Cloudflare D1 included), through
+        its API with the admin key (found like upgrade --url). list and
+        members use GET /api/admin/segments[/<segment>/members]; add and
+        remove use POST /api/auth/segments, which creates a missing standard
+        role row (admin) first, as add does with --db. The site's own account
+        id names the role, so --account is not used. policy is --db only.
+
     e9core superadmin list
     e9core superadmin add    --email a@x.org[,b@y.org] [--emails file.txt] [--file engine9.superadmins.json]
     e9core superadmin remove --email a@x.org
@@ -129,7 +140,7 @@ import { setupKeys, readEnvValue } from './setupKeys.js';
 import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
-import { adminKey, upgradeSite } from './upgrade.js';
+import { adminKey, callSite, upgradeSite } from './upgrade.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
@@ -137,8 +148,7 @@ import {
   STANDARD_ROLES,
   standardRoleRegistry,
   roleIdByName,
-  roleSegmentId,
-  ensureRoleSegment,
+  ensureStandardRoleSegment,
   setMembershipPolicy,
   addPeopleToSegment,
   removePeopleFromSegment,
@@ -180,11 +190,82 @@ function levelFlag(value) {
   return Number(text);
 }
 
+function printSegmentList({ account_id: accountId, segments, missing_roles: missing }) {
+  const byId = Object.fromEntries(segments.map((row) => [row.id, row]));
+  console.log(`account ${accountId}`);
+  console.log(`${'name'.padEnd(24)} ${'id'.padEnd(36)} join  leave  manager`);
+  for (const row of segments) {
+    const policy = membershipPolicyFromRow(row);
+    const manager = policy.managerRoleId ? byId[policy.managerRoleId]?.role || byId[policy.managerRoleId]?.name || policy.managerRoleId : '-';
+    const label = row.role ? `${row.role} (role)` : row.name;
+    console.log(`${String(label).padEnd(24)} ${row.id}  ${String(policy.joinMinLevel ?? '-').padEnd(5)} ${String(policy.leaveMinLevel ?? '-').padEnd(6)} ${manager}`);
+  }
+  if (missing.length) {
+    console.log(`\nStandard roles with no segment row yet (created on first add): ${missing.join(', ')}`);
+  }
+}
+
+/** `e9core segment … --url`: the same actions through a deployed site's API (D1 included). */
+async function remoteSegmentCommand(args, action) {
+  const url = String(args.url);
+  const key = adminKey({
+    key: args.key && args.key !== true ? String(args.key) : undefined,
+    target: args.env && args.env !== true ? String(args.env) : undefined,
+    url
+  });
+  const call = (method, route, body) => callSite({ url, key, method, route, body });
+  const segment = args.segment ?? args.role;
+  const segmentValue = segment && segment !== true ? String(segment).trim() : '';
+  if (action === 'list' || !action) {
+    printSegmentList(await call('GET', '/admin/segments'));
+    return;
+  }
+  if (!segmentValue) {
+    console.error('--segment is required: a role name (admin) or a segment id');
+    process.exit(1);
+  }
+  if (action === 'members') {
+    const result = await call('GET', `/admin/segments/${encodeURIComponent(segmentValue)}/members`);
+    console.log(JSON.stringify({ role: result.role || undefined, segment_id: result.segment_id, members: result.members }, null, 2));
+    return;
+  }
+  if (action === 'policy') {
+    console.error('segment policy works only with --db: the site API has no route that changes a membership policy.');
+    process.exit(1);
+  }
+  if (action !== 'add' && action !== 'remove') {
+    console.error(`Unknown segment action '${action}'. Use list, members, add, or remove with --url.`);
+    process.exit(1);
+  }
+  const emails = emailsFromArgs(args);
+  const personIds = args['person-id'] && args['person-id'] !== true
+    ? String(args['person-id']).split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+  if (!emails.length && !personIds.length) {
+    console.error(`segment ${action} requires --email <a@x.org[,b@y.org]>, --emails <file>, or --person-id <id>`);
+    process.exit(1);
+  }
+  const entries = [
+    ...emails.map((email) => ({ segment_id: segmentValue, email })),
+    ...personIds.map((id) => ({ segment_id: segmentValue, person_id: Number(id) }))
+  ];
+  console.log(JSON.stringify(await call('POST', '/auth/segments', { [action]: entries }), null, 2));
+}
+
 async function segmentCommand(args) {
   const [, action] = args._;
+  if (args.url && args.url !== true) {
+    try {
+      await remoteSegmentCommand(args, action);
+    } catch (e) {
+      console.error(String(e.message || e));
+      process.exit(1);
+    }
+    return;
+  }
   const db = args.db || process.env.ENGINE9_DATABASE_CONNECTION;
   if (!db) {
-    console.error('Provide --db <connection> or set ENGINE9_DATABASE_CONNECTION');
+    console.error('Provide --db <connection>, --url <site> (a deployed site, D1 included), or set ENGINE9_DATABASE_CONNECTION');
     process.exit(1);
   }
   const accountId = args.account || process.env.E9_ACCOUNT_ID || 'local';
@@ -204,21 +285,12 @@ async function segmentCommand(args) {
       const { data } = await worker.query(
         'select id, name, category, build_type, join_min_level, leave_min_level, manager_role_id from segment order by category, name'
       );
-      const byId = Object.fromEntries(data.map((row) => [row.id, row]));
-      console.log(`account ${accountId}`);
-      console.log(`${'name'.padEnd(24)} ${'id'.padEnd(36)} join  leave  manager`);
-      for (const row of data) {
-        const policy = membershipPolicyFromRow(row);
-        const manager = policy.managerRoleId
-          ? registry[policy.managerRoleId]?.name || byId[policy.managerRoleId]?.name || policy.managerRoleId
-          : '-';
-        const label = registry[row.id] ? `${registry[row.id].name} (role)` : row.name;
-        console.log(`${String(label).padEnd(24)} ${row.id}  ${String(policy.joinMinLevel ?? '-').padEnd(5)} ${String(policy.leaveMinLevel ?? '-').padEnd(6)} ${manager}`);
-      }
-      const missing = Object.entries(registry).filter(([id]) => !byId[id]);
-      if (missing.length) {
-        console.log(`\nStandard roles with no segment row yet (created on first add): ${missing.map(([, r]) => r.name).join(', ')}`);
-      }
+      const present = new Set(data.map((row) => row.id));
+      printSegmentList({
+        account_id: accountId,
+        segments: data.map((row) => ({ ...row, role: registry[row.id]?.name || null })),
+        missing_roles: Object.entries(registry).filter(([id]) => !present.has(id)).map(([, r]) => r.name)
+      });
       if (!action) console.log('\nActions: list | members | add | remove | policy (see --help)');
       return;
     }
@@ -291,18 +363,7 @@ async function segmentCommand(args) {
         process.exit(1);
       }
       if (roleName) {
-        const def = STANDARD_ROLES.find((role) => role.name === roleName);
-        if (def?.managerRole) await ensureRoleSegment({ worker, accountId, name: def.managerRole });
-        await ensureRoleSegment({
-          worker,
-          accountId,
-          name: roleName,
-          policy: {
-            joinMinLevel: def.joinMinLevel ?? null,
-            leaveMinLevel: def.leaveMinLevel ?? null,
-            managerRoleId: def.managerRole ? roleSegmentId(accountId, def.managerRole) : null
-          }
-        });
+        await ensureStandardRoleSegment({ worker, accountId, name: roleName });
       } else {
         const { data } = await worker.query({ sql: 'select id from segment where id=?', values: [segmentId] });
         if (!data.length) {

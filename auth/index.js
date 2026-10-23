@@ -65,6 +65,8 @@ export {
   ensureRolesPlugin,
   ensureRoleSegment,
   ensureRoleSegments,
+  ensureStandardRoleSegment,
+  standardRoleFor,
   setMembershipPolicy,
   addPeopleToSegment,
   removePeopleFromSegment,

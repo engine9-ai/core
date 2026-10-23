@@ -183,6 +183,51 @@ test('build-plugins selects configured plugins, stack includes, and core schema 
   }
 });
 
+test('build-plugins writes only specifiers the package exports', async () => {
+  const { site, setConfig, cleanup } = makeSite({ pluginPackages: [] });
+  const pkg = path.join(site, 'node_modules', 'acme-gauge');
+  const write = (rel, text) => {
+    mkdirSync(path.dirname(path.join(pkg, rel)), { recursive: true });
+    writeFileSync(path.join(pkg, rel), text);
+  };
+  const setExports = (exports) =>
+    write('package.json', JSON.stringify({ name: 'acme-gauge', version: '1.0.1', type: 'module', exports }));
+  write('gauge/schema.js', "export default { tables: [{ name: 'acme_gauge_hit', columns: { id: 'id_uuid' } }] };\n");
+  write('gauge/settings.js', "export const settings = [{ name: 'streams', default: '[]' }];\n");
+  write(
+    'gauge/index.js',
+    "import schema from './schema.js';\nimport { settings } from './settings.js';\n" +
+      "export { schema, settings };\nexport default { metadata: { name: 'Gauge' }, schema, settings };\n"
+  );
+  try {
+    setConfig({ pluginPackages: ['acme-gauge'] });
+    setExports({ '.': './lib/main.js', './gauge': './gauge/index.js', './package.json': './package.json' });
+    const out = buildPlugins({ cwd: site });
+    const text = readFileSync(out.out, 'utf8');
+    assert.match(text, /import\("acme-gauge\/gauge"\)/);
+    assert.doesNotMatch(text, /acme-gauge\/gauge\/(index|schema|settings)\.js/);
+    const { default: entries, packageVersions } = await import(`${pathToFileURL(out.out).href}?only-dir`);
+    const registry = createPluginRegistry(entries, { packageVersions });
+    assert.equal((await loadRegistrySchema(registry, 'acme-gauge/gauge')).tables[0].name, 'acme_gauge_hit');
+    assert.deepEqual((await compileRegistryPlugin(registry, 'acme-gauge/gauge')).settings, [{ name: 'streams', default: '[]' }]);
+
+    setExports({ './gauge': './gauge/index.js', './gauge/*': './gauge/*' });
+    const wildcard = readFileSync(buildPlugins({ cwd: site }).out, 'utf8');
+    assert.match(wildcard, /import\("acme-gauge\/gauge\/index\.js"\)/);
+    assert.match(wildcard, /import\("acme-gauge\/gauge\/schema\.js"\)/);
+    assert.match(wildcard, /import\("acme-gauge\/gauge\/settings\.js"\)/);
+
+    setExports({ '.': './lib/main.js' });
+    assert.throws(() => buildPlugins({ cwd: site }), (e) => {
+      assert.equal(e.code, PLUGIN_CONFIG_INVALID);
+      assert.match(e.message, /acme-gauge\/gauge cannot be imported by a bundle/);
+      return true;
+    });
+  } finally {
+    cleanup();
+  }
+});
+
 test('Node registry: static packages are read at start, dynamic packages on every use', async () => {
   const { site, pkg, write, setConfig, cleanup } = makeSite({
     pluginPackages: ['@engine9/schemas'],

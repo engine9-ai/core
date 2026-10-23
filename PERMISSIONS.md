@@ -235,6 +235,9 @@ recorded reason.
 
    This creates the segment if it is missing and the person if they do not
    exist yet. A later sign-in with that verified email lands on that person.
+   On a deployed site (Cloudflare D1 included), add
+   `--url https://www.example.com`: the site does the same through its API
+   with the production admin key.
 4. **Superadmins, only if engine9 staff or a platform team must reach this
    site:**
 
@@ -340,6 +343,10 @@ superadmins file.
 ## Verifying a site
 
 Run these and keep the output. They are the evidence a reviewer asks for.
+Every `segment list` and `segment members` check also works against a
+deployed site with `--url https://www.example.com` (it reads
+`GET /api/admin/segments` with the admin key). On Cloudflare that is the
+only way to read the production D1 database, so use it there.
 
 | Requirement | How to check |
 | --- | --- |
@@ -362,10 +369,12 @@ Then remove the address from the list; the next request must not.
 
 ## Operating it: granting, removing, incidents
 
-**Add an admin:** `npx e9core segment add --segment admin --email …`, or
-`POST /auth/segments` with an `admin`-scope key.
+**Add an admin:** `npx e9core segment add --segment admin --email …` (add
+`--url <site>` for a deployed site), or `POST /auth/segments` with an
+`admin`-scope key.
 
-**Remove an admin:** `npx e9core segment remove --segment admin --email …`.
+**Remove an admin:** `npx e9core segment remove --segment admin --email …`
+(or with `--url <site>`).
 Privileged checks refuse it on the next request. A token already issued keeps
 showing the old role in menus until it expires or the person logs in again.
 End the session itself with logout (`sessionRevocations`) if that matters.

@@ -110,6 +110,19 @@ npx e9core segment add --segment admin --account <account_id> \
   --db <connection> --email a@example.org,b@example.org
 ```
 
+A deployed site whose database a Node process cannot open (Cloudflare D1)
+takes `--url` instead of `--db`, with that environment's admin key (`--key`,
+`E9_ADMIN_API_KEY`, or `.env.production`):
+
+```bash
+npx e9core segment add --segment admin --url https://www.example.com \
+  --email a@example.org,b@example.org
+```
+
+It posts to the site's `POST /api/auth/segments`. The site resolves `admin`
+with its own account id and, for an admin key, creates the `roles` plugin row
+and the admin segment row when they are missing, exactly as `--db` does.
+
 The engine9 server's MCP `account` `addAdmin` also works once someone can
 already open the account, but it refuses addresses that are not yet people.
 Use core for the first admin.
@@ -153,6 +166,7 @@ Per account, after a write:
 
 ```bash
 npx e9core segment members --segment admin --account <account_id> --db <connection>
+npx e9core segment members --segment admin --url https://www.example.com   # a deployed site
 ```
 
 It must list exactly the addresses you intended and no others. Then, in code:
