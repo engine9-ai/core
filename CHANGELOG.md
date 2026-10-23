@@ -7,14 +7,21 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.15.1: Retirement date
+
+Documentation only; no code change and no `lib/upgrades` entry. 1.15.0 said
+`delegate.engine9.ai` would stop working "no later than 2026-10-23". That date
+was wrong. The old host is retired on **2026-10-30**. Everything in 1.15.0
+below still applies.
+
 ## 1.15.0: Delegate moves to delegate.network
 
-<!-- REMOVE-AFTER 2026-10-30: the retirement notice and the migration table below.
-     One week after delegate.engine9.ai is retired, delete everything from here
+<!-- REMOVE-AFTER 2026-11-06: the retirement notice and the migration table below.
+     One week after delegate.engine9.ai is retired (2026-10-30), delete everything from here
      to the matching "END REMOVE-AFTER" comment, and keep the "What changed" list. -->
 
-> **`https://delegate.engine9.ai` is being retired. It will stop working no
-> later than 2026-10-23. Move every site to `https://delegate.network` now.**
+> **`https://delegate.engine9.ai` is being retired. It will stop working on
+> 2026-10-30. Move every site to `https://delegate.network` now.**
 
 ### What to change in your site
 
@@ -63,7 +70,7 @@ Domain UNID, and no new person is created. Core Sessions already issued
 (the `e9_session` cookie, `X-Engine9-Session`) are signed with your
 `SESSION_SECRET`, not by Delegate, so they stay valid until they expire.
 
-<!-- END REMOVE-AFTER 2026-10-30 -->
+<!-- END REMOVE-AFTER 2026-11-06 -->
 
 ### What changed
 

@@ -189,14 +189,14 @@ whole integration for signups. The setup page shows a copy-paste snippet.
 
 ## Add login
 
-<!-- REMOVE-AFTER 2026-10-30: delegate.engine9.ai retirement notice. Delete this block one week after the old host is retired. -->
+<!-- REMOVE-AFTER 2026-11-06: delegate.engine9.ai retirement notice. Delete this block one week after the old host is retired on 2026-10-30. -->
 > **Moving to `delegate.network`.** `https://delegate.engine9.ai` is being
-> retired and will stop working no later than 2026-10-23. If your site sets
+> retired and will stop working on 2026-10-30. If your site sets
 > `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
 > change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
 > default), and change `@engine9/id` in the browser in the same deploy. The
 > exact list of places is in [CHANGELOG.md](CHANGELOG.md#1150-delegate-moves-to-delegatenetwork).
-<!-- END REMOVE-AFTER 2026-10-30 -->
+<!-- END REMOVE-AFTER 2026-11-06 -->
 
 Login is optional. Saving people needs only the API key. When visitors
 should log in, the browser talks to **delegate** and core verifies the
