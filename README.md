@@ -7,7 +7,7 @@ that reads and writes it. Install it, run one setup command, and you have:
   database you already use — SQLite, Cloudflare D1, or MySQL
 - `/api/people` for signup forms, plus upserts and segment-gated reads
 - API keys (hashed, scoped, rotatable)
-- optional **login** through [delegate](https://delegate.engine9.ai), the
+- optional **login** through [delegate](https://delegate.network), the
   default identity provider, with `@engine9/id` in the browser
 
 It runs on **Cloudflare Workers** (D1) or on **any Node.js server** (SQLite or
@@ -23,6 +23,9 @@ Other libraries that speak it:
 | [`@engine9/id`](https://github.com/engine9-ai/id)              | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login`             |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production)                                                 |
 | [`demo-id`](https://github.com/engine9-ai/demo-id)             | Browser-only demo of id, no core                                                                                         |
+
+Release notes (what changed, what was retired, and what a site changes at each
+release): [CHANGELOG.md](CHANGELOG.md).
 
 `@engine9/schemas` is a peer of this package. Install both in the site.
 `@engine9/schemas` publishes on its own; upgrade it and redeploy (wrangler
@@ -186,6 +189,15 @@ whole integration for signups. The setup page shows a copy-paste snippet.
 
 ## Add login
 
+<!-- REMOVE-AFTER 2026-10-30: delegate.engine9.ai retirement notice. Delete this block one week after the old host is retired. -->
+> **Moving to `delegate.network`.** `https://delegate.engine9.ai` is being
+> retired and will stop working no later than 2026-10-23. If your site sets
+> `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
+> change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
+> default), and change `@engine9/id` in the browser in the same deploy. The
+> exact list of places is in [CHANGELOG.md](CHANGELOG.md#1150-delegate-moves-to-delegatenetwork).
+<!-- END REMOVE-AFTER 2026-10-30 -->
+
 Login is optional. Saving people needs only the API key. When visitors
 should log in, the browser talks to **delegate** and core verifies the
 result. No OAuth client id, no callback route to write.
@@ -325,7 +337,7 @@ When a new build needs storage, decide in this order:
 | `E9_SETUP_TOKEN`     | Opens the local `/setup` wizard until you finish. Not used in production      |
 | `E9_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call the API from another host (CORS)    |
 | `E9_DOMAIN`          | Optional. JWT `aud` when the API host differs from the page host              |
-| `DELEGATE_URL`       | Optional. Your own delegate deployment. Default `https://delegate.engine9.ai` |
+| `DELEGATE_URL`       | Optional. Your own delegate deployment. Default `https://delegate.network`    |
 
 `npx e9core setup --rotate` replaces the keys and secret; run `setup --remote`
 again afterwards on Cloudflare. `setup --remote` copies the two keys, the

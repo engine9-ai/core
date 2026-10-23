@@ -10,7 +10,7 @@ import {
 } from '../auth/delegate.js';
 import { signPayload } from '../auth/hmac.js';
 
-const DELEGATE_URL = 'https://delegate.engine9.ai';
+const DELEGATE_URL = 'https://delegate.network';
 const DOMAIN = 'site.example.com';
 const UNID = `${DOMAIN}:${'c'.repeat(64)}`;
 const ROLE_A = '00000000-0000-4000-8000-00000000000a';

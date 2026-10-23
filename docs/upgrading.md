@@ -13,6 +13,8 @@ moves all wait for `e9core upgrade`.
 
 Permission levels and how to bring a site to them: [PERMISSIONS.md](../PERMISSIONS.md).
 
+Release notes, with what a site changes at each release: [CHANGELOG.md](../CHANGELOG.md).
+
 Release guides: [1.12.0](upgrade-1.12.md) (operator role removed; superadmins),
 [1.11.3](upgrade-1.11.md) (`setting.value` widens to text),
 [1.10.1](upgrade-1.10.md) (person names move to `person_name`),

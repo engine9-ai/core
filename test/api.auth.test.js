@@ -12,7 +12,7 @@ import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 const DOMAIN = 'site.example.com';
 const UNID = `${DOMAIN}:${'a'.repeat(64)}`;
 const RETURN_ORIGIN = 'https://site.example.com';
-const DELEGATE_URL = 'https://delegate.engine9.ai';
+const DELEGATE_URL = 'https://delegate.network';
 
 function memoryKv() {
   const store = new Map();

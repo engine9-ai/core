@@ -7,6 +7,15 @@ verify. This is not OpenID Connect.
 
 Core setup without a provider: [../deploy.md](../deploy.md).
 
+<!-- REMOVE-AFTER 2026-10-30: delegate.engine9.ai retirement notice. Delete this block one week after the old host is retired. -->
+> **Moving to `delegate.network`.** `https://delegate.engine9.ai` is being
+> retired and will stop working no later than 2026-10-23. If your site sets
+> `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
+> change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
+> default), and change `@engine9/id` in the browser in the same deploy. The
+> exact list of places is in [CHANGELOG.md](../../CHANGELOG.md#1150-delegate-moves-to-delegatenetwork).
+<!-- END REMOVE-AFTER 2026-10-30 -->
+
 ## When you need it
 
 | Environment | Identity provider |
@@ -52,7 +61,7 @@ const api = createApi({
   keyStore,
   delegate: {
     sessionSecret: env.SESSION_SECRET,
-    // delegateUrl: env.DELEGATE_URL,   // default https://delegate.engine9.ai
+    // delegateUrl: env.DELEGATE_URL,   // default https://delegate.network
     // domain: 'www.example.com',       // only when /api is on a different host than the pages
   },
   config: {

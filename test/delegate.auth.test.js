@@ -24,7 +24,7 @@ import { getVersionedUUID } from '../lib/utilities.js';
 async function signDelegateJwt({
   privateKey,
   kid = 'test-key',
-  issuer = 'https://delegate.engine9.ai',
+  issuer = 'https://delegate.network',
   domain = 'site.example.com',
   sub = domainUnidOf(domain, 'a'),
   mergedFrom,
@@ -535,7 +535,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
 
     const verifiedUser = await verifyDelegateIdentityToken({
       token: jwt,
-      delegateUrl: 'https://delegate.engine9.ai',
+      delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
       fetchImpl
     });
@@ -551,7 +551,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
     await assert.rejects(
       verifyDelegateIdentityToken({
         token: jwt,
-        delegateUrl: 'https://delegate.engine9.ai',
+        delegateUrl: 'https://delegate.network',
         domain: 'other.example.com',
         fetchImpl
       }),
@@ -562,7 +562,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
     await assert.rejects(
       verifyDelegateIdentityToken({
         token: foreignSub,
-        delegateUrl: 'https://delegate.engine9.ai',
+        delegateUrl: 'https://delegate.network',
         domain: 'site.example.com',
         fetchImpl
       }),
@@ -571,7 +571,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
 
     const withMerge = await verifyDelegateIdentityToken({
       token: await signDelegateJwt({ privateKey, mergedFrom: UNID_B }),
-      delegateUrl: 'https://delegate.engine9.ai',
+      delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
       fetchImpl
     });
@@ -592,7 +592,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
 
     const auth = createDelegateAuth({
       worker,
-      delegateUrl: 'https://delegate.engine9.ai',
+      delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,
@@ -622,4 +622,35 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
   } finally {
     await worker.destroy();
   }
+});
+
+// The old Delegate host still works. A site that configured it verifies tokens
+// whose `iss` is that host, and a site on the default host does not accept them
+// (no either-issuer logic).
+test('verifyDelegateIdentityToken: old Delegate host keeps working when configured', async () => {
+  const OLD_HOST = 'https://delegate.engine9.ai';
+  const { privateKey, publicKey } = await generateKeyPair('ES256');
+  const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', alg: 'ES256', use: 'sig' };
+  const fetchImpl = async (url) => {
+    assert.match(String(url), /\/\.well-known\/jwks\.json$/);
+    return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+  };
+  const token = await signDelegateJwt({ privateKey, issuer: OLD_HOST });
+
+  const user = await verifyDelegateIdentityToken({
+    token,
+    delegateUrl: OLD_HOST,
+    domain: 'site.example.com',
+    fetchImpl
+  });
+  assert.equal(user.domainUnid, UNID_A);
+
+  await assert.rejects(
+    verifyDelegateIdentityToken({
+      token,
+      delegateUrl: 'https://delegate.network',
+      domain: 'site.example.com',
+      fetchImpl
+    })
+  );
 });

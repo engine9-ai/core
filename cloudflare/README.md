@@ -130,7 +130,7 @@ one piece at a time.
    | `DB` | D1 binding | The project database |
    | `E9_PLUGIN_ID` | var | Written by setup; identifies this site's rows |
    | `SESSION_SECRET` | secret | Copied by `setup --remote`; turns on `/api/auth/*` (login) |
-   | `DELEGATE_URL` | var, optional | Your own delegate. Default `https://delegate.engine9.ai` |
+   | `DELEGATE_URL` | var, optional | Your own delegate. Default `https://delegate.network` |
    | `E9_DOMAIN` | var, optional | JWT `aud` when pages and `/api` are on different hosts |
    | `E9_ALLOWED_ORIGINS` | var, optional | Browser origins allowed to call the API (CORS) |
    | `PERSON_ID_DELEGATE_KV`, `PERSON_SEGMENT_VK` | KV, optional | Caches below |

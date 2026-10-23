@@ -17,7 +17,7 @@
     SESSION_SECRET     -- secret; turns on login (/auth/*). `e9core setup --remote`
                           stores production's own (.env.production). Without it
                           /auth/* answers 501.
-    DELEGATE_URL       -- optional; default https://delegate.engine9.ai
+    DELEGATE_URL       -- optional; default https://delegate.network
     E9_DOMAIN          -- optional JWT aud (host[:port]). Default: the request's
                           own Origin/Host, which is right when pages and /api
                           share one hostname.

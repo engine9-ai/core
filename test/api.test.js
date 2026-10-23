@@ -178,7 +178,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
       auth: { provider: 'google.com', two_factor: false, auth_time: 1700000000 }
     })
       .setProtectedHeader({ alg: 'ES256', kid: 'api-role-key', typ: 'JWT' })
-      .setIssuer('https://delegate.engine9.ai')
+      .setIssuer('https://delegate.network')
       .setAudience('site.example.com')
       .setSubject(`site.example.com:${'a'.repeat(64)}`)
       .setIssuedAt()
@@ -188,7 +188,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     const { createDelegateAuth } = await import('../auth/delegate.js');
     const delegateAuth = createDelegateAuth({
       worker,
-      delegateUrl: 'https://delegate.engine9.ai',
+      delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
       sessionSecret: 'session-secret',
       pluginId,

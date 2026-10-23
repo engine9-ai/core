@@ -283,7 +283,7 @@ test('duplicate setting names are an error', async () => {
       settings: [{ name: 'default_phone_type', type: 'string', default: 'mobile' }]
     },
     submodules: {
-      Donations: {
+      Transactions: {
         metadata: {
           settings: [{ name: 'people_custom_fields', type: 'array' }]
         }
@@ -302,7 +302,7 @@ test('duplicate setting names are an error', async () => {
     assert.deepEqual(catalog.plugins, []);
     assert.equal(catalog.errors.length, 1);
     assert.match(catalog.errors[0].error, /Duplicate setting "people_custom_fields"/);
-    assert.match(catalog.errors[0].error, /Donations/);
+    assert.match(catalog.errors[0].error, /Transactions/);
     assert.match(catalog.errors[0].error, /People/);
     await assert.rejects(
       () => plugins.updateSetting({ plugin_id: REMOTE_PLUGIN_ID, name: 'people_custom_fields', value: ['a'] }),

@@ -703,7 +703,7 @@ export function sessionNeedsRole(session) {
 
     const auth = createDelegateAuth({
       worker,                      // PersonWorker bound to the deployment DB
-      delegateUrl,                 // e.g. https://delegate.engine9.ai
+      delegateUrl,                 // e.g. https://delegate.network
       domain,                    // JWT aud host[:port] (optional; else domainFromUrl(returnTo))
       sessionSecret,               // HMAC key for the local session cookie
       pluginId,                    // plugin used for person pipeline writes

@@ -7,7 +7,7 @@ import { requireRole, createGate } from '../auth/gate.js';
 import { safeReturnPath, withQueryParam, sessionTokenFromCookie } from '../auth/signIn.js';
 import { installDefaultPluginsSite } from '../bin/upgrade.js';
 
-const DELEGATE_URL = 'https://delegate.engine9.ai';
+const DELEGATE_URL = 'https://delegate.network';
 const HOST = 'site.example.com';
 const SITE = `https://${HOST}`;
 const UNID = `${HOST}:${'c'.repeat(64)}`;

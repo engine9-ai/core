@@ -114,7 +114,7 @@ import {
   STANDARD_ROLES
 } from '../auth/roles.js';
 
-export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
+export const DEFAULT_DELEGATE_URL = 'https://delegate.network';
 import {
   DEFAULT_SESSION_COOKIE,
   clearSessionCookie,
