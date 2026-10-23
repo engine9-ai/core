@@ -21,6 +21,10 @@
     E9_DOMAIN          -- optional JWT aud (host[:port]). Default: the request's
                           own Origin/Host, which is right when pages and /api
                           share one hostname.
+    E9_SIGN_IN         -- optional JSON for GET /api/auth/start (one-link sign-in):
+                          {"brand":{"name":"My Site","color":"#7a1fa2"},"fields":["email"]}.
+                          Default: Level 1, email, Google only. Delegate opens
+                          a single provider by itself.
     The setup wizard is not mounted here. It runs only on `e9core serve`.
 
   Roles (segment UUIDs with scopes / requiredAuth) are site code: add them to
@@ -41,6 +45,16 @@ import { superadminsFromText } from '@engine9/core/auth/superadmins';
 import { PersonIdentifierDO } from '@engine9/core/id';
 
 export { PersonIdentifierDO };
+
+function parseSignIn(text) {
+  if (!text) return {};
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    throw new Error('E9_SIGN_IN must be a JSON object');
+  }
+}
 
 const plugins = pluginEntries
   ? createPluginRegistry(pluginEntries, { packageVersions: packageVersions || {} })
@@ -76,6 +90,7 @@ export default {
         defaultRemoteInputId: 'website',
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         allowedOrigins: env.E9_ALLOWED_ORIGINS || '',
+        signIn: parseSignIn(env.E9_SIGN_IN),
         roles: {
           // '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } }
         },
@@ -88,6 +103,10 @@ export default {
         }
       }
     });
+    // A pre-launch gate for a page this Worker serves (see auth/gate.js):
+    //   import { requireRole } from '@engine9/core/auth/gate';
+    //   const gate = await requireRole({ auth: api.delegateAuth, request, role: 'admin' });
+    //   if (!gate.ok) return gate.response;
     return api.handleFetch(request, { basePath: '/api', ctx });
   }
 };

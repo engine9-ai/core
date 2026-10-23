@@ -1,6 +1,9 @@
 {
   "name": "@engine9/core",
-  "version": "1.13.1",
+  "version": "1.14.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "description": "Standalone library that creates an engine9-standard database and HTTP endpoints. Use it as a site's primary database, or with a database you already have.",
   "main": "index.js",
@@ -36,6 +39,14 @@
     "./auth/superadmins": "./auth/superadmins.js",
     "./superadmins/node": "./bin/superadminsFile.js",
     "./auth/segmentAccess": "./auth/segmentAccess.js",
+    "./auth/signIn": {
+      "types": "./auth/signIn.d.ts",
+      "default": "./auth/signIn.js"
+    },
+    "./auth/gate": {
+      "types": "./auth/gate.d.ts",
+      "default": "./auth/gate.js"
+    },
     "./auth/delegate": {
       "types": "./auth/delegate.d.ts",
       "workerd": "./auth/delegate.js",

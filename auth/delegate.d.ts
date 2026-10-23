@@ -153,6 +153,8 @@ export function delegateIdentityUrl(options: {
    */
   loginProviders?: DelegateLoginProvider[] | string;
   brand?: DelegateSignInBrand;
+  /** The visitor's email address when the site knows it (`login_hint`); lets Google skip its account chooser. */
+  loginHint?: string;
   nonce?: string;
   state?: string;
   responseMode?: string;
@@ -310,6 +312,8 @@ export interface DelegateAuth {
     loginProviders?: DelegateLoginProvider[] | string;
     /** Name, colors, logo, font, and Google button on delegate's sign-in page (name, color, and logo in the email too). */
     brand?: DelegateSignInBrand;
+    /** The visitor's email address when known (`login_hint`). */
+    loginHint?: string;
     nonce?: string;
     state?: string;
     responseMode?: string;
@@ -324,6 +328,8 @@ export interface DelegateAuth {
     cookieName?: string;
     /** Default: returnTo is https. */
     secure?: boolean;
+    /** JSON kept in the signed cookie and returned by `finishLogin` as `data`. */
+    data?: unknown;
   }): { url: string; state: string; nonce: string; cookie: string };
   /**
    * Finish a beginLogin() sign-in from the return's `delegate_token` and
@@ -348,7 +354,19 @@ export interface DelegateAuth {
     token: string;
     delegateUser: DelegateUser;
     clearCookie: string;
+    /** The `data` passed to `beginLogin`. */
+    data?: unknown;
   }>;
+  /**
+   * The sign-in this browser started, read from its cookie and the return's
+   * `state`: `{ data }`, or null. Reads only. For a return that carries
+   * `error=` instead of a token.
+   */
+  readLoginRequest(options: {
+    cookie: string | null | undefined;
+    state: string | null | undefined;
+    cookieName?: string;
+  }): { data?: unknown } | null;
   /**
    * Complete login from an Identity Token JWT. JWT aud is `options.domain`,
    * else the configured domain, else domainFromUrl(returnTo), else

@@ -10,7 +10,7 @@ import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { upgradeEndpoint, upgradeSite } from '../bin/upgrade.js';
+import { installDefaultPluginsSite, upgradeEndpoint, upgradeSite } from '../bin/upgrade.js';
 import { ensurePluginRow } from './helpers/applySchemas.js';
 import { makeLegacyPersonNames, personColumns } from './helpers/legacyPersonNames.js';
 import appendName from '@engine9/schemas/person_name/transforms/outbound/appendName.js';
@@ -431,6 +431,36 @@ test('POST /admin/upgrade needs admin scope; e9core upgrade --url posts to it', 
       }),
       /answered 403/
     );
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('POST /admin/install-default-plugins needs admin scope and installs over --url', async () => {
+  const worker = newWorker();
+  try {
+    const keyStore = new SqlApiKeyStore({ worker });
+    await keyStore.deploy();
+    const { key: adminKey } = await keyStore.create({ name: 'admin', scopes: ['admin'] });
+    const { key: writeKey } = await keyStore.create({ name: 'site', scopes: ['people:write'] });
+    const logged = [];
+    const api = createApi({ worker, keyStore, logger: { log: (e) => logged.push(e), flush: async () => {} }, config: {} });
+    const fetchImpl = (url, init) => api.handleFetch(new Request(url, init));
+
+    await assert.rejects(
+      installDefaultPluginsSite({ url: 'https://www.example.com', key: writeKey, fetchImpl }),
+      /answered 403/
+    );
+    const result = await installDefaultPluginsSite({
+      url: 'https://www.example.com',
+      key: adminKey,
+      path: '@engine9/schemas/stacks/standard',
+      fetchImpl
+    });
+    assert.equal(result.complete, true);
+    assert.equal(result.path, '@engine9/schemas/stacks/standard');
+    assert.ok((await worker.tables()).tables.includes('person_email'));
+    assert.deepEqual(logged.map((e) => e.action), ['plugins.install_default']);
   } finally {
     await worker.destroy();
   }

@@ -224,6 +224,7 @@ export function delegateIdentityUrl({
   loginLevel,
   loginProviders,
   brand,
+  loginHint,
   nonce,
   state,
   responseMode = 'query',
@@ -264,6 +265,10 @@ export function delegateIdentityUrl({
   if (brand?.cardText) url.searchParams.set('brand_card_text', brand.cardText);
   if (brand?.font) url.searchParams.set('brand_font', brand.font);
   if (brand?.google) url.searchParams.set('brand_google', brand.google);
+  // The visitor's email when the site knows it; Google can skip its account chooser.
+  if (typeof loginHint === 'string' && loginHint.trim()) {
+    url.searchParams.set('login_hint', loginHint.trim());
+  }
   if (nonce) url.searchParams.set('nonce', nonce);
   if (state) url.searchParams.set('state', state);
   if (responseMode) url.searchParams.set('response_mode', responseMode);
@@ -717,7 +722,7 @@ export function sessionNeedsRole(session) {
 
     auth.beginLogin({ returnTo, ... })      // { url, cookie, state, nonce }
     await auth.finishLogin(token, { state, cookie })  // checks state + nonce
-    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, loginProviders?, brand? })
+    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, loginProviders?, brand?, loginHint? })
     await auth.login(token, { nonce? })     // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
     auth.verify(sessionToken)               // signature, purpose, expiry
@@ -971,6 +976,7 @@ export function createDelegateAuth({
     loginLevel,
     loginProviders,
     brand,
+    loginHint,
     nonce,
     state,
     responseMode,
@@ -988,6 +994,7 @@ export function createDelegateAuth({
       loginLevel,
       loginProviders,
       brand,
+      loginHint,
       nonce,
       state,
       responseMode,
@@ -1006,11 +1013,13 @@ export function createDelegateAuth({
     `cookie` as its Set-Cookie header. The cookie holds this request's state
     and nonce, signed and tagged so nothing else reads as one.
   */
-  function beginLogin({ returnTo, cookieName = 'e9_login', secure, ...urlOptions } = {}) {
+  function beginLogin({ returnTo, cookieName = 'e9_login', secure, data, ...urlOptions } = {}) {
     const state = randomToken();
     const nonce = randomToken();
+    // `data` (JSON) rides in the signed cookie and comes back from finishLogin, so a
+    // callback can know where to send the browser without trusting its query string.
     const value = createSessionToken(
-      { state, nonce },
+      { state, nonce, ...(data === undefined ? {} : { data }) },
       { secret: sessionSecret, ttlSeconds: LOGIN_REQUEST_TTL_SECONDS, typ: LOGIN_REQUEST_TOKEN_TYPE }
     );
     const isSecure = secure ?? String(returnTo || '').startsWith('https:');
@@ -1024,6 +1033,21 @@ export function createDelegateAuth({
         secure: isSecure
       })
     };
+  }
+
+  /*
+    The sign-in this browser started, from its cookie and the return's `state`:
+    `{ data }` (what beginLogin kept), or null when there is none or `state`
+    is not the one this browser started. Reads only; it does not finish anything.
+    Used for a return that carries `error=` instead of a token.
+  */
+  function readLoginRequest({ cookie, state, cookieName = 'e9_login' } = {}) {
+    const raw = readCookie(cookie, cookieName);
+    const pending = raw
+      ? verifySessionToken(raw, { secret: sessionSecret, typ: LOGIN_REQUEST_TOKEN_TYPE })
+      : null;
+    if (!pending || !state || pending.state !== state) return null;
+    return { data: pending.data };
   }
 
   /*
@@ -1048,7 +1072,7 @@ export function createDelegateAuth({
     }
     try {
       const result = await login(token, { ...loginOptions, nonce: pending.nonce });
-      return { ...result, clearCookie };
+      return { ...result, clearCookie, data: pending.data };
     } catch (err) {
       if (err && typeof err === 'object') err.clearCookie = clearCookie;
       throw err;
@@ -1112,6 +1136,7 @@ export function createDelegateAuth({
     identityUrl,
     beginLogin,
     finishLogin,
+    readLoginRequest,
     login,
     verify,
     verifySession,

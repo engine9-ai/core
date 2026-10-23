@@ -269,6 +269,49 @@ session's `sid` until it would have expired, and `verifySession` refuses it.
 Without a store, logout only clears the cookie, and a copied token works
 until `exp`. Rotating `SESSION_SECRET` ends every session at once.
 
+### One-link sign-in (`/auth/start`, `/auth/callback`)
+
+`createApi` ships the server-side sign-in described below, so a site needs one
+link and no JavaScript:
+
+```html
+<a href="/api/auth/start?returnTo=/members">Log in with Google</a>
+```
+
+- `GET /auth/start` sends the browser to Delegate with a signed `e9_login`
+  cookie. Delegate opens a single provider by itself. `returnTo` must be a
+  path on this site; anything else becomes `/`. `login_hint=<email>` and
+  `prompt=select` (let the visitor choose another account) are the only
+  other query parameters. Everything else is `config.signIn`: `minLevel`
+  (default 1), `maxLevel`, `fields` (default `['email']`), `optionalFields`,
+  `loginLevel`, `loginProviders`, `brand`, `sessionCookie` (default
+  `e9_session`), `sessionTtlSeconds`. On the Cloudflare example Worker,
+  `E9_SIGN_IN` holds that object as JSON.
+- `GET /auth/callback` runs `finishLogin`, sets the Core Session as an
+  `HttpOnly`, `SameSite=Lax` cookie (`Secure` on https), clears `e9_login`, and
+  redirects to `returnTo`. A declined or failed sign-in redirects there with
+  `?login_error=<reason>`. A return this browser did not start redirects to
+  `/` and sets nothing: show Log in, not an error.
+- Neither route takes an API key (a link cannot send one). The session cookie
+  is read on the API's other routes (`GET /auth/me`, `POST /auth/role`, …) next
+  to `X-Engine9-Session`, and `POST /auth/logout` clears it.
+
+To lock a page you serve yourself, check the cookie in the same Worker:
+
+```js
+import { requireRole } from '@engine9/core/auth/gate';
+
+const gate = await requireRole({ auth: api.delegateAuth, request, role: 'admin' });
+if (!gate.ok) return gate.response; // 302 to /api/auth/start, 401, or a 403 page
+// gate.session, gate.roles
+```
+
+`requireRole` reads the role from `person_segment` now and enforces the role's
+`requiredAuth` (PL-8); it never trusts the roles copied into the cookie. With
+no `role` it only requires a signed-in browser. `createGate({ auth })` fixes
+`auth` once. This protects what your Worker serves; a static asset served
+before your code runs is not protected.
+
 ### Server-side sign-in (`beginLogin` / `finishLogin`)
 
 A host that receives the Identity Token on its own callback
@@ -278,14 +321,18 @@ sign the victim in as the attacker.
 
 ```js
 // GET /login
-const { url, cookie } = delegateAuth.beginLogin({ returnTo: "https://www.example.com/auth/callback" });
+const { url, cookie } = delegateAuth.beginLogin({
+  returnTo: "https://www.example.com/auth/callback",
+  data: { next: "/members" }, // rides in the signed cookie, comes back from finishLogin
+});
 return redirect(url, { "Set-Cookie": cookie });
 
 // GET /auth/callback?delegate_token=…&state=…
-const { token, clearCookie } = await delegateAuth.finishLogin(query.delegate_token, {
+const { token, clearCookie, data } = await delegateAuth.finishLogin(query.delegate_token, {
   state: query.state,
   cookie: request.headers.get("cookie"),
 });
+// an `error=` return carries no token: delegateAuth.readLoginRequest({ cookie, state })
 ```
 
 `beginLogin` makes a random `state` and `nonce`, signs them into a short-lived
@@ -320,7 +367,8 @@ object is:
 }
 ```
 
-The host delivers the token. Core will not set a cookie for you.
+The host delivers the token: `/auth/callback` does it for you (above), or you
+set the cookie yourself.
 
 ```js
 createSessionCookieHeaders(token, {
@@ -336,7 +384,8 @@ createSessionCookieHeaders(token, {
 The other delivery is the `X-Engine9-Session` header. Logout
 (`POST /auth/logout`) returns `{ loggedOut: true, revoked }`. `revoked` is
 true when a `sessionRevocations` store recorded it. Clearing the cookie or
-dropping the header is the host's job.
+dropping the header is the host's job, except the `e9_session` cookie that
+`/auth/callback` set, which `POST /auth/logout` clears.
 
 ### Development
 

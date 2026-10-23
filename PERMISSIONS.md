@@ -183,7 +183,8 @@ recorded reason.
   SHOULD configure `sessionRevocations` so logout actually ends a session,
   and set `acceptLegacySessions: false` once a day has passed after upgrading
   to a version that adds session `typ`. Deliver the Core Session as an
-  `HttpOnly`, `Secure` cookie.
+  `HttpOnly`, `Secure` cookie (`GET /auth/callback` does this: `HttpOnly`,
+  `SameSite=Lax`, and `Secure` on https).
 - **PL-8 (MUST)** Host code that decides a privileged action from a session
   (opening an admin page, performing an admin action) uses
   `auth.rolesForSession(session)` and the role's `requiredAuth`

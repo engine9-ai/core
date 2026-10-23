@@ -12,6 +12,13 @@
                                    body: { rows: [...] }
     GET  /read/:name            -- read a configured table; optionally gated
                                    by person_segment membership
+    GET  /auth/start            -- no API key. Redirect to Delegate (sign in with Google, one
+                                   link, no script). ?returnTo=/path on this site, optional
+                                   login_hint=<email>, prompt=select. Needs delegateAuth.
+    GET  /auth/callback         -- no API key. Delegate's return: checks this browser started
+                                   the sign-in, sets the Core Session cookie (e9_session),
+                                   clears the login cookie, redirects to returnTo. A failure
+                                   redirects there with ?login_error=<reason>.
     POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth)
     GET  /auth/me               -- current User from session or Identity Token
     POST /auth/logout           -- { loggedOut, revoked }; revokes the Core Session when
@@ -27,6 +34,9 @@
                                    segment_id may be a role name. With admin
                                    scope a missing standard role row (admin)
                                    is created first. See docs/segments.md.
+    POST /admin/install-default-plugins
+                                -- install the default schema plugins (admin scope)
+                                   body: { path? }  Same as installDefaultPlugins.
     POST /admin/upgrade         -- run pending account upgrades (admin scope)
                                    body: { dry_run?, refresh?, drop_name_columns?, discard_names? }
                                    Same as PluginWorker.upgrade / e9core upgrade.
@@ -65,6 +75,13 @@
                           // each request (@engine9/core/superadmins/node).
         reads: {
           content: { table: 'content', segmentId: null, columns: ['*'] }
+        },
+        signIn: {                  // optional: GET /auth/start and /auth/callback
+          minLevel: 1,             // default 1
+          fields: ['email'],       // default ['email']
+          brand: { name: 'My Site', color: '#7a1fa2' },
+          loginProviders: ['google'],
+          sessionCookie: 'e9_session'
         }
       }
     });
@@ -98,6 +115,15 @@ import {
 } from '../auth/roles.js';
 
 export const DEFAULT_DELEGATE_URL = 'https://delegate.engine9.ai';
+import {
+  DEFAULT_SESSION_COOKIE,
+  clearSessionCookie,
+  plausibleEmail,
+  safeReturnPath,
+  sessionCookie,
+  sessionTokenFromCookie,
+  withQueryParam
+} from '../auth/signIn.js';
 import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
 import { parseOriginList } from './setupPage.js';
 
@@ -210,8 +236,11 @@ export function createApi({
     roles: configRoles,
     roleSegments: configRoleSegments,
     superadmins: configSuperadmins = null,
-    allowedOrigins: configAllowedOrigins = []
+    allowedOrigins: configAllowedOrigins = [],
+    signIn: configSignIn = {}
   } = config;
+  const signIn = configSignIn || {};
+  const sessionCookieName = signIn.sessionCookie || DEFAULT_SESSION_COOKIE;
 
   if (!delegateAuth && delegate?.sessionSecret) {
     delegateAuth = createDelegateAuth({
@@ -491,6 +520,28 @@ export function createApi({
     return json(200, { person_ids: result.personIds, dry_run: result.dryRun, tables: result.tables });
   }
 
+  async function postAdminInstallDefaultPlugins({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const path = body?.path ?? body?.stack;
+    if (path != null && typeof path !== 'string') return json(400, { error: 'body.path must be a string' });
+    let result;
+    try {
+      result = await worker.installDefaultPlugins(path ? { path } : {});
+    } catch (e) {
+      debug('postAdminInstallDefaultPlugins error:', e);
+      return json(422, { error: String(e.message || e) });
+    }
+    await logModification({
+      action: 'plugins.install_default',
+      apiKeyId: apiKey?.id,
+      roleId: ctx.roleId,
+      meta: { path: path || null }
+    });
+    return json(200, result ?? { ok: true });
+  }
+
   async function postAdminUpgrade({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
     const denied = requireScope(ctx, SCOPES.ADMIN);
@@ -638,6 +689,105 @@ export function createApi({
     return typeof delegateAuth.withSuperadmin === 'function' ? delegateAuth.withSuperadmin(session) : session;
   }
 
+  /* ---------------------------------------------------------------------
+     Server-side sign-in: one link, no script.
+
+       <a href="/api/auth/start?returnTo=/members">Log in</a>
+
+     /auth/start sends the browser to Delegate (one provider opens itself).
+     /auth/callback checks
+     that this browser started the sign-in (signed e9_login cookie, state and
+     nonce), logs the person in, sets the Core Session cookie, and redirects to
+     returnTo. Neither route takes an API key: a browser following a link cannot
+     send one. Everything that chooses what Delegate asks for is `config.signIn`,
+     never the query string, except returnTo (a path on this site), login_hint,
+     and prompt=select.
+  --------------------------------------------------------------------- */
+
+  const sessionMaxAge = signIn.sessionTtlSeconds || delegate?.sessionTtlSeconds || 86400;
+
+  function redirect(location, cookies = []) {
+    return json(302, null, {
+      headers: { location, 'cache-control': 'no-store' },
+      cookies
+    });
+  }
+
+  function notConfigured() {
+    return json(501, {
+      error: 'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi'
+    });
+  }
+
+  function getAuthStart({ query, apiBase }) {
+    if (!delegateAuth) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    const origin = new URL(apiBase).origin;
+    const next = safeReturnPath(query.returnTo ?? query.return_to, { origin });
+    const callback = `${apiBase}/auth/callback`;
+    const { url, cookie } = delegateAuth.beginLogin({
+      returnTo: callback,
+      data: { next },
+      secure: callback.startsWith('https:'),
+      minLevel: signIn.minLevel ?? 1,
+      maxLevel: signIn.maxLevel,
+      fields: signIn.fields ?? ['email'],
+      optionalFields: signIn.optionalFields,
+      loginLevel: signIn.loginLevel,
+      loginProviders: signIn.loginProviders,
+      brand: signIn.brand,
+      loginHint: plausibleEmail(query.login_hint),
+      prompt: query.prompt === 'select' ? 'select' : undefined
+    });
+    return redirect(url, [cookie]);
+  }
+
+  async function getAuthCallback({ query, headers, apiBase }) {
+    if (!delegateAuth) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    const origin = new URL(apiBase).origin;
+    const secure = apiBase.startsWith('https:');
+    const cookie = getHeader(headers, 'Cookie') || getHeader(headers, 'cookie');
+    const clearLogin = `e9_login=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
+    const nextFor = () => {
+      const pending = delegateAuth.readLoginRequest({ cookie, state: query.state });
+      return safeReturnPath(pending?.data?.next, { origin });
+    };
+
+    // Delegate answered with an error (declined, no level, bad request).
+    if (query.error) {
+      const known = delegateAuth.readLoginRequest({ cookie, state: query.state });
+      const next = known ? nextFor() : '/';
+      return redirect(known ? withQueryParam(next, 'login_error', String(query.error).slice(0, 64)) : next, [
+        clearLogin
+      ]);
+    }
+    if (!query.delegate_token) return redirect('/', [clearLogin]);
+
+    let result;
+    try {
+      result = await delegateAuth.finishLogin(query.delegate_token, {
+        state: query.state,
+        cookie,
+        secure,
+        returnTo: `${apiBase}/auth/callback`,
+        fallbackDomain: requestDomain(headers)
+      });
+    } catch (e) {
+      debug('getAuthCallback error:', e);
+      // A return this browser did not start: sign in again is the answer, not an error.
+      if (e.reason === 'state_mismatch') return redirect('/', [e.clearCookie || clearLogin]);
+      return redirect(withQueryParam(nextFor(), 'login_error', String(e.reason || 'login_failed')), [
+        e.clearCookie || clearLogin
+      ]);
+    }
+    const next = safeReturnPath(result.data?.next, { origin });
+    return redirect(next, [
+      sessionCookie(result.token, { cookieName: sessionCookieName, maxAge: sessionMaxAge, secure }),
+      result.clearCookie
+    ]);
+  }
+
   async function postAuthLogin({ body, headers }) {
     if (!delegateAuth) {
       return json(501, {
@@ -682,14 +832,23 @@ export function createApi({
     return json(200, me);
   }
 
-  async function postAuthLogout({ body, headers }) {
-    // Clearing the host cookie is the host's job (Set-Cookie Max-Age=0). With
-    // sessionRevocations configured, the session token also stops working.
+  async function postAuthLogout({ body, headers, apiBase }) {
+    // With sessionRevocations configured, the session token also stops working.
+    // The e9_session cookie (set by /auth/callback) is cleared here; a host that
+    // delivered its own cookie clears it itself.
+    const cookie = getHeader(headers, 'Cookie') || getHeader(headers, 'cookie');
+    const cookieToken = sessionTokenFromCookie(cookie, sessionCookieName);
     const sessionToken =
-      body?.session_token || getHeader(headers, 'X-Engine9-Session') || getHeader(headers, 'x-engine9-session');
+      body?.session_token ||
+      getHeader(headers, 'X-Engine9-Session') ||
+      getHeader(headers, 'x-engine9-session') ||
+      cookieToken;
     const revoked =
       sessionToken && typeof delegateAuth?.logout === 'function' ? await delegateAuth.logout(sessionToken) : false;
-    return json(200, { loggedOut: true, revoked });
+    const secure = Boolean(apiBase && apiBase.startsWith('https:'));
+    return json(200, { loggedOut: true, revoked }, {
+      cookies: cookieToken ? [clearSessionCookie({ cookieName: sessionCookieName, secure })] : []
+    });
   }
 
   function readSessionToken(token) {
@@ -970,6 +1129,12 @@ export function createApi({
         return withCors(json(503, { ok: false, error: String(e.message || e) }), req.headers);
       }
     }
+    // Browser navigations: a link cannot send an API key. These two routes
+    // change nothing a caller could abuse without the signed login cookie.
+    if (method === 'GET' && parts[0] === 'auth' && parts.length === 2 && (parts[1] === 'start' || parts[1] === 'callback')) {
+      const route = parts[1] === 'start' ? getAuthStart : getAuthCallback;
+      return route({ query: req.query || {}, headers: req.headers, apiBase: req.apiBase });
+    }
     // Everything else requires a valid API key (layer 1)
     const verification = await keyStore.verify(req.original || req);
     if (!verification.valid) {
@@ -982,7 +1147,8 @@ export function createApi({
       const sessionToken =
         req.body?.session_token ||
         getHeader(req.headers, 'X-Engine9-Session') ||
-        getHeader(req.headers, 'x-engine9-session');
+        getHeader(req.headers, 'x-engine9-session') ||
+        sessionTokenFromCookie(getHeader(req.headers, 'Cookie') || getHeader(req.headers, 'cookie'), sessionCookieName);
       if (sessionToken) session = await readSessionToken(sessionToken);
 
       if (!session) {
@@ -1014,7 +1180,7 @@ export function createApi({
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
-      result = await postAuthLogout({ body: req.body, headers: req.headers });
+      result = await postAuthLogout({ body: req.body, headers: req.headers, apiBase: req.apiBase });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'segments') {
       result = await postAuthSegments({
         body: req.body,
@@ -1042,6 +1208,8 @@ export function createApi({
       });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'erase') {
       result = await postAdminErase({ body: req.body, apiKey, query: req.query || {}, session });
+    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'install-default-plugins') {
+      result = await postAdminInstallDefaultPlugins({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
       result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'admin' && parts[1] === 'segments' && parts.length === 2) {
@@ -1094,12 +1262,14 @@ export function createApi({
     // flush batch logs without blocking the response when a ctx is available
     if (ctx?.waitUntil) ctx.waitUntil(logger.flush());
     else await logger.flush();
-    const headers = {
+    const headers = new Headers({
       'content-type': result.contentType || 'application/json',
       ...(result.headers || {})
-    };
-    if (result.status === 204) {
-      return new Response(null, { status: 204, headers });
+    });
+    // One Set-Cookie header per cookie (a plain object holds only one).
+    for (const cookie of result.cookies || []) headers.append('set-cookie', cookie);
+    if (result.status === 204 || result.status === 302) {
+      return new Response(null, { status: result.status, headers });
     }
     const payload =
       result.contentType && String(result.contentType).indexOf('text/html') === 0
@@ -1128,8 +1298,9 @@ export function createApi({
         for (const [name, value] of Object.entries(result.headers || {})) {
           res.setHeader(name, value);
         }
-        if (result.status === 204) {
-          res.status(204).end();
+        for (const cookie of result.cookies || []) res.append('Set-Cookie', cookie);
+        if (result.status === 204 || result.status === 302) {
+          res.status(result.status).end();
           return;
         }
         if (result.contentType && String(result.contentType).indexOf('text/html') === 0) {
@@ -1144,7 +1315,8 @@ export function createApi({
     };
   }
 
-  return { handle, handleFetch, expressHandler };
+  // `delegateAuth` is exposed so a site's own routes can gate pages (@engine9/core/auth/gate).
+  return { handle, handleFetch, expressHandler, delegateAuth };
 }
 
 export { SCOPES };

@@ -189,19 +189,25 @@ client takes the same `brand` option.
 The sign-in page also takes `background` and `text` (hex; text under 4.5:1
 contrast on the background is ignored), `font` (`system`, `sans`, `serif`,
 `rounded`, `mono`, or a Google Fonts family name), and `google`:
-`standard`, `brand` ("Continue with Google" in your color), or `skip`.
-`identityUrl` is a full-page redirect, so `skip` sends a signed-out visitor
-straight to Google when Google is the only choice (no `loginLevel: 2`).
+`standard`, `brand` ("Continue with Google" in your color), or `skip`
+(accepted; it does nothing extra). One provider on a full-page login opens
+that provider by itself.
 
 ```js
 auth.identityUrl({
   returnTo,
-  brand: { name: 'Solstice Wave', color: '#a855f7', background: '#0d0a1f', text: '#f1eeff', google: 'skip' }
+  brand: { name: 'Solstice Wave', color: '#a855f7', background: '#0d0a1f', text: '#f1eeff' }
 });
 ```
 
 Rules:
 [protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#branding).
+
+`loginHint: 'ada@example.com'` lets Google skip its account chooser when you
+already know the visitor's address. A first-time visitor still sees
+Delegate's share screen, where they can pick a different email or add a
+name. The exact conditions for each Delegate screen are in the
+[protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md#when-a-delegate-screen-appears).
 
 An emailed link may be opened in a different browser from the one that
 asked (a phone's mail app, an in-app browser). Delegate signs that browser
@@ -224,6 +230,14 @@ const { session, token } = await auth.login(identityToken, {
   returnTo: 'https://www.example.com/auth/callback',
 });
 ```
+
+The shortest route is the one core ships: `<a href="/api/auth/start?returnTo=/">Log in</a>`
+runs `beginLogin` and `finishLogin` for you (Delegate opens a single provider
+by itself) and the Core Session set as an `e9_session` cookie
+([auth/README.md](../../auth/README.md#one-link-sign-in-authstart-authcallback)).
+Set `config.signIn` for the brand, level, and fields, and see
+[`@engine9/core/auth/gate`](../../auth/README.md#one-link-sign-in-authstart-authcallback)
+to lock a page to a role.
 
 When the token arrives on your own server callback
 (`response_mode=query`), start with `auth.beginLogin({ returnTo })` and

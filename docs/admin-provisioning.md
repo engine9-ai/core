@@ -119,7 +119,16 @@ npx e9core segment add --segment admin --url https://www.example.com \
   --email a@example.org,b@example.org
 ```
 
-It posts to the site's `POST /api/auth/segments`. The site resolves `admin`
+A fresh Cloudflare database needs its tables first. `installDefaultPlugins` takes
+the same `--url`, so no SQL has to be replayed by hand:
+
+```bash
+npx e9core installDefaultPlugins --url https://www.example.com   # POST /api/admin/install-default-plugins
+```
+
+(`--stack @engine9/schemas/stacks/standard` installs a stack instead.)
+
+`segment add` posts to the site's `POST /api/auth/segments`. The site resolves `admin`
 with its own account id and, for an admin key, creates the `roles` plugin row
 and the admin segment row when they are missing, exactly as `--db` does.
 

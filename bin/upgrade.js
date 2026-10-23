@@ -77,3 +77,13 @@ export async function callSite({ url, key, method = 'POST', route, body, fetchIm
 export async function upgradeSite({ url, key, options = {}, fetchImpl = fetch }) {
   return callSite({ url, key, route: '/admin/upgrade', body: options, fetchImpl });
 }
+
+export async function installDefaultPluginsSite({ url, key, path, fetchImpl = fetch }) {
+  return callSite({
+    url,
+    key,
+    route: '/admin/install-default-plugins',
+    body: path ? { path } : {},
+    fetchImpl
+  });
+}

@@ -50,6 +50,7 @@
         and fails on the modified_at triggers this prints.
 
     e9core installDefaultPlugins --db sqlite://./engine9.db [--stack ...]
+    e9core installDefaultPlugins --url https://www.example.com [--key e9key_... | --env staging] [--stack ...]
         Live-install the published person schema plugins (default), or an opt-in stack
         with --stack (e.g. @engine9/schemas/stacks/standard): plugin rows +
         create/alter tables. Not the same as the stack named "standard" unless
@@ -140,7 +141,7 @@ import { setupKeys, readEnvValue } from './setupKeys.js';
 import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
-import { adminKey, callSite, upgradeSite } from './upgrade.js';
+import { adminKey, callSite, installDefaultPluginsSite, upgradeSite } from './upgrade.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
@@ -632,9 +633,20 @@ async function main() {
       break;
     }
     case 'installDefaultPlugins': {
+      const path = args.stack && args.stack !== true ? args.stack : args.path && args.path !== true ? args.path : undefined;
+      if (args.url && args.url !== true) {
+        const key = adminKey({
+          key: args.key && args.key !== true ? String(args.key) : undefined,
+          target: args.env && args.env !== true ? String(args.env) : undefined,
+          url: String(args.url)
+        });
+        const result = await installDefaultPluginsSite({ url: String(args.url), key, path });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
       const worker = getPluginWorker(args);
       try {
-        const result = await worker.installDefaultPlugins({ path: args.stack || args.path });
+        const result = await worker.installDefaultPlugins({ path });
         console.log(JSON.stringify(result, null, 2));
       } finally {
         await worker.destroy();
