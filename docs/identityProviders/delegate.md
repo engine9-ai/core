@@ -264,6 +264,32 @@ second delegate id for the same person, so the earlier anonymous visits join
 the signed-in person. Roles gate on `level` through `requiredAuth.minLevel`. Email is copied onto the person record only when it is
 verified or the Identity Level is at least 2.
 
+### Keep the return from Delegate fast
+
+The visitor waits on your server between Delegate's last screen and the
+logged-in page. Do not install or migrate anything in that request.
+`installDefaultPlugins` diffs every table of every schema plugin, which is
+dozens of round trips on D1, and a cold Worker would pay it on the first
+login of every isolate. A site's database is installed once and upgraded with
+`e9core upgrade`, so the login only needs to ask whether it is already set up:
+
+```js
+const { data } = await worker.query({
+  sql: `select path from plugin where path in (${paths.map(() => '?').join(',')})`,
+  values: paths // DEFAULT_CORE_SCHEMAS from '@engine9/core/stackMetadata'
+});
+if (!paths.every((p) => data.some((row) => row.path === p))) await worker.installDefaultPlugins();
+```
+
+One query when installed; a full install only for a database that is not.
+See [`demo-festival`](../../../demo-festival/src/lib/engine9.ts). Keep the
+callback to the login itself (verify, resolve the person, set the session)
+and load profile data after the page has rendered.
+
+The `@engine9/id` login widget shows **Logging in…** from the click and
+again on the return until `onLogin` answers, so the wait is visible even
+when it is long.
+
 ## Login request fields
 
 `POST /auth/login` (still needs an API key):
