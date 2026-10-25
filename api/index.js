@@ -45,7 +45,7 @@
                                 -- members of a segment (id or role name, e.g. admin)
                                    with their emails (admin scope)
     POST /admin/erase           -- erase people from every person_id table (admin scope)
-                                   body: { person_ids, dry_run?, keep?, domain_unids? }
+                                   body: { person_ids, dry_run?, keep? }
                                    Same as PersonWorker.erasePeople.
 
   Auth layers (see package README):
@@ -54,7 +54,7 @@
     3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
 
   Identity: X-Engine9-Session (HMAC Core Session) and/or Authorization Bearer JWT
-  (Identity Token; not e9key_/e9publickey_). Optional kvEnv caches Domain UNID → person_id.
+  (Identity Token; not e9key_/e9publickey_). person_id is always read from SQL.
 
   Usage:
     const api = createApi({
@@ -62,7 +62,6 @@
       keyStore,         // SqlApiKeyStore | KVApiKeyStore
       logger,           // JsonlFileLogger | BatchLogger | NullLogger
       delegateAuth,     // optional createDelegateAuth() — enables /auth/*
-      kvEnv,            // optional Cloudflare env (PERSON_ID_DELEGATE_KV)
       config: {
         pluginId,
         defaultRemoteInputId: 'website',
@@ -124,7 +123,6 @@ import {
   sessionTokenFromCookie,
   withQueryParam
 } from '../auth/signIn.js';
-import { getPersonIdByDomainUnid, setDelegatePersonId } from '../cloudflare/kv/personIdDelegate.js';
 import { parseOriginList } from './setupPage.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
@@ -201,7 +199,6 @@ export function requestDomain(headers) {
  *     sessionRevocations?: { get(key: string): Promise<unknown>, put(key: string, value: string, opts?: object): Promise<unknown> } | null,
  *     fetchImpl?: typeof fetch
  *   } | null,
- *   kvEnv?: object | null,
  *   config?: Record<string, unknown>
  * }} opts
  *
@@ -220,7 +217,6 @@ export function createApi({
   logger = new NullLogger(),
   delegateAuth = null,
   delegate = null,
-  kvEnv = null,
   config = {}
 }) {
   if (!worker) throw new Error('createApi requires a worker (client PersonWorker)');
@@ -500,9 +496,7 @@ export function createApi({
       result = await worker.erasePeople({
         personIds: body?.person_ids,
         keep: Array.isArray(body?.keep) ? body.keep : [],
-        domainUnids: Array.isArray(body?.domain_unids) ? body.domain_unids : [],
-        dryRun,
-        kvEnv: kvEnv?.PERSON_ID_DELEGATE_KV ? kvEnv : null
+        dryRun
       });
     } catch (e) {
       debug('postAdminErase error:', e);
@@ -650,32 +644,15 @@ export function createApi({
     const delegateUser = await delegateAuth.verifyIdentityToken(jwt, {
       fallbackDomain: requestDomain(headers)
     });
-    let personId = null;
-    if (kvEnv?.PERSON_ID_DELEGATE_KV && !delegateUser.mergedFrom) {
-      try {
-        const cached = await getPersonIdByDomainUnid(kvEnv, delegateUser.domainUnid);
-        const n = cached != null ? parseInt(cached, 10) : NaN;
-        if (Number.isInteger(n)) personId = n;
-      } catch {
-        /* KV miss / missing binding — fall through to SQL */
-      }
-    }
-    if (!Number.isInteger(personId)) {
-      personId = await resolveDelegatePersonId({
-        worker,
-        delegateUser,
-        pluginId,
-        remoteInputId: 'delegate',
-        inputType: defaultInputType
-      });
-      if (kvEnv?.PERSON_ID_DELEGATE_KV) {
-        try {
-          await setDelegatePersonId(kvEnv, delegateUser.domainUnid, personId);
-        } catch {
-          /* cache write is best-effort */
-        }
-      }
-    }
+    // person_id changes (imports, merges, erase), so it is read from SQL on
+    // every request and never cached outside the database.
+    const personId = await resolveDelegatePersonId({
+      worker,
+      delegateUser,
+      pluginId,
+      remoteInputId: 'delegate',
+      inputType: defaultInputType
+    });
     const roles = await delegateAuth.rolesForPerson(personId);
     const session = {
       personId,

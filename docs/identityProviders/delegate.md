@@ -29,7 +29,7 @@ Core setup without a provider: [../deploy.md](../deploy.md).
 | --- | --- |
 | **User** | The person delegate knows |
 | **UNID** | Delegate’s id for the person. It stays on delegate. Core never sees it |
-| **Domain UNID** | This Domain’s id for the person (`sub`, `domain:hex`). Core stores Domain UNID → `person_id` |
+| **Domain UNID** | This Domain’s id for the User (`sub`, `domain:hex`), the same for every address that User holds. Core finds the person by the confirmed email, and by the Domain UNID only when there is none ([Who is signing in](../../auth/README.md#who-is-signing-in-credential-identity-deduplication)) |
 | **Fields** | Values the User agreed to share (`given_name`, `email`, …), on the Identity Token as `fields` |
 | **Grant** | Which of the requested fields this Domain may receive. Core does not store the field values on the session |
 | **Identity Token** | Short-lived JWT delegate signs. The host verifies it |
@@ -115,9 +115,10 @@ const api = createApi({
 ```
 
    The existing `id.onChange` handler calls `id.core.login()` again with the
-   new token, so roles are re-read. Picking another address keeps the same
-   Domain UNID and `person_id`. A different Google account arrives as a
-   different Domain UNID, which is a different person to core.
+   new token, so roles are re-read. Picking another address signs in as the
+   person core knows by that address: a different person, unless core
+   already joined the two addresses. Say so next to the link. Use cases:
+   [Who is signing in](../../auth/README.md#who-is-signing-in-credential-identity-deduplication).
 
    Sites that log in on the server instead add a route that redirects to the
    same request with `prompt: 'select'`:
@@ -231,8 +232,8 @@ On the wire this is `login_level=2` on `/identity/authorize`
 ## What core does with the token
 
 `createDelegateAuth` verifies the JWT (ES256, JWKS, `iss`, `aud` = domain,
-`exp`), maps the **Domain UNID** (`sub`) to a `person_id`, reads segment
-roles, and may mint a Core Session.
+`exp`), finds the `person_id` (by the confirmed email, else the **Domain
+UNID**), reads segment roles, and may mint a Core Session.
 
 ```js
 const { session, token } = await auth.login(identityToken, {
@@ -266,12 +267,14 @@ Verification steps:
 4. Require `sub` to start with `domain:`. Read `merged_from`, `level`,
    `fields`, and `auth` from the token.
 
-Person resolution uses the Domain UNID. When Delegate merges a second
-browser into the person's UNID at sign-in, the next token carries
-`merged_from`, the Domain UNID that browser had before. Core records it as a
-second delegate id for the same person, so the earlier anonymous visits join
-the signed-in person. Roles gate on `level` through `requiredAuth.minLevel`. Email is copied onto the person record only when it is
-verified or the Identity Level is at least 2.
+The token is a credential; core decides who the person is. A confirmed email
+(`email_verified`, or Level 2 or more) is the only key, so each address a
+User shares is its own person unless core's data already joins them. With no
+confirmed email, the Domain UNID is the key, and `merged_from` (the Domain
+UNID the browser had before Delegate merged it) links to the same person.
+The rule, the names, and the use cases:
+[Who is signing in](../../auth/README.md#who-is-signing-in-credential-identity-deduplication).
+Roles gate on `level` through `requiredAuth.minLevel`.
 
 ### Keep the return from Delegate fast
 
@@ -315,19 +318,10 @@ Send visitors to `/identity/authorize` (`auth.identityUrl`). Pass
 and `loginLevel: 2` to offer an email sign-in link
 ([Sign-in screen](#sign-in-screen-google-only-or-google-plus-an-email-link)).
 
-## Optional Cloudflare cache
-
-On Workers you can pass `kvEnv: { PERSON_ID_DELEGATE_KV }` to `createApi`.
-D1 remains the source of truth. A token with `merged_from` skips the cache
-read so the earlier id is linked in SQL.
-
-| Key | Value |
-| --- | --- |
-| `delegate:<domain_unid>` | `person_id` |
-| `person:<person_id>` | Domain UNID |
-
-`POST /api/admin/erase` drops both keys for the people it erases. The reverse
-key holds one Domain UNID; pass `domain_unids` for others the person had.
+An `Authorization: Bearer <Identity Token>` request finds the person in SQL
+each time. Core does not cache `person_id` outside the database, because it
+changes when people are imported, merged, or erased. A Core Session already
+carries `personId`, so most requests do not look it up at all.
 
 Wire format: [id protocol](https://github.com/engine9-ai/id/blob/main/docs/protocol.md).
 Browser library: [id deploy](https://github.com/engine9-ai/id/blob/main/docs/deploy.md).

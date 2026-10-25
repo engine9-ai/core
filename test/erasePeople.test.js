@@ -6,16 +6,6 @@ import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 
-function memoryKv() {
-  const map = new Map();
-  return {
-    map,
-    async get(key) { return map.has(key) ? map.get(key) : null; },
-    async put(key, value) { map.set(key, String(value)); },
-    async delete(key) { map.delete(key); }
-  };
-}
-
 const unid = (n) => `site.example.com:${n.toString(16).padStart(64, '0')}`;
 
 async function personRows(worker, personId) {
@@ -57,17 +47,9 @@ test('erasePeople removes one person from every person_id table and leaves other
     assert.ok(dry.tables.person_id_delegate >= 1);
     assert.deepEqual(await personRows(worker, alexId), before, 'dry run deletes nothing');
 
-    const kv = memoryKv();
-    await kv.put(`delegate:${unid(1)}`, alexId);
-    await kv.put(`person:${alexId}`, unid(1));
-    await kv.put(`delegate:${unid(9)}`, alexId);
-    await kv.put(`delegate:${unid(2)}`, samId);
-
     const result = await worker.erasePeople({
       personIds: [alexId],
-      keep: ['person_email'],
-      kvEnv: { PERSON_ID_DELEGATE_KV: kv },
-      domainUnids: [unid(9)]
+      keep: ['person_email']
     });
     assert.equal(result.tables.person, 1);
     assert.equal(result.tables.person_email, undefined, 'kept table is not counted');
@@ -76,7 +58,6 @@ test('erasePeople removes one person from every person_id table and leaves other
     for (const [table, n] of Object.entries(after)) {
       if (table !== 'person_email') assert.equal(n, 0, `${table} erased`);
     }
-    assert.deepEqual([...kv.map.keys()], [`delegate:${unid(2)}`], 'only sam stays cached');
 
     const sam = await personRows(worker, samId);
     assert.ok(Object.values(sam).every((n) => n > 0), 'sam is untouched');

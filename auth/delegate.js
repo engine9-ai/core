@@ -541,12 +541,30 @@ export async function verifyDelegateIdentityToken({
 
 
 /*
-  Run a delegate identity through the normal inbound person pipeline so
-  the Domain UNID is recognized/deduped via id_type "delegate"
-  (person_id_delegate on SQLite/D1). When Delegate merged this browser's
-  UNID at login, `mergedFrom` rides along so the earlier Domain UNID resolves
-  to the same person. Email (when delegate provides one) rides along so a delegate
-  login merges with a person already known by email. Returns the person_id.
+  The address Delegate confirmed for this login, or undefined. Confirmed
+  means emailVerified, or an Identity Level of at least 2 (Contact Confirmed).
+*/
+export function delegateConfirmedEmail(delegateUser) {
+  const confirmed =
+    delegateUser?.emailVerified === true ||
+    (typeof delegateUser?.level === 'number' && delegateUser.level >= 2);
+  return confirmed && delegateUser.email ? String(delegateUser.email) : undefined;
+}
+
+/*
+  Find the person for a Delegate login through the normal inbound person
+  pipeline. The Identity Token is a credential, not a person: Delegate
+  confirms an address, and core's own data decides who has it.
+
+  - A confirmed email is the only key. The person is whoever core knows by
+    that address, exactly as an import of that address would find them. The
+    Domain UNID is not stored on that person, so two addresses one Delegate
+    User holds stay two people unless core already joined them.
+  - With no confirmed email, the Domain UNID is the key (id_type "delegate",
+    person_id_delegate), and `mergedFrom` links the browser's earlier Domain
+    UNID to the same person.
+
+  Returns the person_id. See auth/README.md, "Who is signing in".
 */
 export async function resolveDelegatePersonId({
   worker,
@@ -558,18 +576,16 @@ export async function resolveDelegatePersonId({
 }) {
   if (!worker) throw new Error('resolveDelegatePersonId requires a worker (PersonWorker)');
   if (!delegateUser?.domainUnid) throw new Error('resolveDelegatePersonId requires delegateUser.domainUnid');
-  const record = { ...person, delegate_id: delegateUser.domainUnid };
-  if (delegateUser.mergedFrom && delegateUser.mergedFrom !== delegateUser.domainUnid) {
-    record.delegate_merged_from = delegateUser.mergedFrom;
+  const email = delegateConfirmedEmail(delegateUser);
+  const record = { ...person };
+  if (email) {
+    record.email = email;
+  } else {
+    record.delegate_id = delegateUser.domainUnid;
+    if (delegateUser.mergedFrom && delegateUser.mergedFrom !== delegateUser.domainUnid) {
+      record.delegate_merged_from = delegateUser.mergedFrom;
+    }
   }
-  // Only copy email onto the person record when Delegate has confirmed it
-  // (emailVerified === true) or the Identity Token is at least Level 2
-  // (Contact Confirmed). Unverified Level 0/1 emails must not merge people
-  // via the email identifier.
-  const canCopyEmail =
-    delegateUser.emailVerified === true ||
-    (typeof delegateUser.level === 'number' && delegateUser.level >= 2);
-  if (canCopyEmail && delegateUser.email && !record.email) record.email = delegateUser.email;
   const summary = await worker.processPeople({
     pluginId,
     remoteInputId,
@@ -1166,6 +1182,7 @@ export default {
   siteOriginFromUrl,
   domainFromUrl,
   resolveDelegatePersonId,
+  delegateConfirmedEmail,
   createSessionToken,
   verifySessionToken,
   readCookie,

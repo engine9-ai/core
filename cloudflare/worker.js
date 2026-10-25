@@ -84,7 +84,6 @@ export default {
             sessionRevocations: env.SESSION_REVOCATIONS || null
           }
         : null,
-      kvEnv: env.PERSON_ID_DELEGATE_KV ? env : null,
       config: {
         pluginId: env.E9_PLUGIN_ID,
         defaultRemoteInputId: 'website',

@@ -175,6 +175,17 @@ export const LOGIN_REQUEST_TOKEN_TYPE: "e9.login";
 /** One cookie's value from a Cookie request header, or null. */
 export function readCookie(cookieHeader: string | null | undefined, name: string): string | null;
 
+/** The address Delegate confirmed for this login (emailVerified, or Level 2+), or undefined. */
+export function delegateConfirmedEmail(delegateUser: {
+  email?: string;
+  emailVerified?: boolean;
+  level?: number;
+} | null | undefined): string | undefined;
+
+/**
+ * person_id for a Delegate login. A confirmed email is the only key; the
+ * Domain UNID is the key only when there is no confirmed email.
+ */
 export function resolveDelegatePersonId(options: {
   worker: unknown;
   delegateUser: {
@@ -518,6 +529,7 @@ declare const _default: {
   siteOriginFromUrl: typeof siteOriginFromUrl;
   domainFromUrl: typeof domainFromUrl;
   resolveDelegatePersonId: typeof resolveDelegatePersonId;
+  delegateConfirmedEmail: typeof delegateConfirmedEmail;
   createSessionToken: typeof createSessionToken;
   verifySessionToken: typeof verifySessionToken;
   readCookie: typeof readCookie;

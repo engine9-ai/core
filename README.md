@@ -239,7 +239,8 @@ What happens: delegate issues an Identity Token for your Domain; `id`
 verifies it in the browser and shows or hides `data-e9-*` content by
 **Identity Level** (soft, for layout); `id.core.login()` posts the token to
 `/api/auth/login`; core verifies the signature against delegate's public
-keys, maps the token's Domain UNID to a `person_id` in your database, reads
+keys, finds the `person_id` in your database by the token's confirmed email
+(else its Domain UNID; see [auth/README.md](auth/README.md#who-is-signing-in-credential-identity-deduplication)), reads
 segment **roles**, and returns a Core Session. From then on `id.core.fetch()`
 sends that session and core can refuse requests with a real 403.
 
@@ -465,7 +466,7 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | `GET /admin/segments` | Every segment with its role name and membership policy, plus standard roles with no row yet                                                              | `admin`                                                           |
 | `GET /admin/segments/:segment/members` | Members of a segment (id or role name, e.g. `admin`) with their emails                                                              | `admin`                                                           |
 | `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database          | `admin`                                                           |
-| `POST /admin/erase`   | `{ person_ids, dry_run?, keep?, domain_unids? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                       | `admin`                                                           |
+| `POST /admin/erase`   | `{ person_ids, dry_run?, keep? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                                     | `admin`                                                           |
 
 Everything under `/api` in the shipped Worker and `serve`.
 
@@ -481,7 +482,6 @@ column (found when it runs, so tables a later release adds are included),
 then the `person` row. Their identifiers go too, so a later sign-in with the
 same email or Domain UNID makes a new person. Send `dry_run: true` first to
 see the row counts. `keep: ["transaction"]` leaves tables you must retain.
-With `PERSON_ID_DELEGATE_KV` bound, the cached Domain UNID is dropped as well.
 Person ids are not reused after deletion. Records already shipped to a
 modification log sink or an export are outside the database; erase them
 there.

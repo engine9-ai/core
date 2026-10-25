@@ -14,21 +14,6 @@ const UNID = `${DOMAIN}:${'a'.repeat(64)}`;
 const RETURN_ORIGIN = 'https://site.example.com';
 const DELEGATE_URL = 'https://delegate.network';
 
-function memoryKv() {
-  const store = new Map();
-  return {
-    async get(key) {
-      return store.has(key) ? store.get(key) : null;
-    },
-    async put(key, value) {
-      store.set(key, value);
-    },
-    async delete(key) {
-      store.delete(key);
-    }
-  };
-}
-
 async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, sub = UNID, fields, auth }) {
   const jwt = new SignJWT({
     level,
@@ -78,14 +63,15 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       return new Response('not found', { status: 404 });
     };
 
-    const peopleByUnid = new Map();
+    // Like the pipeline: a confirmed email is the key, else the Domain UNID.
+    const peopleByKey = new Map();
     let nextPersonId = 1;
     worker.processPeople = async ({ batch }) => {
       const personIds = (batch || []).map((row) => {
-        const domainUnid = row.delegate_id;
-        if (domainUnid && peopleByUnid.has(domainUnid)) return peopleByUnid.get(domainUnid);
+        const key = row.email ?? row.delegate_id;
+        if (key && peopleByKey.has(key)) return peopleByKey.get(key);
         const id = nextPersonId++;
-        if (domainUnid) peopleByUnid.set(domainUnid, id);
+        if (key) peopleByKey.set(key, id);
         return id;
       });
       return { personIds, records: personIds.length, recordsWithPersonIds: personIds.length };
@@ -115,12 +101,10 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       scopes: ['admin']
     });
 
-    const kv = memoryKv();
     const api = createApi({
       worker,
       keyStore,
       delegateAuth,
-      kvEnv: { PERSON_ID_DELEGATE_KV: kv },
       config: {
         pluginId,
         roles: {
@@ -183,7 +167,6 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
     assert.equal(meJwt.body.domainUnid, UNID);
     assert.equal(meJwt.body.level, 2);
     assert.equal(meJwt.body.fields?.email, 'api@example.com');
-    assert.equal(await kv.get(`delegate:${UNID}`), String(personId));
 
     const loginJwt = await api.handle({
       method: 'POST',
@@ -281,14 +264,15 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
       return new Response('not found', { status: 404 });
     };
 
-    const peopleByUnid = new Map();
+    // Like the pipeline: a confirmed email is the key, else the Domain UNID.
+    const peopleByKey = new Map();
     let nextPersonId = 1;
     worker.processPeople = async ({ batch }) => {
       const personIds = (batch || []).map((row) => {
-        const domainUnid = row.delegate_id;
-        if (domainUnid && peopleByUnid.has(domainUnid)) return peopleByUnid.get(domainUnid);
+        const key = row.email ?? row.delegate_id;
+        if (key && peopleByKey.has(key)) return peopleByKey.get(key);
         const id = nextPersonId++;
-        if (domainUnid) peopleByUnid.set(domainUnid, id);
+        if (key) peopleByKey.set(key, id);
         return id;
       });
       return { personIds, records: personIds.length, recordsWithPersonIds: personIds.length };

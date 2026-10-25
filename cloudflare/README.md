@@ -30,15 +30,11 @@ API from a Worker.
 | engine9 database | D1 (SQLite dialect) |
 | API endpoints | Worker (`api.handleFetch`) |
 | API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
-| Identity-provider id cache | KV `PERSON_ID_DELEGATE_KV` — used by the default provider. See [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md) |
-| Segment membership cache | KV `PERSON_SEGMENT_VK` — edge cache of `person_segment` (`@engine9/core/cloudflare/kv`) |
+| Revoked Core Sessions | KV `SESSION_REVOCATIONS` (optional) |
 | Modification logs | R2 batch objects (`BatchLogger` + `r2Sink`), flushed via `ctx.waitUntil` |
 
-> **Cloudflare-only KV caches.** `PERSON_ID_DELEGATE_KV` and `PERSON_SEGMENT_VK`
-> exist only on Cloudflare-style deployments, and only matter after you turn
-> on an identity provider. Generic Node / MySQL sites read the same rows from
-> SQL. D1 remains the source of truth. The binding name matches the default
-> provider; see [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
+`person_id`, identifiers, and segment membership are read from D1 on every
+request. Nothing caches them in KV.
 
 ## Install
 
@@ -133,7 +129,6 @@ one piece at a time.
    | `DELEGATE_URL` | var, optional | Your own delegate. Default `https://delegate.network` |
    | `E9_DOMAIN` | var, optional | JWT `aud` when pages and `/api` are on different hosts |
    | `E9_ALLOWED_ORIGINS` | var, optional | Browser origins allowed to call the API (CORS) |
-   | `PERSON_ID_DELEGATE_KV`, `PERSON_SEGMENT_VK` | KV, optional | Caches below |
 
 ### Bundler aliases
 
@@ -216,20 +211,6 @@ curl -X POST https://your-worker.example.workers.dev/api/upsert/person_segment \
 curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
   -H "Authorization: Bearer e9key_..."
 ```
-
-## KV caches (Cloudflare only)
-
-Optional. Skip these until login works. `PERSON_SEGMENT_VK` caches segment
-membership. `PERSON_ID_DELEGATE_KV` is the default identity provider’s
-person-id cache; key layout is in
-[docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
-D1 stays the source of truth.
-
-### `PERSON_SEGMENT_VK` — cache of `person_segment`
-
-| Key | Value |
-| --- | --- |
-| `seg:<segment_id>:<person_id>` | ISO timestamp (existence = member) |
 
 ## Modification logs
 

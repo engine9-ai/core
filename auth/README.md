@@ -131,9 +131,91 @@ Default provider implementation. Behavior and vocabulary:
 [docs/identityProviders/delegate.md](../docs/identityProviders/delegate.md).
 
 `verifyDelegateIdentityToken({ token, delegateUrl, domain, jwks?, issuer?, fetchImpl? })`
-verifies the provider JWT and returns the provider user object. Email is
-written onto the person record only when it is verified or the Identity Level
-is at least 2.
+verifies the provider JWT and returns the provider user object.
+`resolveDelegatePersonId` finds the person for it, by the rule in the next
+section.
+
+## Who is signing in: credential, identity, deduplication
+
+A login involves three different things. Keep them apart.
+
+| | What it is | Decided by | Stored in |
+| --- | --- | --- | --- |
+| **Credential** | The Identity Token. Delegate says: this browser's User controls this address, at this Identity Level, for this Domain | Delegate | The token, then the Core Session |
+| **Identity** | The person: one `person` row and its `person_id` | core | `person`, `person_email`, `person_id_*` |
+| **Deduplication** | Whether two identifiers (two addresses, an address and a CRM id) are one person | core's people pipeline, from core's own data | `person_id_*` |
+
+Delegate issues credentials. It is not a deduplication mechanism. That one
+Delegate User holds two addresses is not evidence to core that they are one
+person.
+
+### The names
+
+| Name | Meaning |
+| --- | --- |
+| `sub` (Domain UNID) | Delegate's id for the Delegate User on this Domain, `domain:hex`. It is the same for every address that User holds. It names the holder of the credential, not a person in core. On the session as `domainUnid` |
+| `fields.email`, `fields.email_verified` | The address the User chose to share with this Domain, and whether Delegate confirmed it |
+| Confirmed email | `email_verified` is true, or the Identity Level is 2 or more. `delegateConfirmedEmail(delegateUser)` returns it, or undefined |
+| Login record | The one row core sends through the people pipeline (`processPeople`) at login, exactly as an import would: `{ email }` with a confirmed email, else `{ delegate_id: sub }` (plus `delegate_merged_from`). Fields the site passes as `login(token, { person })` ride along |
+| `person_id` | core's id for the person. Roles (`person_segment`) and every person table hang on it. On the session as `personId` |
+| `session.email` | The confirmed address of this login. Undefined when there is none |
+
+### The rule
+
+1. **A confirmed email is the key.** core finds the person it knows by that
+   address, or creates one, the same way an import of that address would.
+   The Domain UNID is not stored on that person.
+2. **With no confirmed email, the Domain UNID is the key**
+   (`person_id_delegate`). This covers Level 0 visitors, an unconfirmed
+   address (Facebook addresses are never confirmed), and a Grant that does not
+   share `email`. `merged_from` links the browser's earlier Domain UNID to the
+   same person.
+3. **Only core joins people.** Two addresses are one person when core's data
+   already says so: an import that gives both the same `person_id` or
+   `remote_person_id`, or a merge an operator made. Never because Delegate
+   holds both for one User.
+
+Why:
+
+- Roles and superadmins are granted by address (`addPeople({ emails })`, the
+  superadmin list). Grant `pat@work.example` a role, and whoever signs in with
+  that confirmed address holds it, whatever address they used before.
+- One Delegate User is not always one person. A family or a team shares an
+  inbox, and many people keep work and home apart on purpose.
+- If the Domain UNID stuck to the first person, every later address that User
+  picked would sign in as that first person, and the site's records for the
+  new address would never be found.
+
+### Use cases
+
+| The person… | Signs in with | They are |
+| --- | --- | --- |
+| Signs in for the first time | `a@` (new to core) | A new person with `a@` |
+| Was imported, put on a roster, or granted a role by address | `a@` | That person |
+| Signs in again | `a@` | The same person |
+| Uses "Change your login email" and picks a second address | `b@` (new to core) | A new person with `b@`. The `a@` person is untouched; signing in with `a@` returns to it |
+| Picks an address that already belongs to someone in core | `b@` | That person. Delegate confirmed they control `b@` |
+| Has both addresses already joined in core | `b@` | The joined person |
+| Uses a different Google account | `c@` | Whoever core knows by `c@`, like any other address |
+| Has no confirmed email | (none) | The person for their Domain UNID |
+| Was a Level 0 visitor, then confirms an address | `a@` | The person for `a@`. The visitor record for the Domain UNID is not joined to it |
+
+### What a site does
+
+- Use `session.personId` for everything you store. Do not key your own tables
+  on `sub` or on an email address.
+- Show `session.email` as "signed in as". It is always the address of this
+  login.
+- Treat "Change your login email" (`prompt: 'select'`) as "sign in with
+  another address". Say so next to the link: *What you see here follows the
+  address you sign in with.*
+- To make two addresses one person, join them in core (an import with the
+  same `person_id` or `remote_person_id`, or an operator merge). Delegate
+  cannot do it for you.
+
+People who signed in before core 1.16.0 keep their `person_id_delegate`
+rows. A login with a confirmed email no longer reads them; a login without
+one still does.
 
 ## `createDelegateAuth`
 
@@ -423,8 +505,8 @@ All routes except `GET /ok` require an API key.
 
 - `Authorization: Bearer <jwt>` (3 segments, not an API key) resolves a
   session when `delegateAuth.verifyIdentityToken` exists.
-- Optional `kvEnv` (`{ PERSON_ID_DELEGATE_KV }`): `getPersonIdByDomainUnid`
-  before SQL, `setDelegatePersonId` after resolve.
+  The person is found in SQL on every such request
+  (`resolveDelegatePersonId`); nothing caches `person_id`.
 - Keep `X-Engine9-Session` for HMAC sessions.
 
 | Route               | Notes                                                                                    |

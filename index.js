@@ -121,6 +121,7 @@ export {
   domainFromUrl,
   createSessionCookieHeaders,
   resolveDelegatePersonId,
+  delegateConfirmedEmail,
   createSessionToken,
   verifySessionToken,
   readCookie,
