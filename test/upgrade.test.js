@@ -12,7 +12,7 @@ import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { installDefaultPluginsSite, upgradeEndpoint, upgradeSite } from '../bin/upgrade.js';
 import { ensurePluginRow } from './helpers/applySchemas.js';
-import { makeLegacyPersonNames, personColumns } from './helpers/legacyPersonNames.js';
+import { enableExcludePii, makeLegacyPersonNames, personColumns } from './helpers/legacyPersonNames.js';
 import appendName from '@engine9/schemas/person_name/transforms/outbound/appendName.js';
 
 const PERSON_NAME = '@engine9/schemas/person_name';
@@ -174,7 +174,7 @@ test('upgrade finishes a partial run without overwriting newer person_name rows'
 test('PII-free account: dropping the columns refuses to discard names unless asked, never installs person_name', async () => {
   const worker = newWorker();
   try {
-    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii' });
+    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii', excludePii: true });
     const pluginId = await addSite(worker, 'pii-free-site');
     await signup(worker, pluginId, [{ email: 'ada@example.com', given_name: 'Ada' }]);
 
@@ -213,10 +213,28 @@ test('PII-free account: dropping the columns refuses to discard names unless ask
   }
 });
 
-test('PII-free account with empty name columns: drop_name_columns drops them without discard_names', async () => {
+test('limited-pii stack without exclude_pii is not PII-free for upgrade', async () => {
   const worker = newWorker();
   try {
     await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii' });
+    const dry = (await worker.upgrade({ dry_run: true, drop_name_columns: true })).upgrades.find(
+      (u) => u.id === 'person_name_columns'
+    );
+    assert.equal(dry.pii_free, false, 'stack alone does not set pii_free');
+    await enableExcludePii(worker);
+    const after = (await worker.upgrade({ dry_run: true, drop_name_columns: true })).upgrades.find(
+      (u) => u.id === 'person_name_columns'
+    );
+    assert.equal(after.pii_free, true, 'exclude_pii sets pii_free');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('PII-free account with empty name columns: drop_name_columns drops them without discard_names', async () => {
+  const worker = newWorker();
+  try {
+    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii', excludePii: true });
     const done = (await worker.upgrade({ drop_name_columns: true })).upgrades[1];
     assert.deepEqual(done.dropped, ['person.given_name', 'person.family_name']);
   } finally {

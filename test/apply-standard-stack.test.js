@@ -106,16 +106,58 @@ test('installDefaultPlugins respects utilities/limited-pii exclude_pii setting',
   }
 });
 
-test('installDefaultPlugins reinstalls an already-installed limited-pii stack', async () => {
+test('installDefaultPlugins with exclude_pii reinstalls the limited-pii stack', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/limited-pii' });
+    await worker.install({ path: '@engine9/schemas/utilities/limited-pii', unique: true });
+    const { data } = await worker.query({
+      sql: 'select id from plugin where path=? limit 1',
+      values: ['@engine9/schemas/utilities/limited-pii']
+    });
+    await worker.setSetting({ pluginId: data[0].id, name: 'exclude_pii', value: true });
     const r = await worker.installDefaultPlugins();
     assert.equal(r.complete, true);
     assert.equal(r.path, '@engine9/schemas/stacks/limited-pii');
     const { tables } = await worker.tables();
     assert.ok(tables.indexOf('person_hash_email') >= 0);
     assert.ok(tables.indexOf('person_name') < 0);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('stack alone without exclude_pii is not PII-free for installDefaultPlugins', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/limited-pii' });
+    const r = await worker.installDefaultPlugins();
+    assert.equal(r.complete, true);
+    // Without the setting, bare install falls through to DEFAULT_CORE_SCHEMAS (not the stack).
+    assert.equal(r.path, null);
+    assert.ok(r.installed.includes('@engine9/schemas/person_name'));
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('new PII-free account: utility + exclude_pii then installDefaultPlugins', async () => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    // Same two steps bootstrapAccount({ exclude_pii: true }) runs before the stack install
+    // (core cannot load e9console here; the option is still on PluginWorker.bootstrapAccount).
+    await worker.deploy({ schema: '@engine9/schemas/plugin' });
+    await worker.install({ path: '@engine9/schemas/utilities/limited-pii', unique: true });
+    const { data } = await worker.query({
+      sql: 'select id from plugin where path=? limit 1',
+      values: ['@engine9/schemas/utilities/limited-pii']
+    });
+    await worker.setSetting({ pluginId: data[0].id, name: 'exclude_pii', value: true });
+    const r = await worker.installDefaultPlugins();
+    assert.equal(r.path, '@engine9/schemas/stacks/limited-pii');
+    const { tables } = await worker.tables();
+    assert.ok(tables.includes('person_hash_email'));
+    assert.ok(!tables.includes('person_name'));
   } finally {
     await worker.destroy();
   }

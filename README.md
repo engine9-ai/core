@@ -279,7 +279,9 @@ a Next.js app, another schema) reads and writes that same database.
 `person_name`, `person_email`, `person_phone`, `person_address`, `segment`,
 `person_segment`, …). `person` holds only the id and timestamps; names and
 contact details are in their own tables so a PII-free account
-(`@engine9/schemas/stacks/limited-pii`) can leave them out. Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
+(`exclude_pii` on `@engine9/schemas/utilities/limited-pii`, which steers
+`installDefaultPlugins` to `@engine9/schemas/stacks/limited-pii`) can leave
+them out. Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
 `timeline`, `transaction`, and related schema plugins. Pass `--stack` / `path`, or
 set the warehouse `default_stack` setting on `@engine9/schemas/plugin`.
 Those published names are the contract. `person` stays `person`. `event` stays

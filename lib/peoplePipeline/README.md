@@ -47,11 +47,13 @@ extraTransforms / omitTransforms ──► per-job additions and removals
       beforeAll → normalize → id → assign → upsert → afterAll
 ```
 
-A PII-free account (`@engine9/schemas/stacks/limited-pii`) is the clearest
-example: it has `person_hash` installed and `person_email` / `person_phone` /
-`person_address` not installed. The weave for that account has hash steps in
-`id` and `upsert` and no plaintext steps anywhere. No flag in core, no branch —
-just different rows.
+A PII-free account (`exclude_pii` on `@engine9/schemas/utilities/limited-pii`,
+usually with the `@engine9/schemas/stacks/limited-pii` install list) is the
+clearest example: it has `person_hash` installed and `person_email` /
+`person_phone` / `person_address` not installed. The weave for that account has
+hash steps in `id` and `upsert` and no plaintext steps anywhere. With
+`exclude_pii` on, leftover plaintext plugin rows are also skipped at weave
+time.
 
 ## Joining as a plugin author
 

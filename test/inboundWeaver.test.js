@@ -93,6 +93,27 @@ test('limited-pii stack weaves person_hash and no plaintext contact plugin', asy
   }
 });
 
+test('exclude_pii skips leftover plaintext plugin rows in the inbound weave', async () => {
+  const worker = newWorker();
+  try {
+    await applyStandardStack(worker);
+    await worker.install({ path: `${I}/person_hash`, unique: true });
+    await worker.install({ path: `${I}/utilities/limited-pii`, unique: true });
+    const { data } = await worker.query({
+      sql: 'select id from plugin where path=? limit 1',
+      values: [`${I}/utilities/limited-pii`]
+    });
+    await worker.setSetting({ pluginId: data[0].id, name: 'exclude_pii', value: true });
+
+    const described = await worker.getInboundTransforms({ pluginId: 'p1', describe: true });
+    assert.doesNotMatch(described, /person_name|person_email|person_phone|person_address/, described);
+    assert.match(described, /person_hash:transforms:extractContactHashes/);
+    assert.match(described, /person_hash:transforms:upsertPersonHash/);
+  } finally {
+    await worker.destroy();
+  }
+});
+
 test('omitTransforms drops a woven step for one job; extraTransforms append by slot', async () => {
   const worker = newWorker();
   try {

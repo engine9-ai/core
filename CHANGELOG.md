@@ -7,6 +7,26 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.15.3: PII-free is `exclude_pii` only
+
+`exclude_pii` on `@engine9/schemas/utilities/limited-pii` is the only signal
+that an account is PII-free. The limited-pii stack is an install list; it no
+longer contributes `metadata.exclude`, and an installed stack alone does not
+make `upgrade` report `pii_free` or re-select itself in
+`installDefaultPlugins`. With the setting on, leftover plaintext plugin rows
+are also skipped in the inbound weave. `bootstrapAccount({ exclude_pii: true })`
+installs the utility, sets the setting, then installs the limited-pii stack.
+
+### What a site changes
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Accounts that rely on the limited-pii stack without the utility setting | Stack installed, `exclude_pii` unset or false | Install `@engine9/schemas/utilities/limited-pii` and set `exclude_pii` to `true` before upgrading core/schemas |
+| Docs / runbooks that say "the stack excludes plaintext plugins" | Stack `exclude` as the install guard | Use `exclude_pii`; the stack only lists what to install |
+
+No `lib/upgrades` entry. Pair with `@engine9/schemas` that drops `exclude`
+from `stacks/limited-pii`.
+
 ## 1.15.2: Test scripts
 
 No change to what a site runs, and no `lib/upgrades` entry. Contributors:
