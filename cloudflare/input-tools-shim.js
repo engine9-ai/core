@@ -4,7 +4,8 @@
   The real @engine9/input-tools index imports server-only dependencies
   (@aws-sdk/client-s3, archiver, unzipper, googleapis) that cannot ship in a
   Worker bundle.  The schema plugin transforms used by the client only need the
-  small portable pieces below. Most are implemented in @engine9/core.
+  small portable pieces below: the value and id helpers from input-tools'
+  portable values.js and uuidTools.js (through @engine9/core's utilities).
   mergeIntoQueue is re-exported from @engine9/input-tools/mergeIntoQueue.js,
   which has no heavy dependencies. Five schema plugin upsert transforms import it
   from the package root, and wrangler aliases that root to this shim.

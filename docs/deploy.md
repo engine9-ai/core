@@ -60,7 +60,7 @@ Node commands read plugins from `node_modules` when they start. The Worker
 bundle is rebuilt by wrangler's build step (`e9core setup` put
 `npx e9core build-plugins` there), so the deploy picks up the new schema
 plugins. The deploy does not change the database. `e9core upgrade` does: it
-runs any data upgrades the release needs, then reinstalls the installed
+runs the data upgrades the schema plugins declare, then reinstalls the installed
 schema plugins so new tables, columns, and inbound pipelines reach D1. Add
 `--dry-run` to see the plan first. It is safe to run again.
 
@@ -337,7 +337,7 @@ commands below.
 | `--refresh-schema` | Load tables again (only safe on an empty database) |
 | `--rotate` | Replace the API keys and setup token in `.env` (with `--remote`, that environment's keys too) |
 | `--env <name>` | With `--remote`, target that wrangler environment. Keys go to `.env.<name>` |
-| `--db sqlite://./engine9.db` | SQLite file used before the data is copied to D1 |
+| `--db sqlite://./engine9.db` | The local database `e9core serve` uses. D1 never gets a copy of it |
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
 
 ```bash
@@ -347,9 +347,12 @@ npx e9core setup-keys --remote
 npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes public
 ```
 
-`installDefaultPlugins` fills a database file on your computer. `setup` copies that
-into D1. Tables without the plugin rows from `installDefaultPlugins` will not
-accept people writes.
+`installDefaultPlugins` fills a database file on your computer. For D1,
+`setup` installs the default plugins into a new file in a temporary folder,
+loads its dump with `wrangler d1 execute --file`, prints the tables it
+loaded, and deletes it, so test people in `engine9.db` never reach D1.
+Tables without the plugin rows from `installDefaultPlugins` will not accept
+people writes.
 
 The Worker that `setup` points at is
 [`cloudflare/worker.js`](../cloudflare/worker.js). Optional KV and R2 bindings
@@ -406,6 +409,7 @@ console.log(await res.json());
 | Task                | Call                                        |
 | ------------------- | ------------------------------------------- |
 | Health              | `GET /api/ok`                               |
+| Database matches the code | `npx e9core status --url <site>` ([status.md](status.md)) |
 | Setup wizard (local) | `GET /setup?token=…` on `e9core serve` only |
 | Signup              | `POST /api/people` with `{ people: [ … ] }` |
 | Who is logged in    | `GET /api/auth/me` (after identity-provider login) |
@@ -426,6 +430,62 @@ Configuration failures are not fixed by signing in again.
 | other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
 | `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `wrangler secret put SESSION_SECRET`, then redeploy. |
 | invalid or expired token | `invalid_identity_token` | The Identity Token did not verify. | Sign in again. |
+
+### When the API answers `unauthorized`
+
+Every route except `GET /api/ok` checks the API key first. A rejected key is
+a 401 with `kind: "api_key"`:
+
+```json
+{ "error": "unauthorized: unknown_key", "reason": "unknown_key", "kind": "api_key", "hint": "…" }
+```
+
+`kind: "api_key"` means the site's key was refused, not the person. Signing in
+again never fixes it, and `POST /api/auth/login` fails the same way. The
+Worker also logs one line per rejected key, which `npx wrangler tail` shows:
+`engine9 api key rejected: unknown_key key_hash=3f9a0c… path=/auth/login origin=…`.
+`key_hash` is the first 12 characters of the key's SHA-256, never the key.
+
+| Reason | What is happening | What to do |
+| --- | --- | --- |
+| `missing_key` | The request sent no key | Send `E9_PUBLIC_API_KEY` (pages) or the admin key (scripts) as `Authorization: Bearer` or `X-API-Key` |
+| `unknown_key` | No row in the deployed database's `api_key` table has this key's hash | Check the key below. Usually the database is missing the site's row |
+| `inactive_key` | The row exists but was turned off, usually by `setup --rotate` | Send the current key. A page that still sends an old public key needs a redeploy |
+| `expired_key` | The row's `expires_at` has passed | Send the current key |
+
+`npx e9core status --url <site>`, run in the site's repository, checks all of
+this: the account, the Worker's secrets, both keys by hash, and whether the
+site accepts the public key ([status.md](status.md)). It still works when the
+site refuses the admin key, through Wrangler. By hand:
+
+```bash
+npx wrangler whoami                 # the account that owns the database_id in wrangler.jsonc?
+npx wrangler d1 info engine9        # fails on the wrong account
+node --env-file=.env -e "console.log(require('node:crypto').createHash('sha256').update(process.env.E9_PUBLIC_API_KEY).digest('hex'))"
+npx wrangler d1 execute engine9 --remote --command "SELECT name, active, substr(key_hash, 1, 12) AS key_hash FROM api_key"
+```
+
+The public key's hash should be in the list with `active` 1. For the admin
+key, hash `E9_ADMIN_API_KEY` from `.env.production` the same way. A rejected
+admin key also stops `e9core upgrade --url` and `e9core segment --url`, so fix
+the keys first.
+
+If a key's row is missing, put both rows back without changing either key:
+
+```bash
+npx e9core setup-keys --remote      # add --env staging for another environment
+```
+
+It sends the keys in `.env` and `.env.production` to that D1 database again
+(rows that are already there are left alone) and saves the secrets. Keys are
+read from the database on every request, so no redeploy is needed. Run it
+where `.env` holds the public key the live page sends (compare it with the
+`publicKey` in the page source). A folder with no `.env` gets new keys, which
+the deployed page does not have.
+
+If `wrangler whoami` lists more than one account, add
+`"account_id": "<the account that owns the database>"` to `wrangler.jsonc`
+so Wrangler cannot run a command against the other one.
 
 `npm install @engine9/schemas@latest` then `npx wrangler deploy` is how a
 new `@engine9/schemas` version reaches the Worker. Leave the `@engine9/core`

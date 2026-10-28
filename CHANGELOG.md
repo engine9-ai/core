@@ -7,6 +7,276 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.17.0: `e9core status`, an audit log, upgrades move into the plugins, and a refused API key says so
+
+This release came out of a deploy where login looked successful and nothing
+else worked. The production `api_key` table had lost the site's public key, so
+core refused every login with `unauthorized: unknown_key`. The site's page
+code swallowed that error, and Wrangler was logged in to a second Cloudflare
+account, so it took a long time to find. 1.17.0 makes a refused key easy to
+see, removes a trap that can leave production without its key rows, and adds
+`e9core status` so the next one is found in one command.
+
+Install, deploy, then `npx e9core upgrade --url <site>` as usual. The default
+upgrade changes no people data: it adds three `plugin` columns. One new
+upgrade, `plugin_history`, is opt-in
+([docs/upgrade-1.17.md](docs/upgrade-1.17.md)). Pair with `@engine9/schemas`
+1.13.0: core no longer carries upgrades, and 1.13.0 is the release that
+declares them.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | `e9core setup` keeps no schema file. It no longer writes `migrations/0001_engine9.sql`, and deletes the one an earlier setup wrote | Every Cloudflare site set up before 1.17.0 | No |
+| 2 | A refused API key is a 401 with `reason`, `kind: "api_key"`, and `hint`, and the Worker logs it | Page code and scripts that handle core's 401s | No. `error` is unchanged |
+| 3 | `@engine9/id` 1.14.0 throws `site_key_rejected` for a refused key and reports it in the console | Sites that use `@engine9/id` with `core` | No |
+| 4 | New: `e9core status` and `GET /api/admin/status` | Every site | No |
+| 5 | New: an audit log, separate from the data log. Admin records move to it | Sites that read `upgrade`, `plugins.install_default`, or role membership records from `LOG_BUCKET` | No |
+| 6 | New: `e9core upgrade --plugin`, `--failed`, `--sql`; every install is recorded on its `plugin` row | Sites with plugins outside `@engine9/schemas` | No |
+| 7 | `plugin_history` is retired, with an opt-in drop | Databases that have the table | No |
+| 8 | Upgrades keep no ledger in `setting`; each run is an audit record | Scripts that read `upgrade.<id>` settings | No |
+| 9 | Upgrades are declared by plugins, with `shouldUpgrade`, and each release has an upgrade window | Plugin authors; code that reads `PluginWorker.upgrade` results by position; scripts that pass upgrade flags | Yes, without `@engine9/schemas` 1.13.0 |
+
+### First: check that production still has your keys
+
+Do this on any Cloudflare site that has seen a failed D1 import, a
+`table api_key already exists` error, or a Wrangler command run while logged
+in to more than one account. In the site's repository, after installing
+1.17.0, `npx e9core status --url <site>` does all of it. By hand:
+
+```bash
+npx wrangler whoami                 # is this the account that owns the database_id in wrangler.jsonc?
+node --env-file=.env -e "console.log(require('node:crypto').createHash('sha256').update(process.env.E9_PUBLIC_API_KEY).digest('hex'))"
+npx wrangler d1 execute engine9 --remote --command "SELECT name, active, substr(key_hash, 1, 12) AS key_hash FROM api_key"
+```
+
+The first 12 characters of the hash should appear in the list with `active`
+1. Repeat with `E9_ADMIN_API_KEY` from `.env.production`. If either row is
+missing, `npx e9core setup-keys --remote` puts both back without changing a
+key; no redeploy is needed. Run it in the folder whose `.env` holds the public
+key the live page sends. Details:
+[When the API answers `unauthorized`](docs/deploy.md#when-the-api-answers-unauthorized).
+
+If `wrangler whoami` lists more than one account, add
+`"account_id": "<the account that owns the database>"` to `wrangler.jsonc`.
+
+### 1. The schema file is no longer in `migrations/`
+
+`migrations/` is the folder `wrangler d1 migrations` reads. Setup loaded
+`migrations/0001_engine9.sql` with `wrangler d1 execute --file`, so D1's
+migration ledger never recorded it. As a result:
+
+- `wrangler d1 migrations list engine9 --remote` showed it as unapplied, forever.
+- `wrangler d1 migrations apply` ran it again against a database that already
+  had the tables, and failed with `table api_key already exists` (or with
+  `SQLITE_ERROR [code: 7500]` on the `modified_at` triggers).
+
+Setup now keeps no schema file at all. When it loads D1 (the first run, a
+later `--remote`, or `--refresh-schema`), it installs the default plugins
+into a new SQLite file in a temporary folder, loads its dump with
+`wrangler d1 execute --file`, prints the tables it loaded, and deletes the
+folder. D1 gets a fresh install, never a copy of `engine9.db`, so test people
+from the local site stay local. The next `npx e9core setup` deletes the old
+file when its first line is `-- generated by e9core setup`. To do it now:
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Your repository | `migrations/0001_engine9.sql` | Delete it (`git rm migrations/0001_engine9.sql` if it was committed). Setup builds the schema again whenever it loads D1 |
+| `wrangler d1 migrations list` | Lists `0001_engine9.sql` as unapplied | Nothing to apply. It disappears once the file is gone |
+| Your own migrations in `migrations/` (`0002_…` and on) | Project tables you apply with `migrations apply` | Keep them. Only the engine9 file moves |
+| Scripts or CI | `wrangler d1 migrations apply` run to "finish" engine9 setup | Remove that step. Engine9 tables change through `npx e9core upgrade --url <site>` after a deploy ([docs/upgrading.md](docs/upgrading.md)) |
+| Scripts | `wrangler d1 execute … --file migrations/0001_engine9.sql` to load a new database | `npx e9core setup --remote` (add `--env <name>` for another environment) |
+| `--db` on a Cloudflare `setup` | Expecting that file's rows to be copied to D1 | Nothing is copied. Load data through the API or `e9core` after setup |
+
+If you ran `migrations apply` on production and it failed, run the key check
+above.
+
+### 2. A refused API key says so
+
+Before, a refused key returned only `{ "error": "unauthorized: unknown_key" }`,
+which page code could not tell apart from a person who is not signed in.
+Now:
+
+```json
+{
+  "error": "unauthorized: unknown_key",
+  "reason": "unknown_key",
+  "kind": "api_key",
+  "hint": "No row in this site's api_key table matches the key this request sent. …"
+}
+```
+
+`kind: "api_key"` means the site's key was refused, not the person. Reasons:
+`missing_key`, `unknown_key`, `inactive_key`, `expired_key`. The Worker also
+logs `engine9 api key rejected: <reason> key_hash=<first 12 hex> path=… origin=…`
+for every refused key except a missing one, so `npx wrangler tail` shows it.
+The key itself is never logged.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Page code that calls core | `catch {}` or `.catch(() => {})` around `/api/auth/login`, `/api/auth/me`, or other core calls | Let errors through, or show one when `body.kind === 'api_key'` (with `@engine9/id`: `isSiteKeyRejected(err)`). Signing in again never fixes it |
+| Page code | A 401 always treated as "sign in again" | Check `kind` first. Only a 401 without `kind: "api_key"` is about the person |
+| Code that matches `error` | `'unauthorized: unknown_key'` | Nothing; the text is unchanged. `body.reason` is the stable field to use |
+| Log alerts on Worker `console.warn` | — | Expect `engine9 api key rejected:` lines. Each one is a request with a key this site does not accept |
+
+### 3. `@engine9/id` 1.14.0
+
+`core.login()`, `core.me()`, and `core.changeRole()` throw a
+`DelegateIdentityError` with code `site_key_rejected` when core refuses the
+public key. `details` holds `status`, `reason`, and `hint`. The client logs it
+once with `console.error`, even when the site catches it, and `loginWidget()`
+tells the visitor it is a site problem. It also recognizes the bare
+`unauthorized: <reason>` text from core before 1.17.0, so you can upgrade
+`@engine9/id` first. Other core failures keep their codes and now carry
+core's message and `details.reason` too.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| `package.json` | `"@engine9/id": "1.13.2"` | `"1.14.0"` |
+| Script tag or CDN pin | `@engine9/id@1.13.2/dist/id.iife.js` | `@engine9/id@1.14.0/dist/id.iife.js` |
+| `onCoreError` or a `catch` around `core.login()` | Ignores the error | `if (isSiteKeyRejected(err))` show it (`engine9Id.isSiteKeyRejected` with the script tag) |
+
+### 4. `e9core status`
+
+Read-only: does the database match the deployed code, and if not, what fixes
+it. It checks the Cloudflare account, the Worker's secrets, the site keys by
+hash, pending upgrades, the modified_at triggers, and, for every installed
+plugin, that its code is in the build, its schema diff, settings, inbound
+snapshot, dependencies, last install, and whether the code changed since. It
+works through the site (`--url`), a database (`--db`), or, when the site
+refuses the admin key, a copy of the D1 schema made with Wrangler. Every check
+id and fix: [docs/status.md](docs/status.md). Plugins can add their own checks
+with a `status` hook.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Deploy script | `wrangler deploy && e9core upgrade --url $E9_SITE_URL` | Add `&& e9core status --url $E9_SITE_URL` |
+
+### 5. The audit log
+
+Two logs, never mixed. The data log (`logger`, `LOG_BUCKET`) keeps people
+data. The audit log (`audit`, `AUDIT_BUCKET` on Cloudflare) keeps schema,
+plugin, key, setting, and role changes, with no people data beyond the
+subject of a role grant. `plugin.install` records list the tables and columns
+each install changed. Without an audit sink, records go to the Worker log as
+one JSON line each. New exports: `ConsoleLogger` and `s3Sink` from
+`@engine9/core/logging`.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| `wrangler.jsonc` | No `AUDIT_BUCKET` | An `r2_buckets` entry with `"binding": "AUDIT_BUCKET"` on its own bucket |
+| Your own Worker or Node host | `createApi({ logger })` | Also pass `audit` (a `BatchLogger` with `r2Sink`/`s3Sink`, or a `JsonlFileLogger`) |
+| Readers of `modifications/` | `action: 'upgrade'` or `'plugins.install_default'` | Read them from `audit/` |
+| Readers of `modifications/` | `segment.membership` on a role segment (`admin`, or a `config.roles` segment) | `role.grant` / `role.revoke` in `audit/`. Other segments stay in `modifications/` |
+
+### 6. Upgrading one plugin; the last install on the `plugin` row
+
+`e9core upgrade` still reinstalls only `@engine9/schemas` plugins. Any other
+plugin is upgraded by name: `e9core upgrade --plugin <path> --url <site>`.
+`--failed` retries every plugin whose last install failed; `--dry-run --sql`
+shows the statements first. Every install now writes three new columns on its
+`plugin` row (`@engine9/schemas` 1.12.0): `last_install_at`,
+`last_install_status` (`ok` or `failed`), and `last_install` (what ran it,
+the step it stopped at, the error, package versions, a schema hash).
+`e9core status` and `--failed` read them. `e9core upgrade` adds the columns;
+it now reinstalls `@engine9/schemas/plugin` before the other plugins, so
+the rest of that same upgrade is recorded. Installs on a database without the
+columns skip the record.
+`SchemaWorker.deploy` returns `changes` (the diff it applied).
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Plugins outside `@engine9/schemas` | Expecting `e9core upgrade` to deploy their new columns | `npx e9core upgrade --plugin <path> --url <site>` after each release of that plugin |
+| Code that copies or compares whole `plugin` rows (`select * from plugin`) | — | Expect `last_install_at`, `last_install_status`, `last_install` |
+
+### 7. `plugin_history` is retired
+
+`@engine9/schemas` 1.12.0 no longer declares the table; nothing wrote to it.
+The opt-in upgrade drops it when empty:
+`npx e9core upgrade --url <site> --drop-plugin-history`
+([docs/upgrade-1.17.md](docs/upgrade-1.17.md)).
+
+### 8. Upgrades keep no ledger
+
+Since 1.10.1 each upgrade wrote an `upgrade.<id>` setting on
+`@engine9/schemas/plugin` the first time a run found the account current.
+Nothing depended on it: every upgrade checks the data on every run. Settings
+are for what people set, so the ledger is gone. Each real `e9core upgrade`, by
+any route (`--url`, `--db`, the server), now writes one `upgrade` or
+`upgrade.plugins` record to the audit log with what it applied and who ran
+it. The `upgrade.<id>` settings core wrote stay until you delete them
+([docs/upgrade-1.17.md](docs/upgrade-1.17.md#4-optional-delete-the-old-ledger-settings)).
+The result of `PluginWorker.upgrade` no longer has `recorded` on each upgrade.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| Scripts or checks | `select … from setting where name = 'upgrade.person_name'` | `npx e9core upgrade --url <site> --dry-run` (every step `current`), or the audit log's `upgrade` records |
+| Code that reads `PluginWorker.upgrade` results | `upgrades[].recorded` | `upgrades[].status` |
+
+### 9. Upgrades are declared by plugins
+
+`lib/upgrades` held upgrades for specific tables (`person_name`,
+`setting.value`, `plugin_history`) that most databases never needed, and
+every change to a schema plugin needed a core release. Core now holds only the
+machinery. A plugin's default export declares `upgrades`, each with
+`shouldUpgrade(ctx)` (does it apply, from the schema alone) and `run(ctx)`,
+and an `upgradeFrom` version ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)).
+
+- `e9core upgrade` runs the upgrades of every `@engine9/schemas` plugin in the
+  build, core plugin first. The four upgrades core carried are in
+  `@engine9/schemas` 1.13.0 with the same ids, options, and results. Each
+  result entry also names its `plugin`, and the list is in plugin order.
+- Any other plugin's upgrades run with `e9core upgrade --plugin <path>`,
+  before its reinstall. A plugin that carries only upgrades, for any plugins'
+  tables, runs that way without a plugin row.
+- `e9core status` calls `shouldUpgrade`, then dry-runs only the upgrades that
+  apply. Upgrades that do not apply fold into `upgrades.none`. On a Wrangler
+  copy it now checks `shouldUpgrade` too; `upgrades.unchecked` is gone.
+- Upgrade windows: `e9core upgrade` refuses a database last upgraded with a
+  core older than `CORE_UPGRADE_FROM` (1.9.0), and skips a plugin installed
+  from a version older than its `upgradeFrom`. `e9core status` reports
+  `upgrades.window` and `plugin.upgrade_window`. A database with no install
+  records yet (every database before this release) gets a warning, and the
+  upgrade records them.
+- `e9core upgrade` passes every flag it does not read itself to the upgrades
+  (`--drop-name-columns` is `drop_name_columns`, as before), and the result's
+  `unused_options` names a truthy one no upgrade reads.
+- New: `SQLWorker.changeColumnType({ table, column, type })`, for an upgrade
+  that changes a column's type on D1, SQLite, or MySQL.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| `package.json` | `@engine9/schemas` below `^1.13.0` | `^1.13.0`. With 1.12.0, core 1.17.0 runs no upgrades |
+| Code that reads `PluginWorker.upgrade` results | `upgrades[0]`, `upgrades[1]` | `upgrades.find((u) => u.id === 'person_name')` (order is by plugin) |
+| Code that reads the audit log | `meta.upgrades` as a list of ids | A list of `{ plugin, id }` |
+| Code that imports from `@engine9/core/lib/upgrades` | `personName.js`, `settingValueText.js` | Nothing to import: the upgrades run through `PluginWorker.upgrade` |
+| A plugin that needs a data change at a release | Asking for an upgrade in core | `upgrades` in the plugin ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)) |
+| A database that still has `@engine9/interfaces` plugin paths | — | The 1.9.1 runbook first ([docs/upgrade-1.9.md](docs/upgrade-1.9.md)). The window cannot see it: databases before this release have no install records |
+
+### Also: one copy of the shared helpers, in `@engine9/input-tools` 2.7.0
+
+Core needs `@engine9/input-tools` ^2.7.0, now MIT licensed. The value and id
+helpers every engine9 package uses live once, in its portable
+`values.js` and `uuidTools.js`. `@engine9/core/utilities` re-exports them
+instead of keeping its own copies: `bool`, `getStringArray`, `isValidDate`,
+`relativeDate`, `ObjectError`, `dateFromString`, `getPluginUUID`,
+`getInputUUID`, `getVersionedUUID`, `getUUIDTimestamp`, `getEntryType`,
+`getEntryTypeId`, `getTimelineEntryUUID`. Timeline and plugin ids no longer
+come from two copies that could drift apart.
+
+New in both: `parseJSONValue(value, fallback)` (a JSON column's value, which
+is text on SQLite and D1 and an object on MySQL), `stableStringify` (JSON
+with sorted keys), and `chunkArray`. New in `@engine9/core/sql/shared`:
+`isMissingColumnError`.
+
+One behavior change: `dateFromString` (and so `getVersionedUUID` and
+`getTimelineEntryUUID`) reads a 12-digit numeric string as epoch
+milliseconds, as `@engine9/input-tools` always did, where core's copy needed 13
+digits and threw on 12.
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| `package.json` | `"@engine9/input-tools": "^2.6.0"` or lower | `^2.7.0` (npm installs it with core) |
+
 ## 1.16.0: Login finds people by confirmed email; the KV caches are gone
 
 Two changes. Read both before you deploy. Neither changes the database: there

@@ -275,3 +275,46 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
     await worker.destroy();
   }
 });
+
+test('client API: a refused key says kind api_key, and the log never has the key', async (t) => {
+  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    const keyStore = new SqlApiKeyStore({ worker });
+    await keyStore.deploy();
+    const { key: turnedOff, id: turnedOffId } = await keyStore.create({ name: 'old', scopes: ['public'] });
+    await keyStore.revoke({ id: turnedOffId });
+    const api = createApi({ worker, keyStore, config: {} });
+    const warn = t.mock.method(console, 'warn', () => {});
+
+    const unknown = 'e9publickey_not_in_this_database';
+    const res = await api.handle({
+      method: 'POST',
+      path: '/auth/login',
+      headers: { authorization: `Bearer ${unknown}`, origin: 'https://www.example.com' },
+      body: { delegate_token: 'x' }
+    });
+    assert.equal(res.status, 401);
+    assert.equal(res.body.error, 'unauthorized: unknown_key');
+    assert.equal(res.body.reason, 'unknown_key');
+    assert.equal(res.body.kind, 'api_key');
+    assert.match(res.body.hint, /site setup problem/);
+    assert.equal(warn.mock.callCount(), 1);
+    const line = warn.mock.calls[0].arguments[0];
+    assert.match(line, /api key rejected: unknown_key/);
+    assert.ok(line.includes(`key_hash=${hashApiKey(unknown).slice(0, 12)}`));
+    assert.ok(line.includes('path=/auth/login'));
+    assert.ok(line.includes('origin=https://www.example.com'));
+    assert.ok(!line.includes(unknown), 'the key itself is never logged');
+
+    const inactive = await api.handle({ method: 'GET', path: '/auth/me', headers: { 'x-api-key': turnedOff } });
+    assert.equal(inactive.status, 401);
+    assert.equal(inactive.body.reason, 'inactive_key');
+    assert.equal(inactive.body.kind, 'api_key');
+
+    const missing = await api.handle({ method: 'GET', path: '/auth/me', headers: {} });
+    assert.equal(missing.body.reason, 'missing_key');
+    assert.equal(warn.mock.callCount(), 2, 'a request with no key is not logged');
+  } finally {
+    await worker.destroy();
+  }
+});

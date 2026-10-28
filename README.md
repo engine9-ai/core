@@ -131,7 +131,8 @@ const worker = new PersonWorker({
 const api = createApi({
   worker,
   keyStore: new SqlApiKeyStore({ worker }),
-  logger: new JsonlFileLogger({ directory: "./logs" }),
+  logger: new JsonlFileLogger({ directory: "./logs" }), // people data
+  audit: new JsonlFileLogger({ directory: "./logs/audit", prefix: "engine9-audit" }), // schema, plugins, roles
   // Login with delegate. Leave out `delegate` to run the people API alone.
   delegate: { sessionSecret: process.env.SESSION_SECRET },
   config: {
@@ -364,7 +365,9 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once                                                                                                                                                                                                                        |
 | `npx e9core setup-keys [--remote [--env staging]]`           | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets                                                                          |
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person`     | Print one schema's SQL                                                                                                                                                                                                                                 |
-| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: release upgrades, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
+| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: the upgrades the schema plugins declare, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
+| `npx e9core upgrade --plugin <path> --url <site>`            | Run one plugin's upgrades, then reinstall it (any package; `upgrade` alone touches `@engine9/schemas` only). Plugins declare their own upgrades ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)); `--failed` retries every failed install; `--dry-run --sql` shows the statements |
+| `npx e9core status --url <site>` or `--db <url>`             | Read-only: does the database match the deployed code? Keys, account, upgrades, and every plugin's schema and last install, each with its fix. See [docs/status.md](docs/status.md) |
 | `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
 | `npx e9core segment list\|members\|add\|remove --url <site>` or `--db <url>` | Segment membership, including the first admin (`add --segment admin --email …`). `--url` uses the site's API with the admin key, so it reaches D1. See [docs/segments.md](docs/segments.md) |
 
@@ -390,7 +393,10 @@ Request
 Keys are SHA-256 hashed at rest (`SqlApiKeyStore` in the `api_key` table;
 `KVApiKeyStore` is an optional Cloudflare store). Fields: `scopes` (required,
 non-empty), `default_role_id`, `active`, `expires_at`. `store.rotate()`
-creates a new key and revokes the old one.
+creates a new key and revokes the old one. A rejected key is a 401 with
+`kind: "api_key"` and a `reason` (`missing_key`, `unknown_key`,
+`inactive_key`, `expired_key`): the site's key failed, not the person
+([what to check](docs/deploy.md#when-the-api-answers-unauthorized)).
 
 | Scope                          | Surface                 | Allows                                                      |
 | ------------------------------ | ----------------------- | ----------------------------------------------------------- |
@@ -465,7 +471,7 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | `POST /admin/install-default-plugins` | `{ path? }` — install the default schema plugins (or a stack); the same as `e9core installDefaultPlugins`                                          | `admin`                                                           |
 | `GET /admin/segments` | Every segment with its role name and membership policy, plus standard roles with no row yet                                                              | `admin`                                                           |
 | `GET /admin/segments/:segment/members` | Members of a segment (id or role name, e.g. `admin`) with their emails                                                              | `admin`                                                           |
-| `POST /admin/upgrade` | `{ dry_run?, refresh?, drop_name_columns?, discard_names? }` — run pending account upgrades (`PluginWorker.upgrade`) against this site's database          | `admin`                                                           |
+| `POST /admin/upgrade` | `{ dry_run?, refresh?, plugins?, …upgrade options }` — run the upgrades plugins declare (`PluginWorker.upgrade`), e.g. `drop_name_columns`, against this site's database          | `admin`                                                           |
 | `POST /admin/erase`   | `{ person_ids, dry_run?, keep? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                                     | `admin`                                                           |
 
 Everything under `/api` in the shipped Worker and `serve`.
@@ -577,7 +583,8 @@ plugin in a package the project lists.
 - `auth/` — API keys, policy, HMAC helpers. See [auth/README.md](auth/README.md)
 - `auth/delegate.js` — default identity provider. See [docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)
 - `api/` — framework-agnostic endpoint handlers (`handleFetch`, `expressHandler`)
-- `logging/` — JSONL file logger and batch logger (R2 sink included)
+- `logging/` — the data log and the audit log (never mixed): JSONL file logger, batch logger, R2 and S3 sinks, console fallback for audit records
+- `lib/status/` — `e9core status` checks ([docs/status.md](docs/status.md))
 - `cloudflare/` — Worker, wrangler example, input-tools shim. See [cloudflare/README.md](cloudflare/README.md)
 - `bin/` — the `e9core` CLI, `serve`, and the setup wizard
 

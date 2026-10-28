@@ -1,9 +1,18 @@
 /*
-  Engine9 client modification logging.
+  Engine9 logging: two logs, never mixed.
 
-  Every write through the client API is (1) saved to the database and then
-  (2) appended to a modification log for long-term storage and downstream
-  processing.  Two logger styles:
+  Data log (`logger`): every write of people data through the client API is
+  (1) saved to the database and then (2) appended here for long-term storage
+  and downstream processing. Large and constant. Records carry person ids.
+
+  Audit log (`audit`): changes to the database's structure, plugins, keys,
+  settings, and who holds a role. A few records per deploy. No people data
+  beyond the person id of a role grant. Configured on its own sink (Cloudflare:
+  AUDIT_BUCKET, prefix audit/), so access to it never includes access to
+  people data. With no audit sink, ConsoleLogger writes each record as one
+  JSON line to the Worker log; it is never sent to the data log.
+
+  Logger styles (either log can use any of them):
 
     JsonlFileLogger  -- generic deployments: appends JSON lines to a local
                         file (one file per day), suitable for shipping to
@@ -14,10 +23,11 @@
                         Call `flush()` inside ctx.waitUntil() per request,
                         or let maxRecords trigger it.
 
-  Records carry person ids. Do not use console.log as a sink in production:
-  Worker logs are kept and readable by everyone with dashboard access.
+    ConsoleLogger    -- audit fallback only: one JSON line per record on the
+                        console. Never for the data log: Worker logs are kept
+                        and readable by everyone with dashboard access.
 
-  Log record shape (one per modification):
+  Record shape:
     { ts, accountId, action, table?, records?, personIds?, apiKeyId?, meta? }
 */
 
@@ -76,10 +86,45 @@ export function r2Sink(bucket, { prefix = 'modifications' } = {}) {
   };
 }
 
+/*
+  Sink for S3 or any S3-compatible store (R2's S3 API from Node). Pass your
+  own client so core adds no dependency:
+    import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+    s3Sink({ client: new S3Client({ region }), PutObjectCommand, bucket: 'my-audit', prefix: 'audit' })
+*/
+export function s3Sink({ client, PutObjectCommand, bucket, prefix = 'audit' } = {}) {
+  if (!client || typeof PutObjectCommand !== 'function' || !bucket) {
+    throw new Error('s3Sink needs { client, PutObjectCommand, bucket }');
+  }
+  return async (records) => {
+    const key = `${prefix}/${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomUUID().slice(0, 8)}.jsonl`;
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: records.map((r) => JSON.stringify(r)).join('\n'),
+        ContentType: 'application/x-ndjson'
+      })
+    );
+  };
+}
+
+/* Audit fallback when no audit sink is configured: one JSON line per record. `fallback` tells status. */
+export class ConsoleLogger {
+  constructor({ write } = {}) {
+    this.fallback = true;
+    this.write = write || ((line) => console.info(line));
+  }
+  async log(entry) {
+    this.write(JSON.stringify({ engine9_audit: true, ...logRecord(entry) }));
+  }
+  async flush() {}
+}
+
 /* No-op logger for tests / opt-out */
 export class NullLogger {
   async log() {}
   async flush() {}
 }
 
-export default { JsonlFileLogger, BatchLogger, NullLogger, r2Sink };
+export default { JsonlFileLogger, BatchLogger, NullLogger, ConsoleLogger, r2Sink, s3Sink };

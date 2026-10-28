@@ -37,9 +37,13 @@
     POST /admin/install-default-plugins
                                 -- install the default schema plugins (admin scope)
                                    body: { path? }  Same as installDefaultPlugins.
-    POST /admin/upgrade         -- run pending account upgrades (admin scope)
-                                   body: { dry_run?, refresh?, drop_name_columns?, discard_names? }
+    POST /admin/upgrade         -- run the upgrades plugins declare (admin scope)
+                                   body: { dry_run?, refresh?, plugins?, failed?, sql?,
+                                           …the upgrades' own options (drop_name_columns) }
                                    Same as PluginWorker.upgrade / e9core upgrade.
+    GET  /admin/status          -- read-only: does the database match the deployed
+                                   code? (admin scope) ?plugin=<path>[,<path>]
+                                   Same as PluginWorker.status / e9core status --url.
     GET  /admin/segments        -- every segment and its membership policy (admin scope)
     GET  /admin/segments/:id/members
                                 -- members of a segment (id or role name, e.g. admin)
@@ -60,7 +64,9 @@
     const api = createApi({
       worker,           // client PersonWorker
       keyStore,         // SqlApiKeyStore | KVApiKeyStore
-      logger,           // JsonlFileLogger | BatchLogger | NullLogger
+      logger,           // data log: JsonlFileLogger | BatchLogger | NullLogger
+      audit,            // audit log (schema, plugins, roles); default ConsoleLogger
+      environment,      // the site's env (Worker env / process.env), read by GET /admin/status
       delegateAuth,     // optional createDelegateAuth() — enables /auth/*
       config: {
         pluginId,
@@ -86,7 +92,7 @@
     });
 */
 import debug$0 from 'debug';
-import { NullLogger } from '../logging/index.js';
+import { ConsoleLogger, NullLogger } from '../logging/index.js';
 import {
   resolveAuthContext,
   hasScope as scopesAllow,
@@ -124,8 +130,41 @@ import {
   withQueryParam
 } from '../auth/signIn.js';
 import { parseOriginList } from './setupPage.js';
+import { extractApiKey, hashApiKey } from '../auth/index.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
+
+/*
+  Layer 1 failures. `kind: 'api_key'` marks the site's own key, not the person
+  signing in: signing in again never fixes one. `error` keeps its
+  `unauthorized: <reason>` text for callers that match on it.
+*/
+const API_KEY_HINTS = {
+  missing_key: 'The request sent no API key. Send the site key as Authorization: Bearer or X-API-Key.',
+  unknown_key:
+    "No row in this site's api_key table matches the key this request sent. If it is the site's own key (E9_PUBLIC_API_KEY or E9_ADMIN_API_KEY), the database the deployed site uses is missing that row. This is a site setup problem, not a sign-in problem.",
+  inactive_key: 'This key was turned off, usually by a key rotation. Use the current key for this site.',
+  expired_key: 'This key has expired. Use the current key for this site.'
+};
+
+function apiKeyRejection(reason) {
+  return {
+    error: `unauthorized: ${reason}`,
+    reason,
+    kind: 'api_key',
+    ...(API_KEY_HINTS[reason] ? { hint: API_KEY_HINTS[reason] } : {})
+  };
+}
+
+/* One Worker log line per rejected key (wrangler tail), never the key itself. */
+function logApiKeyRejection(req, reason) {
+  if (reason === 'missing_key') return;
+  const key = extractApiKey(req.original || req);
+  const origin = getHeader(req.headers, 'Origin') || getHeader(req.headers, 'origin') || '';
+  console.warn(
+    `engine9 api key rejected: ${reason} key_hash=${key ? hashApiKey(key).slice(0, 12) : '-'} path=/${String(req.path || '').replace(/^\/+/, '')}${origin ? ` origin=${origin}` : ''}`
+  );
+}
 
 function isApiKeyBearer(token) {
   const t = String(token || '');
@@ -190,6 +229,8 @@ export function requestDomain(headers) {
  *   worker: object,
  *   keyStore: object,
  *   logger?: object,
+ *   audit?: object,
+ *   environment?: Record<string, unknown>,
  *   delegateAuth?: object | null,
  *   delegate?: {
  *     sessionSecret?: string,
@@ -215,12 +256,19 @@ export function createApi({
   worker,
   keyStore,
   logger = new NullLogger(),
+  audit = null,
+  environment = {},
   delegateAuth = null,
   delegate = null,
   config = {}
 }) {
   if (!worker) throw new Error('createApi requires a worker (client PersonWorker)');
   if (!keyStore) throw new Error('createApi requires a keyStore (see @engine9/core/auth)');
+  // Two logs, never mixed (logging/index.js): `logger` for people data,
+  // `auditLog` for schema, plugin, and role changes. Installs inside the
+  // worker write to the same audit log.
+  const auditLog = audit || worker.audit || new ConsoleLogger();
+  worker.audit = auditLog;
   const {
     pluginId,
     defaultRemoteInputId = 'website',
@@ -371,6 +419,16 @@ export function createApi({
       // A failed log write should not fail the (already committed) request,
       // but it must be loudly visible.
       debug('MODIFICATION LOG WRITE FAILED:', e);
+    }
+  }
+
+  async function logAudit(entry) {
+    const record = { accountId: worker.accountId, ...entry };
+    try {
+      await auditLog.log(record);
+    } catch (e) {
+      // The action already happened. Keep the record in the Worker log.
+      console.error(JSON.stringify({ engine9_audit_write_failed: String(e?.message || e), ...record }));
     }
   }
 
@@ -527,7 +585,7 @@ export function createApi({
       debug('postAdminInstallDefaultPlugins error:', e);
       return json(422, { error: String(e.message || e) });
     }
-    await logModification({
+    await logAudit({
       action: 'plugins.install_default',
       apiKeyId: apiKey?.id,
       roleId: ctx.roleId,
@@ -542,21 +600,73 @@ export function createApi({
     if (denied) return denied;
     let result;
     try {
-      result = await worker.upgrade(body || {});
+      // The upgrade writes its own audit record; actor comes from the key, never the body.
+      result = await worker.upgrade({ ...(body || {}), actor: { apiKeyId: apiKey?.id, roleId: ctx.roleId } });
     } catch (e) {
       debug('postAdminUpgrade error:', e);
       return json(422, { error: String(e.message || e) });
     }
-    if (!result.dry_run) {
-      const applied = result.upgrades.filter((u) => u.status === 'applied').map((u) => u.id);
-      await logModification({
-        action: 'upgrade',
-        apiKeyId: apiKey?.id,
-        roleId: ctx.roleId,
-        meta: { upgrades: applied, refreshed: result.refresh.plugins, schemas: result.schemas_version }
-      });
-    }
     return json(200, result);
+  }
+
+  /*
+    What only the running site can see: its secrets (by name, never by value;
+    the keys are checked by hash) and whether the audit log has a sink.
+  */
+  function environmentChecks() {
+    const env = environment || {};
+    const has = (name) => typeof env[name] === 'string' && env[name] !== '';
+    const checks = [];
+    const secret = (name, why) =>
+      checks.push(
+        has(name)
+          ? { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
+          : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup-keys --remote' }
+      );
+    secret('SESSION_SECRET', 'Login (/auth/*) is off without it.');
+    secret('E9_PUBLIC_API_KEY', 'The site cannot check that its public key is in the database.');
+    secret('E9_ADMIN_API_KEY', 'The site cannot check that its admin key is in the database.');
+    checks.push(
+      auditLog.fallback
+        ? {
+            id: 'audit.configured',
+            area: 'audit',
+            status: 'warn',
+            title: 'No audit log sink: schema, plugin, and role changes go only to the Worker log',
+            fix: 'Bind an R2 bucket as AUDIT_BUCKET in wrangler.jsonc (Cloudflare), or pass audit to createApi (Node)'
+          }
+        : { id: 'audit.configured', area: 'audit', status: 'pass', title: 'The audit log has its own sink' }
+    );
+    const keys = {};
+    if (has('E9_PUBLIC_API_KEY')) keys.public = { value: env.E9_PUBLIC_API_KEY, source: 'E9_PUBLIC_API_KEY secret' };
+    if (has('E9_ADMIN_API_KEY')) keys.admin = { value: env.E9_ADMIN_API_KEY, source: 'E9_ADMIN_API_KEY secret' };
+    return { checks, keys };
+  }
+
+  async function getAdminStatus({ apiKey, query, session, apiBase }) {
+    const ctx = authContextFor({ apiKey, query, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const { checks, keys } = environmentChecks();
+    let origin = '<site>';
+    try {
+      if (apiBase) origin = new URL(apiBase).origin;
+    } catch {
+      origin = '<site>';
+    }
+    try {
+      const report = await worker.status({
+        plugins: query?.plugin,
+        keys,
+        checks,
+        source: 'site',
+        fixTarget: `--url ${origin}`
+      });
+      return json(200, report);
+    } catch (e) {
+      debug('getAdminStatus error:', e);
+      return json(500, { error: String(e.message || e) });
+    }
   }
 
   function roleNameOf(segmentId) {
@@ -1069,13 +1179,41 @@ export function createApi({
       const status = /not an email/i.test(msg) ? 400 : 422;
       return json(status, { error: msg });
     }
-    await logModification({
-      action: 'segment.membership',
-      apiKeyId: apiKey?.id,
-      roleId: ctx.roleId,
-      personIds: [...new Set(edits.map((item) => item.targetPersonId).filter((id) => id > 0))],
-      meta: { add: adds.length, remove: removes.length, self: selfEdits.length }
-    });
+    // Who holds a role is admin behavior (audit log); any other segment is people data.
+    const isRole = (segmentId) => Boolean(rolesRegistry?.[segmentId] || standardRoleFor(worker.accountId, segmentId));
+    const roleEdits = edits.filter((item) => isRole(item.segmentId));
+    const dataEdits = edits.filter((item) => !isRole(item.segmentId));
+    if (dataEdits.length) {
+      await logModification({
+        action: 'segment.membership',
+        apiKeyId: apiKey?.id,
+        roleId: ctx.roleId,
+        personIds: [...new Set(dataEdits.map((item) => item.targetPersonId).filter((id) => id > 0))],
+        meta: {
+          add: dataEdits.filter((item) => item.operation === 'add').length,
+          remove: dataEdits.filter((item) => item.operation === 'remove').length,
+          self: dataEdits.filter((item) => item.self).length
+        }
+      });
+    }
+    for (const operation of ['add', 'remove']) {
+      const changed = roleEdits.filter((item) => item.operation === operation);
+      if (!changed.length) continue;
+      await logAudit({
+        action: operation === 'add' ? 'role.grant' : 'role.revoke',
+        apiKeyId: apiKey?.id,
+        roleId: ctx.roleId,
+        meta: {
+          by_person_id: session?.personId ?? null,
+          changes: changed.map((item) => ({
+            segment_id: item.segmentId,
+            role: roleNameOf(item.segmentId),
+            ...(item.email ? { email: item.email } : { person_id: item.targetPersonId }),
+            self: Boolean(item.self)
+          }))
+        }
+      });
+    }
     const describe = (item) => ({
       segment_id: item.segmentId,
       person_id: item.email ? undefined : item.targetPersonId,
@@ -1115,7 +1253,8 @@ export function createApi({
     // Everything else requires a valid API key (layer 1)
     const verification = await keyStore.verify(req.original || req);
     if (!verification.valid) {
-      return withCors(json(401, { error: `unauthorized: ${verification.reason}` }), req.headers);
+      logApiKeyRejection(req, verification.reason);
+      return withCors(json(401, apiKeyRejection(verification.reason)), req.headers);
     }
     const apiKey = verification.key;
 
@@ -1189,6 +1328,8 @@ export function createApi({
       result = await postAdminInstallDefaultPlugins({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
       result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
+    } else if (method === 'GET' && parts[0] === 'admin' && parts[1] === 'status' && parts.length === 2) {
+      result = await getAdminStatus({ apiKey, query: req.query || {}, session, apiBase: req.apiBase });
     } else if (method === 'GET' && parts[0] === 'admin' && parts[1] === 'segments' && parts.length === 2) {
       result = await getAdminSegments({ apiKey, query: req.query || {}, session });
     } else if (
@@ -1237,8 +1378,9 @@ export function createApi({
       apiBase
     });
     // flush batch logs without blocking the response when a ctx is available
-    if (ctx?.waitUntil) ctx.waitUntil(logger.flush());
-    else await logger.flush();
+    const flushed = Promise.all([logger.flush(), auditLog.flush()]);
+    if (ctx?.waitUntil) ctx.waitUntil(flushed);
+    else await flushed;
     const headers = new Headers({
       'content-type': result.contentType || 'application/json',
       ...(result.headers || {})
@@ -1271,7 +1413,7 @@ export function createApi({
           original: req,
           apiBase: base
         });
-        await logger.flush();
+        await Promise.all([logger.flush(), auditLog.flush()]);
         for (const [name, value] of Object.entries(result.headers || {})) {
           res.setHeader(name, value);
         }

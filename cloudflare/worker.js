@@ -70,11 +70,16 @@ export default {
     });
     // Prefer SQL api_key table; API_KEYS KV is optional (not required for auth).
     const keyStore = env.API_KEYS ? new KVApiKeyStore({ kv: env.API_KEYS }) : new SqlApiKeyStore({ worker });
+    // Two logs, never mixed: people data (LOG_BUCKET) and schema, plugin, and
+    // role changes (AUDIT_BUCKET). Without AUDIT_BUCKET, audit records go to the Worker log.
     const logger = env.LOG_BUCKET ? new BatchLogger({ sink: r2Sink(env.LOG_BUCKET) }) : new NullLogger();
+    const audit = env.AUDIT_BUCKET ? new BatchLogger({ sink: r2Sink(env.AUDIT_BUCKET, { prefix: 'audit' }) }) : undefined;
     const api = createApi({
       worker,
       keyStore,
       logger,
+      audit,
+      environment: env,
       // Login with the default identity provider (delegate) when the secret is set.
       delegate: env.SESSION_SECRET
         ? {

@@ -32,6 +32,7 @@ API from a Worker.
 | API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
 | Revoked Core Sessions | KV `SESSION_REVOCATIONS` (optional) |
 | Modification logs | R2 batch objects (`BatchLogger` + `r2Sink`), flushed via `ctx.waitUntil` |
+| Audit log | Its own R2 binding, `AUDIT_BUCKET` (schema, plugin, and role changes); the Worker log without it |
 
 `person_id`, identifiers, and segment membership are read from D1 on every
 request. Nothing caches them in KV.
@@ -78,8 +79,8 @@ one piece at a time.
    [Applying schema SQL to D1](../AGENTS.md#applying-schema-sql-to-d1).
 
    ```bash
-   npx e9core sqlite-ddl --schema @engine9/schemas/plugin > migrations/0001_plugin.sql
-   wrangler d1 execute engine9 --remote --file migrations/0001_plugin.sql
+   npx e9core sqlite-ddl --schema @engine9/schemas/plugin > engine9-plugin.sql
+   wrangler d1 execute engine9 --remote --file engine9-plugin.sql
    ```
 
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations
@@ -212,7 +213,16 @@ curl "https://your-worker.example.workers.dev/api/read/content?person_id=123" \
   -H "Authorization: Bearer e9key_..."
 ```
 
-## Modification logs
+## Logs
+
+Two logs, never mixed. `LOG_BUCKET` holds people data. `AUDIT_BUCKET` holds
+changes to the database's structure, plugins, keys, settings, and who holds a
+role, under `audit/` ([docs/status.md](../docs/status.md#the-audit-log)).
+Give them separate buckets, so people who review the audit log never get
+access to people data. Without `AUDIT_BUCKET`, each audit record is one JSON
+line in the Worker log, and `e9core status` warns.
+
+### Modification logs
 
 Every successful write is committed to D1 first, then appended to the
 modification log. With the R2 sink, each request's batch is written as a

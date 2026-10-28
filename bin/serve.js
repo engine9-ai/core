@@ -166,11 +166,17 @@ export async function serve(options = {}) {
   const logger = existsSync(logsDir)
     ? new JsonlFileLogger({ directory: logsDir })
     : new NullLogger();
+  // The audit log is separate from people data: ./logs/audit, else the console.
+  const audit = existsSync(logsDir)
+    ? new JsonlFileLogger({ directory: path.join(logsDir, 'audit'), prefix: 'engine9-audit' })
+    : undefined;
 
   const api = createApi({
     worker,
     keyStore,
     logger,
+    audit,
+    environment: process.env,
     // `e9core setup` writes SESSION_SECRET to .env; that turns on /auth/* with
     // the default identity provider. The JWT aud defaults to the request Host.
     delegate: process.env.SESSION_SECRET

@@ -517,3 +517,9 @@ All routes except `GET /ok` require an API key.
 | `POST /auth/role`   | session/JWT `personId` must match `body.person_id`, or `admin` scope                     |
 
 Error reasons include `invalid_identity_token` and `invalid_domain`.
+
+A request whose API key is refused never reaches these routes. It gets
+`401 { error: 'unauthorized: <reason>', reason, kind: 'api_key', hint }`, and
+the Worker logs `engine9 api key rejected: <reason> key_hash=<12 hex>`. Show
+`kind: 'api_key'` as a site problem, not as "sign in again"
+([deploy.md](../docs/deploy.md#when-the-api-answers-unauthorized)).

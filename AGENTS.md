@@ -114,9 +114,10 @@ it. Do not put other rules in that trigger or copy it for a new behavior.
 
 `dumpSqliteFile` ([bin/setup.js](bin/setup.js)) and `e9core sqlite-ddl` both
 emit that trigger when the schema has `modified_at`. `npx e9core setup`
-writes `migrations/0001_engine9.sql` and loads it with
-`wrangler d1 execute <database> --file` (`--local` or `--remote`). That
-command uses D1's import API. Use it for any SQL this package generates.
+builds a fresh default install in a temporary folder, loads its dump with
+`wrangler d1 execute <database> --file` (`--local` or `--remote`), and
+deletes it. Setup keeps no schema file. That command uses D1's import API.
+Use it for any SQL this package generates.
 
 `wrangler d1 migrations apply` is a different request. It does not concatenate
 migration files. For each file it appends
@@ -158,33 +159,71 @@ npx e9core upgrade --url https://www.example.com
 ```
 
 Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed,
-unless the change needs a new upgrade in `lib/upgrades`.
+including when it ships a new upgrade: upgrades live in the schema plugins.
 
 ## Upgrades
 
 Install, deploy, then `e9core upgrade`, for every release and every database.
 A deploy never changes the database. Full process: [docs/upgrading.md](docs/upgrading.md).
 
-`e9core upgrade` runs `PluginWorker.upgrade` (`lib/upgrades`): ordered data
-upgrades, then a reinstall of the installed `@engine9/schemas` plugins, with
-an `upgrade.<id>` ledger row in `setting`. `--url` posts to the site's
+`e9core upgrade` runs `PluginWorker.upgrade` (`lib/upgrades`): the upgrade
+window, then the upgrades the `@engine9/schemas` plugins declare, then a
+reinstall of the installed `@engine9/schemas` plugins
+(`@engine9/schemas/plugin` first). Each real run writes one `upgrade` record
+to the audit log; there is no ledger in the database, because every run
+asks every upgrade again. Each install records itself in the
+`last_install*` columns of its `plugin` row. Do not keep upgrade or install
+records in `setting`: settings are what people set. `--url` posts to the site's
 `POST /api/admin/upgrade` (admin key), so a Cloudflare site upgrades its own
 D1 inside the Worker. `--db` runs locally. The server uses
 `e9 pluginworker upgrade -a <account_id>` or MCP `plugin` `upgrade`.
 
-A schemas or core change that removes, renames, or moves a column, or
-changes an inbound step that saved snapshots name, ships an upgrade in the
-same release:
+Core holds the upgrade machinery only, never an upgrade. `lib/upgrades` is
+the runner, discovery (`declared.js`), the window (`window.js`), named
+runs (`plugins.js`), and the audit record. Do not add a file there that knows
+about a particular table or plugin. A plugin change that removes, renames, or
+moves a column, changes a column's type, or changes an inbound step that
+saved snapshots name ships an upgrade in that plugin, in the same release
+([docs/plugin-upgrades.md](docs/plugin-upgrades.md)):
 
-- `lib/upgrades/<id>.js` with `{ id, since, description, run }`, appended to
-  `UPGRADES`. Never remove or reorder entries.
-- It must be safe to re-run and must use only `worker.query`, `describe`,
-  `list`, and `install`, so the same code runs on D1, SQLite, and MySQL.
+- `upgrades: [{ id, since, description, optIn?, options?, shouldUpgrade, run }]`
+  on the plugin's default export, in an `upgrades.js` beside its `index.js`
+  (never an `upgrades/index.js`, which would be a plugin).
+- `shouldUpgrade(ctx)` answers from `ctx.snapshot` (the schema) and the
+  `plugin` and `setting` rows only. Never read people tables there.
+- `run(ctx)` must be safe to re-run and must use only `sqlWorker.query`,
+  `describe`, `list`, `install`, `tableType`, and `changeColumnType`, so
+  the same code runs on D1, SQLite, and MySQL.
+- An upgrade may change other plugins' tables. A plugin can carry only
+  upgrades and run by name without a plugin row.
 - New code must still work on a database that has not been upgraded.
-- Add `docs/upgrade-<version>.md` and tests on SQLite and the bundled Worker.
+- For `@engine9/schemas`: add `docs/upgrade-<version>.md` here and tests on
+  SQLite and the bundled Worker.
+
+Upgrades are only run by `e9core upgrade` and checked by `e9core status`.
+Never call `shouldUpgrade` or `run` from an install, a request, or the
+people pipeline.
+
+Upgrade windows replace a forever-growing list. `CORE_UPGRADE_FROM`
+(`lib/version.js`) and each plugin's `upgradeFrom` name the oldest version
+a database can be upgraded from directly. To retire an upgrade, raise the
+window past its `since` and delete it. Do not keep an upgrade below its
+package's window.
 
 Do not use `wrangler d1 migrations` for engine9 tables (see below).
 Additive changes need no upgrade; the reinstall step deploys them.
+
+`e9core upgrade` runs the upgrades of, and reinstalls, only `@engine9/schemas`
+plugins. Do not widen it to every installed plugin. Any other plugin is
+upgraded by name (`upgrade --plugin <path>`), and `e9core status` reports
+when one is behind or has an upgrade that applies
+([docs/status.md](docs/status.md)). `e9core upgrade` passes flags it does not
+read to the upgrades; do not add a plugin's option to core's CLI.
+
+There are two logs and they never mix: the data log (`logger`, people data,
+large) and the audit log (`audit`: schema, plugins, keys, settings, role
+membership; no people data beyond a role grant's subject). A new admin or
+schema action writes to `audit`, never `logger`.
 
 Plugin paths match exactly. Do not add alias spellings or prefixes for them.
 

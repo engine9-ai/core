@@ -361,8 +361,8 @@ only way to read the production D1 database, so use it there.
 | PL-8 | Code review: privileged paths call `auth.rolesForSession` and `meetsRequiredAuth`, not the `roles` array from a token. |
 | PL-9 | Remove a test admin, then call a privileged route with a fresh token: it must be refused. |
 | PL-10 | `curl -I https://<site>/engine9.superadmins.json` returns 404, and the file is not in a public repository. |
-| PL-11 | `npx e9core upgrade --dry-run` reports every upgrade `current`. |
-| PL-12 | The review output from the rows above, dated, kept with change records. |
+| PL-11 | `npx e9core status --url <site>` reports no failure, and every `upgrade.<id>` check passes (or is a skipped opt-in). |
+| PL-12 | The review output from the rows above, dated, kept with change records. The audit log's `role.grant` and `role.revoke` records show every change to a role between reviews. |
 
 A superadmin check: sign in as a listed address at Level 3 and request
 `GET /auth/me`; the session's `roles` includes the account's `admin` role id.

@@ -25,10 +25,16 @@ id = "<your kv namespace id>"
 binding = "SESSION_REVOCATIONS"
 id = "<your kv namespace id>"
 
-# Batch modification logs in R2 (optional)
+# Batch modification logs in R2 (optional). People data.
 [[r2_buckets]]
 binding = "LOG_BUCKET"
 bucket_name = "engine9-modification-logs"
+
+# Audit log in R2: schema, plugin, and role changes. Keep it in its own
+# bucket, apart from people data. Without it, audit records go to the Worker log.
+[[r2_buckets]]
+binding = "AUDIT_BUCKET"
+bucket_name = "engine9-audit"
 
 # Compact person identifier lookups via Durable Object (optional).
 # Without this binding, D1 uses the person_id_<id_type> tables.

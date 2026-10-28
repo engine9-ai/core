@@ -52,10 +52,17 @@ export function adminKey({ key, target, url, cwd = process.cwd(), env = process.
   return '';
 }
 
-/** One request to a deployed site's API with the admin key. Throws on a non-2xx answer. */
-export async function callSite({ url, key, method = 'POST', route, body, fetchImpl = fetch }) {
+/**
+ * One request to a deployed site's API with the admin key. Throws on a non-2xx
+ * answer; the error carries `status` and the parsed `body`.
+ */
+export async function callSite({ url, key, method = 'POST', route, body, query, fetchImpl = fetch }) {
   if (!key) throw new Error(`No admin API key: pass --key or set ${ENV_ADMIN_KEY} (e9core setup writes it to .env)`);
-  const endpoint = siteEndpoint(url, route);
+  const u = new URL(siteEndpoint(url, route));
+  for (const [name, value] of Object.entries(query || {})) {
+    if (value != null && value !== '') u.searchParams.set(name, String(value));
+  }
+  const endpoint = u.toString();
   const response = await fetchImpl(endpoint, {
     method,
     headers: { authorization: `Bearer ${key}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
@@ -69,7 +76,11 @@ export async function callSite({ url, key, method = 'POST', route, body, fetchIm
     parsed = { error: text };
   }
   if (!response.ok) {
-    throw new Error(`${endpoint} answered ${response.status}: ${parsed.error || text}`);
+    const hint = parsed.kind === 'api_key' ? ` The admin key was refused (${parsed.reason}): run npx e9core status, which checks keys through Wrangler.` : '';
+    const error = new Error(`${endpoint} answered ${response.status}: ${parsed.error || text}${hint}`);
+    error.status = response.status;
+    error.body = parsed;
+    throw error;
   }
   return parsed;
 }

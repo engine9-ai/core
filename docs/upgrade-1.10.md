@@ -140,13 +140,10 @@ running, or `--db sqlite://./engine9.db` for the local file.
 ```bash
 npx wrangler d1 execute <database> --remote --json --command "pragma table_info(person)"
 npx wrangler d1 execute <database> --remote --json --command "select count(*) as n from person_name"
-npx wrangler d1 execute <database> --remote --json --command \
-  "select s.value from setting s join plugin p on p.id = s.plugin_id where p.path = '@engine9/schemas/plugin' and s.name = 'upgrade.person_name'"
 ```
 
 - `person` still has `given_name` and `family_name`.
 - `person_name` holds at least `copied` rows.
-- The ledger row exists.
 - A signup with a name, through the site or `POST /api/people`, adds a
   `person_name` row. `npx wrangler tail` shows no errors.
 

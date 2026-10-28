@@ -285,8 +285,8 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
     const upgraded = await call('/admin/upgrade', adminKey, {});
     const body = await upgraded.json();
     assert.equal(upgraded.status, 200, JSON.stringify(body));
-    assert.equal(body.upgrades[0].copied, 1);
-    assert.equal(body.upgrades[1].status, 'opt_in');
+    assert.equal(body.upgrades.find((u) => u.id === 'person_name').copied, 1);
+    assert.equal(body.upgrades.find((u) => u.id === 'person_name_columns').status, 'opt_in');
 
     const columns = () => d1.db.prepare('pragma table_info(person)').all().map((c) => c.name);
     assert.ok(columns().includes('given_name'), 'the default upgrade keeps the person columns');
@@ -299,9 +299,77 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
     ]);
 
     const dropped = await (await call('/admin/upgrade', adminKey, { drop_name_columns: true })).json();
-    assert.deepEqual(dropped.upgrades[1].dropped, ['person.given_name', 'person.family_name']);
+    assert.deepEqual(dropped.upgrades.find((u) => u.id === 'person_name_columns').dropped, ['person.given_name', 'person.family_name']);
     assert.deepEqual(columns(), ['id', 'created_at', 'modified_at']);
   } finally {
+    d1.db.close();
+    await rm(built.dir, { recursive: true, force: true });
+    await rm(siteDir, { recursive: true, force: true });
+  }
+});
+
+test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run on D1 inside the bundle', async () => {
+  const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-status-'));
+  const registryFile = path.join(siteDir, 'engine9.plugins.js');
+  const dbFile = path.join(siteDir, 'engine9.db');
+  buildPlugins({ cwd: root, packages: ['@engine9/schemas'], out: registryFile });
+  const accountId = 'cf-site';
+  const setupWorker = new PersonWorker({ accountId, auth: { database_connection: `sqlite://${dbFile}` } });
+  let adminKey;
+  let publicKey;
+  try {
+    await setupWorker.installDefaultPlugins();
+    await setupWorker.query('create table plugin_history (id char(36) primary key, plugin_id char(36), path varchar(255))');
+    const keyStore = new SqlApiKeyStore({ worker: setupWorker });
+    await keyStore.deploy();
+    adminKey = (await keyStore.create({ name: 'site-admin', scopes: ['admin'] })).key;
+    publicKey = (await keyStore.create({ name: 'site-public', scopes: ['public'] })).key;
+  } finally {
+    await setupWorker.destroy();
+  }
+  const built = await bundleWorkerd({
+    aliases: { '@engine9/core/plugins/site': registryFile },
+    contents: "export { default } from '@engine9/core/cloudflare/worker';\n",
+    sourcefile: 'site-worker.js'
+  });
+  const d1 = sqliteD1(dbFile);
+  const info = console.info;
+  const audited = [];
+  console.info = (line) => audited.push(line);
+  try {
+    const mod = await import(built.href);
+    const fetch = mod.default?.fetch || mod.default?.default?.fetch;
+    const env = { DB: d1, E9_ACCOUNT_ID: accountId, E9_ADMIN_API_KEY: adminKey, E9_PUBLIC_API_KEY: publicKey };
+    const call = (method, route, body) =>
+      fetch(
+        new Request(`https://www.example.test/api${route}`, {
+          method,
+          headers: { authorization: `Bearer ${adminKey}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+          body: body ? JSON.stringify(body) : undefined
+        }),
+        env
+      );
+    const status = await (await call('GET', '/admin/status')).json();
+    assert.equal(status.ok, true, JSON.stringify(status.checks.filter((c) => c.status === 'fail')));
+    assert.equal(status.schema_read, 'batched');
+    assert.equal(status.checks.find((c) => c.id === 'keys.public').status, 'pass');
+    assert.equal(status.checks.find((c) => c.id === 'upgrade.plugin_history').status, 'skip');
+    assert.equal(status.checks.find((c) => c.id === 'audit.configured').status, 'warn');
+
+    d1.db.exec("update plugin set transforms=null where path='@engine9/schemas/person_email'");
+    const stale = await (await call('GET', '/admin/status?plugin=@engine9/schemas/person_email')).json();
+    assert.equal(stale.checks.find((c) => c.id === 'plugin.inbound_snapshot').status, 'warn');
+    assert.equal(stale.checks.find((c) => c.id === 'plugin.inbound_snapshot').fix, 'npx e9core upgrade --url https://www.example.test');
+
+    const upgraded = await call('POST', '/admin/upgrade', { drop_plugin_history: true });
+    const body = await upgraded.json();
+    assert.equal(upgraded.status, 200, JSON.stringify(body));
+    assert.deepEqual(body.upgrades.find((u) => u.id === 'plugin_history').dropped, ['plugin_history']);
+    assert.ok(!d1.db.prepare("select name from sqlite_master where name='plugin_history'").get());
+    const records = audited.map((line) => JSON.parse(line)).filter((r) => r.engine9_audit);
+    assert.ok(records.some((r) => r.action === 'upgrade'), 'with no AUDIT_BUCKET the upgrade is in the Worker log');
+  } finally {
+    console.info = info;
     d1.db.close();
     await rm(built.dir, { recursive: true, force: true });
     await rm(siteDir, { recursive: true, force: true });
