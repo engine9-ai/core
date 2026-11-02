@@ -4,7 +4,14 @@ import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { requireRole, createGate } from '../auth/gate.js';
-import { safeReturnPath, withQueryParam, sessionTokenFromCookie } from '../auth/signIn.js';
+import {
+  safeReturnPath,
+  withQueryParam,
+  sessionTokenFromCookie,
+  signInUrl,
+  changeSignInUrl,
+  isPageRequest
+} from '../auth/signIn.js';
 import { installDefaultPluginsSite } from '../bin/upgrade.js';
 
 const DELEGATE_URL = 'https://delegate.network';
@@ -31,6 +38,9 @@ async function setup({ roleMember = true, level = 3, signIn = {}, secureSite = t
     async query({ values }) {
       const [, ...roleIds] = values;
       return { data: roleIds.filter((id) => roleMember && id === ADMIN).map((segment_id) => ({ segment_id })) };
+    },
+    async upsertArray() {
+      return {};
     }
   };
   const delegateAuth = createDelegateAuth({
@@ -45,6 +55,7 @@ async function setup({ roleMember = true, level = 3, signIn = {}, secureSite = t
   const keyStore = {
     verify: async (req) => {
       const header = req.headers?.get?.('authorization') || '';
+      if (header === 'Bearer e9key_admin') return { valid: true, key: { id: 'k2', scopes: ['admin'] } };
       return header === 'Bearer e9publickey_test'
         ? { valid: true, key: { id: 'k1', scopes: ['public'] } }
         : { valid: false, reason: 'missing_key' };
@@ -101,6 +112,42 @@ test('GET /auth/start redirects to Delegate without an API key', async () => {
   assert.ok(q.get('state') && q.get('nonce'));
   const [login] = res.headers.getSetCookie();
   assert.match(login, /^e9_login=.+HttpOnly; Secure$/);
+});
+
+test('start: reason=access_denied means the share screen, with the reason; other reasons are dropped', async () => {
+  const { get } = await setup();
+  const denied = new URL(
+    (await get('/api/auth/start?returnTo=/admin&reason=access_denied')).headers.get('location')
+  ).searchParams;
+  assert.equal(denied.get('prompt'), 'select');
+  assert.equal(denied.get('reason'), 'access_denied');
+  const junk = new URL((await get('/api/auth/start?returnTo=/admin&reason=hello')).headers.get('location'))
+    .searchParams;
+  assert.equal(junk.get('prompt'), null);
+  assert.equal(junk.get('reason'), null);
+});
+
+test('signInUrl and changeSignInUrl build the /auth/start links', () => {
+  assert.equal(signInUrl('/members'), '/api/auth/start?returnTo=%2Fmembers');
+  assert.equal(signInUrl('https://evil.example/'), '/api/auth/start?returnTo=%2F');
+  assert.equal(changeSignInUrl('/admin'), '/api/auth/start?returnTo=%2Fadmin&prompt=select');
+  assert.equal(
+    changeSignInUrl('/admin', { reason: 'access_denied', startPath: '/auth/start' }),
+    '/auth/start?returnTo=%2Fadmin&prompt=select&reason=access_denied'
+  );
+  assert.equal(
+    changeSignInUrl('/admin', { startPath: 'https://api.example.com/auth/start' }),
+    'https://api.example.com/auth/start?returnTo=%2Fadmin&prompt=select'
+  );
+});
+
+test('isPageRequest tells a page load from fetch()', () => {
+  const req = (headers) => new Request(SITE, { headers });
+  assert.equal(isPageRequest(req({})), true);
+  assert.equal(isPageRequest(req({ 'sec-fetch-mode': 'navigate' })), true);
+  assert.equal(isPageRequest(req({ 'sec-fetch-mode': 'cors', accept: '*/*' })), false);
+  assert.equal(isPageRequest(req({ accept: 'application/json' })), false);
+  assert.equal(isPageRequest(req({ accept: 'text/html,application/xhtml+xml' })), true);
 });
 
 test('start ignores an off-site returnTo and a junk login_hint', async () => {
@@ -208,6 +255,18 @@ test('requireRole: signed out → sign-in redirect for a page, 401 for a POST', 
     role: 'admin'
   });
   assert.equal(post.status, 401);
+  // fetch() from page code gets JSON it can act on, never a redirect to Delegate.
+  const fetched = await requireRole({
+    auth: ctx.delegateAuth,
+    request: new Request(`${SITE}/api/admin/verify`, { headers: { 'sec-fetch-mode': 'cors' } }),
+    role: 'admin'
+  });
+  assert.equal(fetched.status, 401);
+  assert.deepEqual(await fetched.response.json(), {
+    error: 'sign in required',
+    reason: 'sign_in_required',
+    signInUrl: '/api/auth/start?returnTo=%2Fapi%2Fadmin%2Fverify'
+  });
 });
 
 test('requireRole: the cookie from /auth/callback opens the gate for a current admin', async () => {
@@ -237,9 +296,28 @@ test('requireRole: signed in without the role (or below the role level) gets a 4
   });
   assert.equal(denied.ok, false);
   assert.equal(denied.status, 403);
+  assert.equal(denied.reason, 'role_not_held');
+  assert.equal(denied.email, 'ada@example.com');
+  assert.equal(denied.changeUrl, '/api/auth/start?returnTo=%2Fpreview&prompt=select&reason=access_denied');
   const html = await denied.response.text();
-  assert.match(html, /ada@example\.com/);
-  assert.match(html, /prompt=select/);
+  assert.match(html, /signed in as <strong>ada@example\.com<\/strong>/);
+  assert.match(html, /href="\/api\/auth\/start\?returnTo=%2Fpreview&amp;prompt=select&amp;reason=access_denied"/);
+  assert.match(html, /Use a different email or account/);
+
+  // The same denial from fetch() is JSON with the same link, so an app can show it.
+  const fetched = await requireRole({
+    auth: notMember.delegateAuth,
+    request: new Request(`${SITE}/api/admin/verify`, { headers: { cookie, 'sec-fetch-mode': 'cors' } }),
+    role: 'admin'
+  });
+  assert.equal(fetched.status, 403);
+  assert.deepEqual(await fetched.response.json(), {
+    error: 'not allowed',
+    reason: 'role_not_held',
+    role: 'Admin',
+    email: 'ada@example.com',
+    changeUrl: '/api/auth/start?returnTo=%2Fapi%2Fadmin%2Fverify&prompt=select&reason=access_denied'
+  });
 
   // Anyone signed in passes when no role is asked for.
   const anyone = await requireRole({
@@ -256,6 +334,8 @@ test('requireRole: signed in without the role (or below the role level) gets a 4
     role: 'admin'
   });
   assert.equal(low.status, 403);
+  assert.equal(low.reason, 'auth_not_met');
+  assert.match(await low.response.text(), /stronger sign-in/);
 });
 
 test('requireRole reads the role from the database now, not from the cookie', async () => {
@@ -282,6 +362,7 @@ test('the session cookie authenticates /auth/me, and /auth/logout clears it', as
   const body = await me.json();
   assert.equal(body.personId, 7);
   assert.deepEqual(body.roles, [ADMIN]);
+  assert.equal(body.email, 'ada@example.com');
   const out = await ctx.api.handleFetch(
     new Request(`${SITE}/api/auth/logout`, { method: 'POST', headers, body: '{}' })
   );
@@ -296,6 +377,149 @@ test('the session cookie authenticates /auth/me, and /auth/logout clears it', as
     })
   );
   assert.deepEqual(bare.headers.getSetCookie(), []);
+});
+
+/** POST /api/auth/begin, then a token for that nonce: what @engine9/id does with session: 'cookie'. */
+async function cookieLogin(ctx, { origin = SITE, nonce: tokenNonce, state: sentState, body = {} } = {}) {
+  const key = { authorization: 'Bearer e9publickey_test', 'content-type': 'application/json' };
+  const begin = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/begin`, { method: 'POST', headers: { ...key, origin: SITE }, body: '{}' })
+  );
+  const begun = await begin.clone().json();
+  const token = await ctx.sign({ nonce: tokenNonce ?? begun.nonce });
+  const headers = { ...key, cookie: jar(begin) };
+  if (origin) headers.origin = origin;
+  const login = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/login`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ delegate_token: token, state: sentState ?? begun.state, cookie: true, ...body })
+    })
+  );
+  return { begin, begun, login };
+}
+
+test('cookie sign-in: begin, then login sets e9_session and keeps the token out of the body', async () => {
+  const ctx = await setup();
+  const { begin, begun, login } = await cookieLogin(ctx);
+  assert.equal(begin.status, 200);
+  assert.equal(begin.headers.get('cache-control'), 'no-store');
+  assert.ok(begun.state && begun.nonce);
+  assert.match(begin.headers.getSetCookie()[0], /^e9_login=.+HttpOnly; Secure$/);
+
+  assert.equal(login.status, 200, await login.clone().text());
+  const body = await login.json();
+  assert.equal(body.session.personId, 7);
+  assert.equal(body.token, undefined);
+  const set = login.headers.getSetCookie();
+  assert.ok(set.some((c) => /^e9_session=[^;]+; .*HttpOnly; Secure$/.test(c)));
+  assert.ok(set.some((c) => /^e9_login=; Max-Age=0/.test(c)));
+
+  // The same session the gate and every API route read.
+  const cookie = jar(login);
+  const gate = await requireRole({
+    auth: ctx.delegateAuth,
+    request: new Request(`${SITE}/admin`, { headers: { cookie } }),
+    role: 'admin'
+  });
+  assert.equal(gate.ok, true);
+});
+
+test('cookie sign-in refuses a token for another request, a wrong state, no begin, and another origin', async () => {
+  const ctx = await setup();
+  const otherNonce = await cookieLogin(ctx, { nonce: 'someone-elses-nonce' });
+  assert.equal(otherNonce.login.status, 401);
+  assert.equal((await otherNonce.login.json()).reason, 'state_mismatch');
+  assert.ok(otherNonce.login.headers.getSetCookie().some((c) => /^e9_login=; Max-Age=0/.test(c)));
+  assert.ok(!otherNonce.login.headers.getSetCookie().some((c) => /^e9_session=[^;]/.test(c)));
+
+  const wrongState = await cookieLogin(ctx, { state: 'not-this-one' });
+  assert.equal(wrongState.login.status, 401);
+  assert.equal((await wrongState.login.json()).reason, 'state_mismatch');
+
+  const noBegin = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/login`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer e9publickey_test', 'content-type': 'application/json', origin: SITE },
+      body: JSON.stringify({ delegate_token: await ctx.sign({ nonce: 'n' }), state: 's', cookie: true })
+    })
+  );
+  assert.equal(noBegin.status, 401);
+  assert.match((await noBegin.json()).error, /POST \/auth\/begin/);
+
+  const elsewhere = await cookieLogin(ctx, { origin: 'https://evil.example' });
+  assert.equal(elsewhere.login.status, 403);
+  assert.equal((await elsewhere.login.json()).reason, 'origin_mismatch');
+  const noOrigin = await cookieLogin(ctx, { origin: null });
+  assert.equal(noOrigin.login.status, 403);
+});
+
+test('without cookie: true, /auth/login still returns the token as before', async () => {
+  const ctx = await setup();
+  const res = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/login`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer e9publickey_test', 'content-type': 'application/json', origin: SITE },
+      body: JSON.stringify({ delegate_token: await ctx.sign({}) })
+    })
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.ok(body.token);
+  assert.deepEqual(res.headers.getSetCookie(), []);
+});
+
+test('a role change by a cookie session re-signs the cookie and keeps the token out of the body', async () => {
+  const ctx = await setup();
+  const { login } = await cookieLogin(ctx);
+  const cookie = jar(login);
+  const res = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/role`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer e9key_admin', 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ role_id: ADMIN })
+    })
+  );
+  assert.equal(res.status, 200, await res.clone().text());
+  const body = await res.json();
+  assert.equal(body.token, undefined);
+  assert.ok(res.headers.getSetCookie().some((c) => /^e9_session=[^;]+/.test(c)));
+
+  // A header session keeps getting its token back.
+  const header = await ctx.api.handleFetch(
+    new Request(`${SITE}/api/auth/role`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer e9key_admin',
+        'content-type': 'application/json',
+        'x-engine9-session': decodeURIComponent(cookie.split('=')[1])
+      },
+      body: JSON.stringify({ role_id: ADMIN })
+    })
+  );
+  assert.ok((await header.json()).token);
+  assert.deepEqual(header.headers.getSetCookie(), []);
+});
+
+test('requireRole takes several roles: any one held is enough', async () => {
+  const ctx = await setup({ roleMember: false });
+  const cookie = await signedIn(ctx);
+  const VIP = '00000000-0000-4000-8000-00000000000b';
+  ctx.delegateAuth.roleRegistry[VIP] = { name: 'VIP', scopes: [], requiredAuth: { minLevel: 1 } };
+  const denied = await requireRole({
+    auth: ctx.delegateAuth,
+    request: new Request(`${SITE}/vip`, { headers: { cookie } }),
+    role: ['VIP', 'admin']
+  });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.role, 'VIP or Admin');
+  const member = await setup();
+  const allowed = await requireRole({
+    auth: member.delegateAuth,
+    request: new Request(`${SITE}/vip`, { headers: { cookie: await signedIn(member) } }),
+    role: ['admin']
+  });
+  assert.equal(allowed.ok, true);
 });
 
 test('installDefaultPluginsSite posts to /admin/install-default-plugins', async () => {

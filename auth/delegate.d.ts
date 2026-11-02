@@ -140,6 +140,12 @@ export function delegateIdentityUrl(options: {
   domain: string;
   returnTo: string;
   prompt?: string;
+  /**
+   * `access_denied`: the site signed this person in but will not let them
+   * in. Delegate shows its share screen with a notice so they can pick
+   * another address or account. Send it with `prompt: 'select'`.
+   */
+  reason?: 'access_denied';
   minLevel?: number;
   maxLevel?: number;
   fields?: string[] | string;
@@ -305,6 +311,8 @@ export interface DelegateAuth {
   identityUrl(options: {
     returnTo: string;
     prompt?: string;
+    /** `access_denied` on an access-denied page; send with `prompt: 'select'`. */
+    reason?: 'access_denied';
     minLevel?: number;
     maxLevel?: number;
     fields?: string[] | string;
@@ -342,6 +350,16 @@ export interface DelegateAuth {
     /** JSON kept in the signed cookie and returned by `finishLogin` as `data`. */
     data?: unknown;
   }): { url: string; state: string; nonce: string; cookie: string };
+  /**
+   * The same request with no Delegate URL, for a popup sign-in: page
+   * JavaScript puts `state` and `nonce` on its own request
+   * (`POST /auth/begin`), and `finishLogin` checks them.
+   */
+  beginLoginRequest(options?: { cookieName?: string; secure?: boolean; data?: unknown }): {
+    state: string;
+    nonce: string;
+    cookie: string;
+  };
   /**
    * Finish a beginLogin() sign-in from the return's `delegate_token` and
    * `state` and the request's Cookie header. Throws `state_mismatch` for a

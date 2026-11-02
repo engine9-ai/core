@@ -255,8 +255,10 @@ recorded reason.
    (`npx e9core create-api-key --scopes …`).
 6. **Sessions.** Set `sessionRevocations` (a KV store on Cloudflare) so
    logout revokes.
-7. **Host decisions.** Use `auth.rolesForSession(session)` for admin pages
-   and admin actions.
+7. **Host decisions.** Gate admin pages and admin routes with `requireRole`
+   (`@engine9/core/auth/gate`), or use `auth.rolesForSession(session)` for
+   admin actions. Sign-in, the session cookie, and the 401/403 answers are
+   core's: [docs/sign-in.md](docs/sign-in.md).
 8. **Verify** with [Verifying a site](#verifying-a-site).
 
 ## Converting an existing site
@@ -429,6 +431,10 @@ in that repository.
 - Do not put an `admin` key, or any `e9key_`, in a browser or a repository.
 - Do not keep a second list of admins in code or configuration.
 - Do not use the `roles` in a token for a privileged decision.
+- Do not send a signed-in person who lacks a role back to sign in. Delegate
+  returns the same address and they loop. Answer 403 with core's gate
+  (`requireRole`), which links to another address or account
+  ([docs/sign-in.md](docs/sign-in.md)).
 - Do not make `admin` self-joinable, or give a lesser role authority to manage
   it.
 - Do not lower the `admin` role below Identity Level 3.

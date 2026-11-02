@@ -14,16 +14,26 @@
                                    by person_segment membership
     GET  /auth/start            -- no API key. Redirect to Delegate (sign in with Google, one
                                    link, no script). ?returnTo=/path on this site, optional
-                                   login_hint=<email>, prompt=select. Needs delegateAuth.
+                                   login_hint=<email>, prompt=select, reason=access_denied
+                                   (implies prompt=select). Needs delegateAuth.
     GET  /auth/callback         -- no API key. Delegate's return: checks this browser started
                                    the sign-in, sets the Core Session cookie (e9_session),
                                    clears the login cookie, redirects to returnTo. A failure
                                    redirects there with ?login_error=<reason>.
-    POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth)
+    POST /auth/begin            -- start a popup sign-in bound to this browser: sets the
+                                   signed e9_login cookie, returns { state, nonce } for the
+                                   popup request (@engine9/id does this with session: 'cookie')
+    POST /auth/login            -- exchange delegate_token (requires API key + delegateAuth).
+                                   With { cookie: true, state }: the recommended browser
+                                   login. Checks this browser began it (POST /auth/begin:
+                                   state and nonce) and that it comes from this site's own
+                                   pages (Origin), then sets the e9_session cookie and
+                                   returns { session } with no token.
     GET  /auth/me               -- current User from session or Identity Token
     POST /auth/logout           -- { loggedOut, revoked }; revokes the Core Session when
                                    delegate.sessionRevocations is set. Cookie clear is the host's job
-    POST /auth/role             -- change the caller's role (requires delegateAuth)
+    POST /auth/role             -- change the caller's role (requires delegateAuth). A caller
+                                   signed in by cookie gets the re-signed cookie, no token
                                    body: { role_id, person_id?, exclusive?, session_token? }
                                    Same membership rules as /auth/segments, then
                                    returns a re-signed session token.
@@ -788,7 +798,8 @@ export function createApi({
      returnTo. Neither route takes an API key: a browser following a link cannot
      send one. Everything that chooses what Delegate asks for is `config.signIn`,
      never the query string, except returnTo (a path on this site), login_hint,
-     and prompt=select.
+     prompt=select, and reason=access_denied (from an access-denied page; it
+     implies prompt=select). changeSignInUrl() in auth/signIn.js builds that link.
   --------------------------------------------------------------------- */
 
   const sessionMaxAge = signIn.sessionTtlSeconds || delegate?.sessionTtlSeconds || 86400;
@@ -811,6 +822,7 @@ export function createApi({
     if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
     const origin = new URL(apiBase).origin;
     const next = safeReturnPath(query.returnTo ?? query.return_to, { origin });
+    const reason = query.reason === 'access_denied' ? 'access_denied' : undefined;
     const callback = `${apiBase}/auth/callback`;
     const { url, cookie } = delegateAuth.beginLogin({
       returnTo: callback,
@@ -824,7 +836,10 @@ export function createApi({
       loginProviders: signIn.loginProviders,
       brand: signIn.brand,
       loginHint: plausibleEmail(query.login_hint),
-      prompt: query.prompt === 'select' ? 'select' : undefined
+      // reason=access_denied comes from an access-denied page and always means
+      // the share screen, even on a Delegate that predates `reason`.
+      prompt: query.prompt === 'select' || reason ? 'select' : undefined,
+      reason
     });
     return redirect(url, [cookie]);
   }
@@ -875,7 +890,91 @@ export function createApi({
     ]);
   }
 
-  async function postAuthLogin({ body, headers }) {
+  /* ---------------------------------------------------------------------
+     Browser sign-in that ends in the Core Session cookie: the recommended way
+     for page JavaScript (the @engine9/id widget, a popup) to sign in.
+
+       POST /auth/begin                  -> { state, nonce } + e9_login cookie
+       (the popup asks Delegate with that state and nonce)
+       POST /auth/login { delegate_token, state, cookie: true }
+                                         -> { session } + e9_session cookie
+
+     The same session the redirect sign-in (/auth/start, /auth/callback) sets,
+     so requireRole and every API route see it however the person signed in.
+     Three checks make it safe to set a cookie from a POST:
+       - the nonce comes from core, not the page, so an Identity Token from
+         anywhere else (another browser, a log, an older attempt) is refused;
+       - `state` and the signed e9_login cookie must match: this browser began it;
+       - the Origin is this site's own, so another site cannot sign a visitor
+         in as someone else (login CSRF).
+     The session token is never in the response body: page script cannot read
+     the HttpOnly cookie, so XSS cannot take the session away with it.
+  --------------------------------------------------------------------- */
+
+  function postAuthBegin({ apiBase }) {
+    if (!delegateAuth) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    const { state, nonce, cookie } = delegateAuth.beginLoginRequest({ secure: apiBase.startsWith('https:') });
+    return json(200, { state, nonce }, { headers: { 'cache-control': 'no-store' }, cookies: [cookie] });
+  }
+
+  /** True when the request comes from a page on this site (the Origin's host is the API's). */
+  function sameSiteOrigin(headers, apiBase) {
+    const origin = getHeader(headers, 'Origin') || getHeader(headers, 'origin');
+    if (!origin || origin === 'null') return false;
+    try {
+      return new URL(origin).host === new URL(apiBase).host;
+    } catch {
+      return false;
+    }
+  }
+
+  async function postAuthLoginCookie({ token, body, headers, apiBase }) {
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    const secure = apiBase.startsWith('https:');
+    const clearLogin = `e9_login=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
+    if (!sameSiteOrigin(headers, apiBase)) {
+      return json(
+        403,
+        {
+          error: 'A cookie sign-in must come from this site\'s own pages (the Origin header is missing or another site\'s).',
+          reason: 'origin_mismatch'
+        },
+        { cookies: [clearLogin] }
+      );
+    }
+    try {
+      const result = await delegateAuth.finishLogin(token, {
+        state: body?.state,
+        cookie: getHeader(headers, 'Cookie') || getHeader(headers, 'cookie'),
+        secure,
+        returnTo: body?.return_to || body?.returnTo,
+        domain: body?.domain,
+        fallbackDomain: requestDomain(headers)
+      });
+      return json(
+        200,
+        { session: result.session },
+        {
+          headers: { 'cache-control': 'no-store' },
+          cookies: [
+            sessionCookie(result.token, { cookieName: sessionCookieName, maxAge: sessionMaxAge, secure }),
+            result.clearCookie
+          ]
+        }
+      );
+    } catch (e) {
+      debug('postAuthLogin (cookie) error:', e);
+      const status = e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
+      const error =
+        e.reason === 'state_mismatch'
+          ? 'This sign-in was not started in this browser, or it was already used. Start it with POST /auth/begin (@engine9/id does this with session: \'cookie\'), then sign in again.'
+          : e.userMessage || String(e.message || e);
+      return json(status, { error, reason: e.reason }, { cookies: [e.clearCookie || clearLogin] });
+    }
+  }
+
+  async function postAuthLogin({ body, headers, apiBase }) {
     if (!delegateAuth) {
       return json(501, {
         error:
@@ -886,6 +985,7 @@ export function createApi({
     if (!token) {
       return json(400, { error: 'delegate_token is required' });
     }
+    if (body?.cookie === true) return postAuthLoginCookie({ token, body, headers, apiBase });
     const returnTo = body?.return_to || body?.returnTo;
     try {
       const result = await delegateAuth.login(token, {
@@ -911,6 +1011,8 @@ export function createApi({
     const me = {
       personId: session.personId,
       roles: session.roles || [],
+      // The confirmed address of this sign-in, for "signed in as". Null without one.
+      email: session.email ?? null,
       level: session.level ?? null,
       domainUnid: session.domainUnid,
       auth: session.auth || {}
@@ -944,7 +1046,7 @@ export function createApi({
       : delegateAuth.verify(token);
   }
 
-  async function postAuthRole({ body, apiKey, headers, session, query }) {
+  async function postAuthRole({ body, apiKey, headers, session, query, sessionFromCookie = false, apiBase }) {
     if (!delegateAuth) {
       return json(501, { error: 'change-role requires delegateAuth on createApi' });
     }
@@ -1026,6 +1128,16 @@ export function createApi({
         apiKeyId: apiKey?.id,
         roleId: result.roles[0] || roleId
       });
+      // Signed in by cookie, changing their own role: the cookie is the session,
+      // so it is re-signed and the token stays out of the body.
+      if (sessionFromCookie && Number(personId) === Number(session?.personId)) {
+        const secure = Boolean(apiBase && apiBase.startsWith('https:'));
+        return json(
+          200,
+          { roles: result.roles, session: result.session },
+          { cookies: [sessionCookie(result.token, { cookieName: sessionCookieName, maxAge: sessionMaxAge, secure })] }
+        );
+      }
       return json(200, {
         roles: result.roles,
         token: result.token,
@@ -1259,13 +1371,18 @@ export function createApi({
     const apiKey = verification.key;
 
     let session = null;
+    let sessionFromCookie = false;
     if (delegateAuth) {
-      const sessionToken =
+      const explicitToken =
         req.body?.session_token ||
         getHeader(req.headers, 'X-Engine9-Session') ||
-        getHeader(req.headers, 'x-engine9-session') ||
-        sessionTokenFromCookie(getHeader(req.headers, 'Cookie') || getHeader(req.headers, 'cookie'), sessionCookieName);
+        getHeader(req.headers, 'x-engine9-session');
+      const cookieToken = explicitToken
+        ? null
+        : sessionTokenFromCookie(getHeader(req.headers, 'Cookie') || getHeader(req.headers, 'cookie'), sessionCookieName);
+      const sessionToken = explicitToken || cookieToken;
       if (sessionToken) session = await readSessionToken(sessionToken);
+      sessionFromCookie = Boolean(session && cookieToken);
 
       if (!session) {
         const bearer = extractBearer(req.headers);
@@ -1291,8 +1408,10 @@ export function createApi({
     }
 
     let result;
-    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
-      result = await postAuthLogin({ body: req.body, apiKey, headers: req.headers });
+    if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'begin') {
+      result = postAuthBegin({ apiBase: req.apiBase });
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
+      result = await postAuthLogin({ body: req.body, apiKey, headers: req.headers, apiBase: req.apiBase });
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
@@ -1310,7 +1429,9 @@ export function createApi({
         apiKey,
         headers: req.headers,
         session,
-        query: req.query || {}
+        query: req.query || {},
+        sessionFromCookie,
+        apiBase: req.apiBase
       });
     } else if (method === 'POST' && parts[0] === 'people') {
       result = await postPeople({ body: req.body, apiKey, query: req.query || {}, session });

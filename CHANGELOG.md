@@ -7,6 +7,30 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## Unreleased: an access-denied page that fixes itself
+
+This came out of a site where a signed-in person without the admin role was
+sent back to sign in. Delegate returned the same address at once, so they
+went round with nothing on screen. Core's gate already answered that case
+with a 403. The site had built its own sign-in, session, and admin check
+instead. This release makes core's answer more useful, gives sites the links
+to build their own, and adds [docs/sign-in.md](docs/sign-in.md): what core
+ships, what `@engine9/id` is for, and what a site should not build.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | `requireRole`'s 403 page says who the person is signed in as and links to **Use a different email or account** (`prompt=select&reason=access_denied`). A role held below its `requiredAuth` says it needs a stronger sign-in | Sites that use `requireRole` | No |
+| 2 | `requireRole` answers `fetch()` (`Sec-Fetch-Mode` other than `navigate`, or `Accept: application/json`) with JSON: 401 `{ reason: 'sign_in_required', signInUrl }` instead of a 302 to Delegate, and 403 `{ reason, role, email, changeUrl }` instead of HTML. Page loads are unchanged. `page: true \| false` overrides it | Page code that `fetch()`es a gated route and followed the 302 | Only if that code relied on the redirect. It used to end in a CORS error |
+| 3 | The `requireRole` result carries `reason`, `signInUrl`, `changeUrl`, and on a 403 `email` and `role` | Sites that render their own 403 | No |
+| 4 | New: `signInUrl(path)`, `changeSignInUrl(path, { reason? })`, `isPageRequest(request)`, `DEFAULT_START_PATH` in `@engine9/core/auth/signIn` | Everyone building links to `/api/auth/start` | No |
+| 5 | `GET /auth/start` takes `reason=access_denied`. It implies `prompt=select`, and Delegate shows a notice. `auth.identityUrl` and `delegateIdentityUrl` take `reason` | Sites with access-denied pages | No |
+| 6 | `GET /auth/me` returns `email` (the confirmed address of this sign-in, or null) | Page code that shows "Signed in as" | No |
+
+What a site should change: gate private pages and API routes with
+`requireRole`, answer 403 with the gate's page or `changeUrl`, and never send
+a signed-in person back to sign in. The full list is in
+[docs/sign-in.md](docs/sign-in.md#do-not).
+
 ## 1.17.0: `e9core status`, an audit log, upgrades move into the plugins, and a refused API key says so
 
 This release came out of a deploy where login looked successful and nothing

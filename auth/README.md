@@ -83,6 +83,9 @@ afterwards.
 
 ### What host code should do
 
+Sign-in, the session, and access checks are core's. Use them before writing
+your own: [docs/sign-in.md](../docs/sign-in.md).
+
 Use the session's `roles` to decide what to show: the Admin link, which page
 to land on after login (`sessionHasRole`, `sessionPrimaryRole`). Reading the
 session does not touch the database.
@@ -362,9 +365,12 @@ link and no JavaScript:
 
 - `GET /auth/start` sends the browser to Delegate with a signed `e9_login`
   cookie. Delegate opens a single provider by itself. `returnTo` must be a
-  path on this site; anything else becomes `/`. `login_hint=<email>` and
-  `prompt=select` (let the visitor choose another account) are the only
-  other query parameters. Everything else is `config.signIn`: `minLevel`
+  path on this site; anything else becomes `/`. `login_hint=<email>`,
+  `prompt=select` (let the visitor choose another account), and
+  `reason=access_denied` (from an access-denied page; implies
+  `prompt=select`, and Delegate says why) are the only other query
+  parameters. `signInUrl(path)` and `changeSignInUrl(path, { reason? })` in
+  `@engine9/core/auth/signIn` build these links. Everything else is `config.signIn`: `minLevel`
   (default 1), `maxLevel`, `fields` (default `['email']`), `optionalFields`,
   `loginLevel`, `loginProviders`, `brand`, `sessionCookie` (default
   `e9_session`), `sessionTtlSeconds`. On the Cloudflare example Worker,
@@ -387,6 +393,16 @@ const gate = await requireRole({ auth: api.delegateAuth, request, role: 'admin' 
 if (!gate.ok) return gate.response; // 302 to /api/auth/start, 401, or a 403 page
 // gate.session, gate.roles
 ```
+
+A page load gets the 302 or an HTML 403. `fetch()` from page code gets JSON:
+401 `{ reason: 'sign_in_required', signInUrl }`, or 403
+`{ reason: 'role_not_held' | 'auth_not_met', role, email, changeUrl }`. A
+signed-in person is never redirected to sign in: Delegate would return the
+same address and they would loop. The 403 says who they are signed in as and
+links to `changeUrl` (`prompt=select&reason=access_denied`). The result
+carries `reason`, `email`, `role`, `signInUrl`, and `changeUrl` for a site
+that renders its own 403. What a site should and should not build:
+[docs/sign-in.md](../docs/sign-in.md).
 
 `requireRole` reads the role from `person_segment` now and enforces the role's
 `requiredAuth` (PL-8); it never trusts the roles copied into the cookie. With

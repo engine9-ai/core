@@ -250,6 +250,12 @@ Core takes the token's Domain (JWT `aud`) from the request itself: the page
 hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
 (or `delegate.domain` in `createApi`).
 
+**Pages that need a role** are gated on the server with `requireRole`
+(`@engine9/core/auth/gate`). A server-rendered site signs in with a link to
+`/api/auth/start` and needs no sign-in JavaScript. What core ships, what
+`@engine9/id` is for, and what a site should not build itself:
+[docs/sign-in.md](docs/sign-in.md).
+
 The permission levels (visitor, site role, admin, superadmin), the
 requirements sites are reviewed against, and how to convert or upgrade an
 existing site are in [PERMISSIONS.md](PERMISSIONS.md). Code that puts admins into

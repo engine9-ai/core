@@ -217,6 +217,7 @@ export function delegateIdentityUrl({
   domain,
   returnTo,
   prompt,
+  reason,
   minLevel,
   maxLevel,
   fields,
@@ -237,6 +238,9 @@ export function delegateIdentityUrl({
   url.searchParams.set('domain', domain);
   url.searchParams.set('return_to', returnTo);
   if (prompt) url.searchParams.set('prompt', prompt);
+  // Why the site sends a signed-in person back: Delegate shows its share
+  // screen with a notice in its own words. The only value is access_denied.
+  if (reason === 'access_denied') url.searchParams.set('reason', reason);
   if (minLevel !== undefined) url.searchParams.set('min_level', String(minLevel));
   if (maxLevel !== undefined) url.searchParams.set('max_level', String(maxLevel));
   if (fields) url.searchParams.set('fields', Array.isArray(fields) ? fields.join(',') : fields);
@@ -737,8 +741,9 @@ export function sessionNeedsRole(session) {
     });
 
     auth.beginLogin({ returnTo, ... })      // { url, cookie, state, nonce }
+    auth.beginLoginRequest({ secure? })     // { cookie, state, nonce }: the same, no URL (popup)
     await auth.finishLogin(token, { state, cookie })  // checks state + nonce
-    auth.identityUrl({ returnTo, prompt?, minLevel?, loginLevel?, loginProviders?, brand?, loginHint? })
+    auth.identityUrl({ returnTo, prompt?, reason?, minLevel?, loginLevel?, loginProviders?, brand?, loginHint? })
     await auth.login(token, { nonce? })     // Identity Token JWT
     await auth.verifyIdentityToken(jwt)
     auth.verify(sessionToken)               // signature, purpose, expiry
@@ -985,6 +990,7 @@ export function createDelegateAuth({
   function identityUrl({
     returnTo,
     prompt,
+    reason,
     minLevel,
     maxLevel,
     fields,
@@ -1003,6 +1009,7 @@ export function createDelegateAuth({
       domain: domain || domainFromUrl(returnTo),
       returnTo,
       prompt,
+      reason,
       minLevel,
       maxLevel,
       fields,
@@ -1025,11 +1032,17 @@ export function createDelegateAuth({
   }
 
   /*
-    Start a sign-in bound to this browser. Send the browser to `url` with
-    `cookie` as its Set-Cookie header. The cookie holds this request's state
-    and nonce, signed and tagged so nothing else reads as one.
+    A sign-in request bound to this browser, without a Delegate URL: a fresh
+    state and nonce, and `cookie`, the Set-Cookie header that holds them
+    (signed and tagged so nothing else reads as one). The Identity Token that
+    finishes it must carry this nonce, so a token from anywhere else (another
+    browser, a log, an older attempt) cannot be exchanged for a session.
+
+    beginLogin adds the URL for a redirect. `POST /auth/begin` returns
+    `state` and `nonce` to page JavaScript (`@engine9/id`), which puts them
+    on its popup request; `POST /auth/login` with `cookie: true` finishes it.
   */
-  function beginLogin({ returnTo, cookieName = 'e9_login', secure, data, ...urlOptions } = {}) {
+  function beginLoginRequest({ cookieName = 'e9_login', secure = false, data } = {}) {
     const state = randomToken();
     const nonce = randomToken();
     // `data` (JSON) rides in the signed cookie and comes back from finishLogin, so a
@@ -1038,16 +1051,27 @@ export function createDelegateAuth({
       { state, nonce, ...(data === undefined ? {} : { data }) },
       { secret: sessionSecret, ttlSeconds: LOGIN_REQUEST_TTL_SECONDS, typ: LOGIN_REQUEST_TOKEN_TYPE }
     );
-    const isSecure = secure ?? String(returnTo || '').startsWith('https:');
     return {
-      url: identityUrl({ ...urlOptions, returnTo, state, nonce }),
       state,
       nonce,
       cookie: createSessionCookieHeaders(value, {
         cookieName,
         maxAge: LOGIN_REQUEST_TTL_SECONDS,
-        secure: isSecure
+        secure: Boolean(secure)
       })
+    };
+  }
+
+  /*
+    Start a redirect sign-in bound to this browser. Send the browser to `url`
+    with `cookie` as its Set-Cookie header.
+  */
+  function beginLogin({ returnTo, cookieName = 'e9_login', secure, data, ...urlOptions } = {}) {
+    const isSecure = secure ?? String(returnTo || '').startsWith('https:');
+    const request = beginLoginRequest({ cookieName, secure: isSecure, data });
+    return {
+      url: identityUrl({ ...urlOptions, returnTo, state: request.state, nonce: request.nonce }),
+      ...request
     };
   }
 
@@ -1151,6 +1175,7 @@ export function createDelegateAuth({
   return {
     identityUrl,
     beginLogin,
+    beginLoginRequest,
     finishLogin,
     readLoginRequest,
     login,

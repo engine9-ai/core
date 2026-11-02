@@ -8,3 +8,16 @@ export function sessionCookie(
   options?: { cookieName?: string; maxAge?: number; secure?: boolean }
 ): string;
 export function clearSessionCookie(options?: { cookieName?: string; secure?: boolean }): string;
+export const DEFAULT_START_PATH: string;
+/** `/api/auth/start?returnTo=<path>`: sign in, then come back. */
+export function signInUrl(returnTo: string, options?: { startPath?: string }): string;
+/**
+ * `/api/auth/start?returnTo=<path>&prompt=select`: sign in with another
+ * address or account. `reason: 'access_denied'` from an access-denied page.
+ */
+export function changeSignInUrl(
+  returnTo: string,
+  options?: { startPath?: string; reason?: 'access_denied' }
+): string;
+/** A page load (link, form, address bar), not `fetch()` from page code. */
+export function isPageRequest(request: Request): boolean;

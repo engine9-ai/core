@@ -120,19 +120,27 @@ const api = createApi({
    already joined the two addresses. Say so next to the link. Use cases:
    [Who is signing in](../../auth/README.md#who-is-signing-in-credential-identity-deduplication).
 
-   Sites that log in on the server instead add a route that redirects to the
-   same request with `prompt: 'select'`:
+   Sites that log in on the server with core's routes link to
+   `changeSignInUrl(path)` from `@engine9/core/auth/signIn`
+   (`/api/auth/start?returnTo=…&prompt=select`). On an access-denied page,
+   use `changeSignInUrl(path, { reason: 'access_denied' })`; core's
+   `requireRole` 403 already does. A site with its own callback passes the
+   same options to `auth.identityUrl`:
 
 ```js
 return Response.redirect(auth.identityUrl({
   returnTo: new URL('/auth/callback', request.url).toString(),
   prompt: 'select',
+  reason: 'access_denied', // only on an access-denied page
   minLevel: 1,
   fields: ['display_name', 'email'],
 }), 302);
 ```
 
-   Put the link next to Log out and on any access-denied message.
+   Put the link next to Log out and on any access-denied message. Never
+   answer "signed in, but not allowed" with a sign-in redirect: Delegate
+   returns the same address and the person loops. See
+   [docs/sign-in.md](../sign-in.md).
 
 6. Choose delegate's sign-in screen. Skip this step if Google-only is right
    for your site.
@@ -311,10 +319,11 @@ when it is long.
 | `delegate_token` | Identity Token |
 | `domain` | Optional override for JWT `aud` (host[:port]); else derived from `return_to` |
 
-`GET /auth/me` includes `personId`, `roles`, `level`, `domainUnid`, and `fields` when the request used an Identity Token.
+`GET /auth/me` includes `personId`, `roles`, `email` (the confirmed address, or null), `level`, `domainUnid`, and `fields` when the request used an Identity Token.
 
 Send visitors to `/identity/authorize` (`auth.identityUrl`). Pass
 `prompt: 'select'` for the Change your Delegate information link (step 5),
+add `reason: 'access_denied'` on an access-denied page,
 and `loginLevel: 2` to offer an email sign-in link
 ([Sign-in screen](#sign-in-screen-google-only-or-google-plus-an-email-link)).
 
