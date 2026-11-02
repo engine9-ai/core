@@ -213,15 +213,19 @@ passes `delegate: { sessionSecret }` as above.
 are pre-allowed on the public delegate.
 
 **Browser:** add [`@engine9/id`](https://github.com/engine9-ai/id) and point
-it at your API with the public key.
+it at your API with the public key. `session: "cookie"` is the recommended
+setting: core sets its HttpOnly `e9_session` cookie, the same session its
+one-link sign-in (`/api/auth/start`) sets, so the server gate
+(`requireRole`) sees the person however they signed in. The whole
+recommended setup is [docs/sign-in.md](docs/sign-in.md).
 
 ```html
 <script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
 <script>
   const id = engine9Id.mount({
-    core: { apiUrl: "/api", publicApiKey: "PASTE_E9_PUBLIC_API_KEY" },
+    core: { apiUrl: "/api", publicApiKey: "PASTE_E9_PUBLIC_API_KEY", session: "cookie" },
   });
-  // After a visitor logs in, exchange the Identity Token for a Core Session.
+  // After a visitor logs in, core checks the token and sets the e9_session cookie.
   id.onChange(async (identity) => {
     if (identity && identity.level >= 1) {
       const { session } = await id.core.login();
@@ -236,14 +240,18 @@ it at your API with the public key.
 </p>
 ```
 
-What happens: delegate issues an Identity Token for your Domain; `id`
-verifies it in the browser and shows or hides `data-e9-*` content by
-**Identity Level** (soft, for layout); `id.core.login()` posts the token to
-`/api/auth/login`; core verifies the signature against delegate's public
-keys, finds the `person_id` in your database by the token's confirmed email
-(else its Domain UNID; see [auth/README.md](auth/README.md#who-is-signing-in-credential-identity-deduplication)), reads
-segment **roles**, and returns a Core Session. From then on `id.core.fetch()`
-sends that session and core can refuse requests with a real 403.
+What happens: `id` asks core to begin the sign-in (`POST /api/auth/begin`
+returns a nonce bound to this browser); delegate issues an Identity Token
+for your Domain carrying that nonce; `id` verifies it in the browser and
+shows or hides `data-e9-*` content by **Identity Level** (soft, for layout);
+`id.core.login()` posts the token to `/api/auth/login` with `cookie: true`;
+core checks the nonce and the page's `Origin`, verifies the signature
+against delegate's public keys, finds the `person_id` in your database by the
+token's confirmed email (else its Domain UNID; see
+[auth/README.md](auth/README.md#who-is-signing-in-credential-identity-deduplication)),
+and sets the `e9_session` cookie. From then on every request from the page
+carries that session, and core, and your own `requireRole` gate, can refuse
+it with a real 403.
 
 Core takes the token's Domain (JWT `aud`) from the request itself: the page
 `Origin`, else the API `Host`. That is right whenever pages and `/api` share a

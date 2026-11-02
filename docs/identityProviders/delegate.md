@@ -80,13 +80,15 @@ const api = createApi({
    `@engine9/core/auth/delegate` and pass it as `delegateAuth`.
 
 4. In the browser, `@engine9/id` talks to delegate and then calls
-   `id.core.login()` with the public API key:
+   `id.core.login()` with the public API key. `session: 'cookie'` is the
+   recommended setting (core sets its `e9_session` cookie, which your
+   server gate reads); see [Sign-in on a site](../sign-in.md):
 
 ```html
 <script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
 <script>
   const id = engine9Id.mount({
-    core: { apiUrl: '/api', publicApiKey: 'e9publickey_…' },
+    core: { apiUrl: '/api', publicApiKey: 'e9publickey_…', session: 'cookie' },
   });
   id.onChange(async (identity) => {
     if (identity && identity.level >= 1) await id.core.login();
@@ -95,9 +97,13 @@ const api = createApi({
 <button data-e9-login>Log in</button>
 ```
 
-   `id.core.login()` posts `{ delegate_token }` to `POST /api/auth/login`
-   and keeps the returned Core Session for `id.core.me()`,
-   `id.core.changeRole()`, and `id.core.fetch()`. Page-side content gates
+   With `session: 'cookie'`, each sign-in starts with `POST /api/auth/begin`
+   (a nonce core issued to this browser), and `id.core.login()` posts
+   `{ delegate_token, state, cookie: true }` to `POST /api/auth/login`. Core
+   sets the `e9_session` cookie that `id.core.me()`, `id.core.changeRole()`,
+   `id.core.fetch()`, and your server's `requireRole` all read. The default,
+   `session: 'token'`, keeps the session in the browser instead; use it only
+   on a site with no server routes of its own. Page-side content gates
    (`data-e9-min-level`, `id.gate()`) are soft; core's roles are the hard
    gate. See [id with core](https://github.com/engine9-ai/id/blob/main/docs/with-core.md).
 

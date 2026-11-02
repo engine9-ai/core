@@ -7,29 +7,55 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
-## Unreleased: an access-denied page that fixes itself
+## 1.18.0: one session cookie for every sign-in, and an access-denied page that fixes itself
 
-This came out of a site where a signed-in person without the admin role was
-sent back to sign in. Delegate returned the same address at once, so they
-went round with nothing on screen. Core's gate already answered that case
-with a 403. The site had built its own sign-in, session, and admin check
-instead. This release makes core's answer more useful, gives sites the links
-to build their own, and adds [docs/sign-in.md](docs/sign-in.md): what core
-ships, what `@engine9/id` is for, and what a site should not build.
+**The recommended way to sign people in is now one session, core's HttpOnly
+`e9_session` cookie, set by core however the person signs in, and one gate,
+`requireRole`, on the server.** A site writes no sign-in route and keeps no
+session of its own. The full setup is [docs/sign-in.md](docs/sign-in.md),
+and [`demo-festival`](https://github.com/engine9-ai/demo-festival) is the
+reference implementation.
+
+This release came out of a site where a signed-in person without the admin
+role was sent back to sign in. Delegate returned the same address at once,
+so they went round with nothing on screen. Core's gate already answered that
+case with a 403, but the site had built its own sign-in, session, and admin
+check. One reason sites do that: until now the `@engine9/id` Login widget
+could only get a session token back into page JavaScript, which a server
+gate cannot see, so every widget site with a server wrote its own route to
+turn the token into a cookie. 1.18.0 removes that reason. Core now sets the
+cookie itself from the widget's sign-in, and binds that sign-in to the
+browser with a nonce core issues.
+
+Pair with `@engine9/id` 1.15.0 (`core: { session: 'cookie' }`).
 
 | # | Change | Who is affected | Breaks a build? |
 | --- | --- | --- | --- |
-| 1 | `requireRole`'s 403 page says who the person is signed in as and links to **Use a different email or account** (`prompt=select&reason=access_denied`). A role held below its `requiredAuth` says it needs a stronger sign-in | Sites that use `requireRole` | No |
-| 2 | `requireRole` answers `fetch()` (`Sec-Fetch-Mode` other than `navigate`, or `Accept: application/json`) with JSON: 401 `{ reason: 'sign_in_required', signInUrl }` instead of a 302 to Delegate, and 403 `{ reason, role, email, changeUrl }` instead of HTML. Page loads are unchanged. `page: true \| false` overrides it | Page code that `fetch()`es a gated route and followed the 302 | Only if that code relied on the redirect. It used to end in a CORS error |
-| 3 | The `requireRole` result carries `reason`, `signInUrl`, `changeUrl`, and on a 403 `email` and `role` | Sites that render their own 403 | No |
-| 4 | New: `signInUrl(path)`, `changeSignInUrl(path, { reason? })`, `isPageRequest(request)`, `DEFAULT_START_PATH` in `@engine9/core/auth/signIn` | Everyone building links to `/api/auth/start` | No |
-| 5 | `GET /auth/start` takes `reason=access_denied`. It implies `prompt=select`, and Delegate shows a notice. `auth.identityUrl` and `delegateIdentityUrl` take `reason` | Sites with access-denied pages | No |
-| 6 | `GET /auth/me` returns `email` (the confirmed address of this sign-in, or null) | Page code that shows "Signed in as" | No |
+| 1 | **New: `POST /auth/begin`** returns `{ state, nonce }` and sets the signed `e9_login` cookie (`auth.beginLoginRequest()`), so page JavaScript can ask Delegate for a token bound to this browser | Sites that use the Login widget or a popup sign-in | No |
+| 2 | **New: `POST /auth/login` with `{ delegate_token, state, cookie: true }`** sets `e9_session` and answers `{ session }` with no token. It refuses a token whose nonce is not the one `/auth/begin` issued to this browser (`401 state_mismatch`) and a request from another site's page (`403 origin_mismatch`). Without `cookie: true`, `/auth/login` is unchanged | Sites with a server that use `@engine9/id`. Use this instead of a route of your own | No |
+| 3 | `POST /auth/role` from a cookie session (your own role) re-signs `e9_session` and leaves the token out of the body. A header session gets its token as before | Sites whose widget changes roles through core | No |
+| 4 | `requireRole`'s `role` takes a list (`['VIP', 'admin']`): holding any one is enough | Pages more than one role may see | No |
+| 5 | `requireRole`'s 403 page says who the person is signed in as and links to **Use a different email or account** (`prompt=select&reason=access_denied`). A role held below its `requiredAuth` says it needs a stronger sign-in | Sites that use `requireRole` | No |
+| 6 | `requireRole` answers `fetch()` (`Sec-Fetch-Mode` other than `navigate`, or `Accept: application/json`) with JSON: 401 `{ reason: 'sign_in_required', signInUrl }` instead of a 302 to Delegate, and 403 `{ reason, role, email, changeUrl }` instead of HTML. Page loads are unchanged. `page: true \| false` overrides it | Page code that `fetch()`es a gated route and followed the 302 | Only if that code relied on the redirect. It used to end in a CORS error |
+| 7 | The `requireRole` result carries `reason`, `signInUrl`, `changeUrl`, and on a 403 `email` and `role` | Sites that render their own 403 | No |
+| 8 | New: `signInUrl(path)`, `changeSignInUrl(path, { reason? })`, `isPageRequest(request)`, `DEFAULT_START_PATH` in `@engine9/core/auth/signIn` | Everyone building links to `/api/auth/start` | No |
+| 9 | `GET /auth/start` takes `reason=access_denied`. It implies `prompt=select`, and Delegate shows a notice. `auth.identityUrl` and `delegateIdentityUrl` take `reason` | Sites with access-denied pages | No |
+| 10 | `GET /auth/me` returns `email` (the confirmed address of this sign-in, or null) | Page code that shows "Signed in as" | No |
 
-What a site should change: gate private pages and API routes with
-`requireRole`, answer 403 with the gate's page or `changeUrl`, and never send
-a signed-in person back to sign in. The full list is in
-[docs/sign-in.md](docs/sign-in.md#do-not).
+### What a site should change
+
+| Where | Find | Change to |
+| --- | --- | --- |
+| `package.json` | `"@engine9/core": "1.17.0"` | `"1.18.0"`, with `"@engine9/id": "1.15.0"` |
+| The browser's `@engine9/id` config | `core: { apiUrl, publicApiKey }` | `core: { apiUrl, publicApiKey, session: 'cookie' }` (pages and `/api` on one host) |
+| A route of your own that takes the widget's `delegate_token` and sets a session cookie | `fetch('/your/route', { body: { delegate_token } })` | `await id.core.login()`, then delete the route |
+| Your own redirect callback (`/auth/delegate`, `/auth/callback`) and its state cookie | — | A link to `/api/auth/start?returnTo=…` (`signInUrl(path)`), and `config.signIn` for what Delegate asks for. Delete the callback |
+| A session cookie of your own | `cookies.set('session', …)` | Core's `e9_session`; read it with `sessionFromRequest` or `requireRole` |
+| An access check on the roles copied into the cookie | `sessionHasRole(session, ADMIN)` before serving a page | `requireRole({ auth, request, role: 'admin' })` |
+| A signed-in person without the role | `redirect('/login?required=admin')` | `return gate.response` (or your own 403 from `gate.email` and `gate.changeUrl`) |
+| A Logout that navigates in the widget's `onLogout` | `onLogout() { location.assign('/') }` | `onLoggedOut() { location.assign('/') }`; `id.logout()` ends core's session |
+
+Every row is what demo-festival 1.13.0 did. Its diff is the worked example.
 
 ## 1.17.0: `e9core status`, an audit log, upgrades move into the plugins, and a refused API key says so
 

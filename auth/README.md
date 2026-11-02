@@ -384,6 +384,27 @@ link and no JavaScript:
   is read on the API's other routes (`GET /auth/me`, `POST /auth/role`, …) next
   to `X-Engine9-Session`, and `POST /auth/logout` clears it.
 
+### Browser sign-in to the same cookie (`/auth/begin`, `/auth/login` with `cookie: true`)
+
+The recommended way for page JavaScript (the `@engine9/id` widget with
+`core.session: 'cookie'`) to sign in. It ends in the same `e9_session`
+cookie as the redirect above, so the gate does not care which one the person
+used.
+
+- `POST /auth/begin` (public key) returns `{ state, nonce }` and sets the
+  signed `e9_login` cookie (`auth.beginLoginRequest()`). The page asks
+  Delegate with that state and nonce.
+- `POST /auth/login` with `{ delegate_token, state, cookie: true }` runs
+  `finishLogin`: `state` and the token's nonce must match `e9_login`, and the
+  `Origin` must be this site's (else `403 origin_mismatch`). It sets
+  `e9_session`, clears `e9_login`, and answers `{ session }` with no token.
+  A token for another request is `401 state_mismatch`.
+- `POST /auth/role` from a cookie session (changing your own role) re-signs
+  the cookie and leaves the token out of the body.
+
+Without `cookie: true`, `/auth/login` answers `{ session, token }` as
+before, for a page with no server of its own.
+
 To lock a page you serve yourself, check the cookie in the same Worker:
 
 ```js
