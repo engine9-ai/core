@@ -351,7 +351,8 @@ When a new build needs storage, decide in this order:
 | -------------------- | ----------------------------------------------------------------------------- |
 | `E9_ADMIN_API_KEY`   | Full access (`e9key_…`). Server and scripts only                              |
 | `E9_PUBLIC_API_KEY`  | Signup forms and login (`e9publickey_…`). Safe in the browser                 |
-| `SESSION_SECRET`     | HMAC key for Core Sessions. Present = login on                                |
+| `SESSION_SECRET`     | HMAC key for Core Sessions. Present = login on. Setup writes it; 64 random hex characters, nothing else is accepted |
+| `AGENT_CREDENTIALS_SECRET` | HMAC key for AI agent access tokens (`@engine9/core-agent-credentials`). Setup writes it, same form |
 | `E9_SETUP_TOKEN`     | Opens the local `/setup` wizard until you finish. Not used in production      |
 | `E9_ALLOWED_ORIGINS` | Optional. Browser origins allowed to call the API from another host (CORS)    |
 | `E9_DOMAIN`          | Optional. JWT `aud` when the API host differs from the page host              |

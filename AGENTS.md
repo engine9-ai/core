@@ -309,6 +309,12 @@ not in setup docs.
   `X-Engine9-Session`). Never required for authentication. The env name is
   `SESSION_SECRET`. It is the local authenticator so later requests skip the
   identity provider. Documented in [auth/README.md](auth/README.md).
+- `SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET` are made by
+  `npx e9core setup-keys` (and `--remote`), never by a person or by you. Do
+  not ask someone for a value, invent one, or set one with
+  `wrangler secret put`. Missing or refused: run `setup-keys --remote`.
+  Own servers: `openssl rand -hex 32`. Core accepts only 64 hex characters
+  (`signingSecretProblem` in [auth/hmac.js](auth/hmac.js)); do not loosen it.
 - Roles may set `requiredAuth.minLevel`; that is authorization policy, not
   an identity level itself.
 

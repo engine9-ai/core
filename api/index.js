@@ -140,7 +140,7 @@ import {
   withQueryParam
 } from '../auth/signIn.js';
 import { parseOriginList } from './setupPage.js';
-import { extractApiKey, hashApiKey } from '../auth/index.js';
+import { extractApiKey, hashApiKey, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
 
@@ -296,7 +296,15 @@ export function createApi({
   const signIn = configSignIn || {};
   const sessionCookieName = signIn.sessionCookie || DEFAULT_SESSION_COOKIE;
 
-  if (!delegateAuth && delegate?.sessionSecret) {
+  // A SESSION_SECRET a person chose can be guessed offline from any session
+  // token. Login stays off with it; every other route still works.
+  let loginOffMessage =
+    'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi';
+  const sessionSecretProblem =
+    !delegateAuth && delegate?.sessionSecret ? signingSecretProblem(delegate.sessionSecret) : null;
+  if (sessionSecretProblem) {
+    loginOffMessage = `login is not enabled: ${signingSecretMessage('SESSION_SECRET', sessionSecretProblem)}`;
+  } else if (!delegateAuth && delegate?.sessionSecret) {
     delegateAuth = createDelegateAuth({
       worker,
       delegateUrl: delegate.delegateUrl || DEFAULT_DELEGATE_URL,
@@ -633,7 +641,22 @@ export function createApi({
           ? { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
           : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup-keys --remote' }
       );
-    secret('SESSION_SECRET', 'Login (/auth/*) is off without it.');
+    // Signing secrets must also have the shape e9core setup-keys writes.
+    // AGENT_CREDENTIALS_SECRET is checked only when the site sets it.
+    const signingSecret = (name, why, { optional = false } = {}) => {
+      if (!has(name)) {
+        if (!optional) secret(name, why);
+        return;
+      }
+      const problem = signingSecretProblem(env[name]);
+      checks.push(
+        problem
+          ? { id: `secrets.${name}`, area: 'secrets', status: 'fail', title: `${name} ${problem}`, detail: signingSecretMessage(name, problem), fix: 'npx e9core setup-keys --remote' }
+          : { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
+      );
+    };
+    signingSecret('SESSION_SECRET', 'Login (/auth/*) is off without it.');
+    signingSecret('AGENT_CREDENTIALS_SECRET', '', { optional: true });
     secret('E9_PUBLIC_API_KEY', 'The site cannot check that its public key is in the database.');
     secret('E9_ADMIN_API_KEY', 'The site cannot check that its admin key is in the database.');
     checks.push(
@@ -813,7 +836,7 @@ export function createApi({
 
   function notConfigured() {
     return json(501, {
-      error: 'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi'
+      error: loginOffMessage
     });
   }
 
@@ -977,8 +1000,7 @@ export function createApi({
   async function postAuthLogin({ body, headers, apiBase }) {
     if (!delegateAuth) {
       return json(501, {
-        error:
-          'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi'
+        error: loginOffMessage
       });
     }
     const token = body?.delegate_token;

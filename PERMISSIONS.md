@@ -179,7 +179,11 @@ recorded reason.
   the scopes visitors need.
 - **PL-7 (MUST)** `SESSION_SECRET` is 32 random bytes, different for every
   host and every environment, kept out of git, and set in production. Core
-  has no built-in default and will not create login without it. Production also
+  has no built-in default and will not create login without it. A machine
+  makes the value (`e9core setup-keys`), never a person. Core refuses login
+  with any value that is not 64 hex characters, and `e9core status` reports
+  it as a failure. `AGENT_CREDENTIALS_SECRET` follows the same rules and
+  differs from `SESSION_SECRET`. Production also
   SHOULD configure `sessionRevocations` so logout actually ends a session,
   and set `acceptLegacySessions: false` once a day has passed after upgrading
   to a version that adds session `typ`. Deliver the Core Session as an
@@ -359,7 +363,7 @@ only way to read the production D1 database, so use it there.
 | PL-4 | `npx e9core superadmin list` (or the `E9_SUPERADMINS` value) is the full list. Each entry is a named person's verified address. |
 | PL-5 | Query the key table and review it: `select id, name, scopes, default_role_id, active, expires_at from api_key;`. Expect few `admin` keys, none unexpected, expiry set where appropriate, nothing with `*` or empty scopes. Search built assets and the repository for `e9key_`; there should be no match (only `e9publickey_` may appear in a browser bundle). |
 | PL-6 | `npx e9core segment list` shows the `admin` segment with `join_min_level`, `leave_min_level`, `manager_role_id` all empty or `null`. |
-| PL-7 | `SESSION_SECRET` is set in production and differs from other environments. Logout with a session and then reuse its token: it must be refused. |
+| PL-7 | `SESSION_SECRET` is set in production and differs from other environments. Set it to a phrase (`I am god`): login must answer 501 and `e9core status` must fail. Logout with a session and then reuse its token: it must be refused. |
 | PL-8 | Code review: privileged paths call `auth.rolesForSession` and `meetsRequiredAuth`, not the `roles` array from a token. |
 | PL-9 | Remove a test admin, then call a privileged route with a fresh token: it must be refused. |
 | PL-10 | `curl -I https://<site>/engine9.superadmins.json` returns 404, and the file is not in a public repository. |

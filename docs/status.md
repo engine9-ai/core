@@ -60,7 +60,8 @@ when it is not a pass, a `fix`.
 | `account.owns_database` | The logged-in account cannot see the `database_id` in `wrangler.jsonc` | Log in to the account that owns it; pin `account_id` |
 | `account.pinned` | More than one account is reachable and `wrangler.jsonc` has no `account_id`, or `account_id` is not one of them | Add `"account_id"` |
 | `schema_file.legacy` | `migrations/0001_engine9.sql` is in wrangler's migrations folder | Delete it, or run `npx e9core setup` |
-| `secrets.<NAME>` | `E9_ADMIN_API_KEY`, `E9_PUBLIC_API_KEY`, or `SESSION_SECRET` is not set; `E9_SETUP_TOKEN` is set in production | `npx e9core setup-keys --remote` |
+| `secrets.<NAME>` | `E9_ADMIN_API_KEY`, `E9_PUBLIC_API_KEY`, or `SESSION_SECRET` is not set (warn); `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` is set but is not 64 random hex characters (fail); `E9_SETUP_TOKEN` is set in production | `npx e9core setup-keys --remote` |
+| `secrets.<target>.<NAME>` | `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` in `.env` (`local`) or `.env.<target>` is not 64 random hex characters | `npx e9core setup-keys`, or `setup-keys --remote` for a deployed environment. Either replaces the value |
 | `audit.configured` | No audit log sink: changes go only to the Worker log | Bind `AUDIT_BUCKET` |
 | `database.copy` | Wrangler could not export the schema or read the rows | Read the detail |
 | `core.tables` | `plugin`, `setting`, or `api_key` is missing | `npx e9core installDefaultPlugins` |

@@ -29,7 +29,8 @@ import PluginWorker from '../lib/PluginWorker.js';
 import { summarize } from '../lib/status/index.js';
 import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
 import { adminKey, callSite, siteEndpoint } from './upgrade.js';
-import { readEnvValue, remoteEnvPath } from './setupKeys.js';
+import { readEnvValue, remoteEnvPath, ENV_SESSION_SECRET, ENV_AGENT_CREDENTIALS_SECRET } from './setupKeys.js';
+import { signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { LEGACY_SCHEMA_FILE } from './setup.js';
 
 const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
@@ -142,6 +143,32 @@ function secretChecks({ exec, cwd, envFlag }) {
         fix: `npx wrangler secret delete E9_SETUP_TOKEN${envFlag.length ? ` ${envFlag.join(' ')}` : ''}`
       })
     );
+  }
+  return checks;
+}
+
+/*
+  Signing secrets in this folder's .env files must have the shape setup-keys
+  writes. The Worker's copies are checked by the site (--url); this catches a
+  value someone typed before it is deployed. Only a bad value is reported.
+*/
+function envFileSecretChecks(cwd, files) {
+  const checks = [];
+  for (const file of files) {
+    const text = readText(path.join(cwd, file));
+    if (!text) continue;
+    for (const name of [ENV_SESSION_SECRET, ENV_AGENT_CREDENTIALS_SECRET]) {
+      const value = readEnvValue(text, name);
+      const problem = value ? signingSecretProblem(value) : null;
+      if (!problem) continue;
+      checks.push(
+        check('secrets', `secrets.${file === '.env' ? 'local' : file.slice(5)}.${name}`, 'fail', `${name} in ${file} ${problem}`, {
+          detail: signingSecretMessage(name, problem),
+          fix: file === '.env' ? 'npx e9core setup-keys' : `npx e9core setup-keys --remote${file === '.env.production' ? '' : ` --env ${file.slice(5)}`}`,
+          data: { file }
+        })
+      );
+    }
   }
   return checks;
 }
@@ -332,6 +359,7 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
     } finally {
       await worker.destroy();
     }
+    checks.push(...envFileSecretChecks(cwd, ['.env']));
     return { ...summarize(checks), sources, core_version: report.core_version, schemas_version: report.schemas_version, checks };
   }
 
@@ -375,6 +403,7 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
     }
   }
 
+  if (sources.length) checks.push(...envFileSecretChecks(cwd, ['.env', path.basename(remoteEnvPath(cwd, env))]));
   if (!sources.length) {
     throw new Error('Nothing to check: pass --url <site> or --db <connection>, or run in a folder with wrangler.jsonc');
   }

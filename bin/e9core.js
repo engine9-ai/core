@@ -19,9 +19,10 @@
 
     e9core setup [--name my-site] [--remote [--env staging]] [--domain example.com] [--node]
         Writes wrangler.jsonc (Cloudflare path), the engine9 database, and .env
-        (API keys, SESSION_SECRET, E9_SETUP_TOKEN). Keys are part of setup.
+        (API keys, SESSION_SECRET, AGENT_CREDENTIALS_SECRET, E9_SETUP_TOKEN).
+        Keys are part of setup.
         --remote also loads production D1, saves Cloudflare secrets, and deploys.
-        Production gets its own admin key and SESSION_SECRET (.env.production).
+        Production gets its own admin key and signing secrets (.env.production).
         --env targets that wrangler environment instead (.env.<env>); it must
         already be in wrangler.jsonc with a DB binding.
         --node skips Cloudflare (SQLite + .env); then use: e9core serve
@@ -35,8 +36,10 @@
         Create/reuse site keys and E9_SETUP_TOKEN (normally done by setup).
         Writes plaintext to .env only (gitignored). Do not add .dev.vars;
         Wrangler prefers that file and ignores the same names in .env.
-        Stores only hashes in local D1. --remote gives production its own
-        admin key and SESSION_SECRET (saved in .env.production, or .env.<env>
+        Stores only hashes in local D1. A SESSION_SECRET or
+        AGENT_CREDENTIALS_SECRET that is not 64 random hex characters is
+        replaced. --remote gives production its own admin key and signing
+        secrets (saved in .env.production, or .env.<env>
         with --env), stores the hashes in that D1 database, and saves them as
         that environment's Cloudflare secrets. The public key is shared.
 
@@ -604,6 +607,7 @@ async function main() {
           if (result.created.admin) console.log('  E9_ADMIN_API_KEY — server only');
           if (result.created.public) console.log('  E9_PUBLIC_API_KEY — signup forms / browser');
           if (result.created.session) console.log('  SESSION_SECRET — signs the login cookie');
+          if (result.created.agentCredentials) console.log('  AGENT_CREDENTIALS_SECRET — signs AI agent access tokens (@engine9/core-agent-credentials)');
           if (result.created.setupToken) console.log('  E9_SETUP_TOKEN — local wizard only');
         }
         for (const note of result.notes) console.log(note);

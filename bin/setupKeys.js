@@ -8,13 +8,28 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { generateApiKey, hashApiKey } from '../auth/index.js';
+import { generateApiKey, generateSigningSecret, hashApiKey, signingSecretProblem } from '../auth/index.js';
 
 export const ENV_ADMIN_KEY = 'E9_ADMIN_API_KEY';
 export const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
 export const ENV_SESSION_SECRET = 'SESSION_SECRET';
+export const ENV_AGENT_CREDENTIALS_SECRET = 'AGENT_CREDENTIALS_SECRET';
 export const ENV_SETUP_TOKEN = 'E9_SETUP_TOKEN';
 export const ENV_ALLOWED_ORIGINS = 'E9_ALLOWED_ORIGINS';
+
+/*
+  A signing secret from the file, or a new one when it is missing or is not
+  the shape setup-keys writes (a value someone typed). People never choose
+  these. `notes` says which file had a value replaced.
+*/
+function signingSecretFrom(text, name, { rotate, notes, file }) {
+  const existing = rotate ? '' : readEnvValue(text, name);
+  if (existing && !signingSecretProblem(existing)) return { value: existing, created: false };
+  if (existing) {
+    notes.push(`${name} in ${file} ${signingSecretProblem(existing)}; replaced it with a random one. Tokens signed with the old value stop working.`);
+  }
+  return { value: generateSigningSecret(), created: true };
+}
 
 const STATE_DIR = '.e9core';
 const STATE_FILE = 'keys.json';
@@ -187,11 +202,13 @@ export async function setupKeys(options = {}) {
   const rotate = options.rotate === true;
   let adminKey = rotate ? '' : readEnvValue(existingEnv, ENV_ADMIN_KEY);
   let publicKey = rotate ? '' : readEnvValue(existingEnv, ENV_PUBLIC_KEY);
-  let sessionSecret = rotate ? '' : readEnvValue(existingEnv, ENV_SESSION_SECRET);
+  const notes = [];
+  const session = signingSecretFrom(existingEnv, ENV_SESSION_SECRET, { rotate, notes, file: '.env' });
+  const agentCredentials = signingSecretFrom(existingEnv, ENV_AGENT_CREDENTIALS_SECRET, { rotate, notes, file: '.env' });
   let setupToken = rotate ? '' : readEnvValue(existingEnv, ENV_SETUP_TOKEN);
   const allowedOrigins = readEnvValue(existingEnv, ENV_ALLOWED_ORIGINS);
 
-  const created = { admin: false, public: false, session: false, setupToken: false };
+  const created = { admin: false, public: false, session: session.created, agentCredentials: agentCredentials.created, setupToken: false };
   const inserts = [];
 
   if (!adminKey) {
@@ -229,10 +246,6 @@ export async function setupKeys(options = {}) {
     ]);
     if (replaced) inserts.push(replaced);
   }
-  if (!sessionSecret) {
-    sessionSecret = randomBytes(32).toString('hex');
-    created.session = true;
-  }
   if (!setupToken) {
     setupToken = randomBytes(24).toString('hex');
     created.setupToken = true;
@@ -241,7 +254,8 @@ export async function setupKeys(options = {}) {
   const entries = {
     [ENV_ADMIN_KEY]: adminKey,
     [ENV_PUBLIC_KEY]: publicKey,
-    [ENV_SESSION_SECRET]: sessionSecret,
+    [ENV_SESSION_SECRET]: session.value,
+    [ENV_AGENT_CREDENTIALS_SECRET]: agentCredentials.value,
     [ENV_SETUP_TOKEN]: setupToken
   };
   if (allowedOrigins) entries[ENV_ALLOWED_ORIGINS] = allowedOrigins;
@@ -265,6 +279,7 @@ export async function setupKeys(options = {}) {
         `${ENV_ADMIN_KEY}=`,
         `${ENV_PUBLIC_KEY}=`,
         `${ENV_SESSION_SECRET}=`,
+        `${ENV_AGENT_CREDENTIALS_SECRET}=`,
         `${ENV_SETUP_TOKEN}=`,
         `# ${ENV_ALLOWED_ORIGINS}=http://localhost:8768,https://www.example.com`,
         ''
@@ -272,7 +287,6 @@ export async function setupKeys(options = {}) {
     );
   }
 
-  const notes = [];
   const overrides = wranglerDotenvOverrides(cwd);
   if (overrides.length) {
     notes.push(
@@ -339,7 +353,7 @@ export async function setupKeys(options = {}) {
     publicKey,
     notes,
     remote: remote ? { target: remote.target, envPath: remote.envPath, created: remote.created } : null,
-    reused: !created.admin && !created.public && !created.session && !created.setupToken
+    reused: !created.admin && !created.public && !created.session && !created.agentCredentials && !created.setupToken
   };
 }
 
@@ -359,8 +373,8 @@ export function deactivateApiKeysSql(ids) {
 }
 
 /*
-  A deployed environment gets its own admin key and SESSION_SECRET, never the
-  local development values. The public key is shared: it is public, and the
+  A deployed environment gets its own admin key, SESSION_SECRET, and
+  AGENT_CREDENTIALS_SECRET, never the local development values. The public key is shared: it is public, and the
   deployed engine9-config.js carries the one written from .env.
   E9_SETUP_TOKEN stays local; the production Worker does not mount /setup.
 */
@@ -387,17 +401,15 @@ function remoteKeys({ cwd, d1Name, env, rotate, state, publicKey, run }) {
   }
 
   let adminKey = rotate ? '' : readEnvValue(existing, ENV_ADMIN_KEY);
-  let sessionSecret = rotate ? '' : readEnvValue(existing, ENV_SESSION_SECRET);
-  const created = { admin: false, session: false };
+  const file = path.basename(filePath);
+  const session = signingSecretFrom(existing, ENV_SESSION_SECRET, { rotate, notes, file });
+  const agentCredentials = signingSecretFrom(existing, ENV_AGENT_CREDENTIALS_SECRET, { rotate, notes, file });
+  const created = { admin: false, session: session.created, agentCredentials: agentCredentials.created };
   if (!adminKey) {
     adminKey = generateApiKey({ scopes: ['admin'] });
     if (prior.adminId) retire.push(prior.adminId);
     next.adminId = randomUUID();
     created.admin = true;
-  }
-  if (!sessionSecret) {
-    sessionSecret = randomBytes(32).toString('hex');
-    created.session = true;
   }
   if (next.publicId && state.publicId && next.publicId !== state.publicId) retire.push(next.publicId);
   next.publicId = state.publicId;
@@ -419,13 +431,19 @@ function remoteKeys({ cwd, d1Name, env, rotate, state, publicKey, run }) {
     upsertEnv(existing, {
       [ENV_ADMIN_KEY]: adminKey,
       [ENV_PUBLIC_KEY]: publicKey,
-      [ENV_SESSION_SECRET]: sessionSecret
+      [ENV_SESSION_SECRET]: session.value,
+      [ENV_AGENT_CREDENTIALS_SECRET]: agentCredentials.value
     })
   );
 
   run(['d1', 'execute', d1Name, '--remote', ...envFlag, '--command', sql.join(' ')], cwd);
   notes.push(`Stored key hashes in the ${target} D1 database "${d1Name}".`);
-  const secrets = { [ENV_ADMIN_KEY]: adminKey, [ENV_PUBLIC_KEY]: publicKey, [ENV_SESSION_SECRET]: sessionSecret };
+  const secrets = {
+    [ENV_ADMIN_KEY]: adminKey,
+    [ENV_PUBLIC_KEY]: publicKey,
+    [ENV_SESSION_SECRET]: session.value,
+    [ENV_AGENT_CREDENTIALS_SECRET]: agentCredentials.value
+  };
   for (const [name, value] of Object.entries(secrets)) {
     run(['secret', 'put', name, ...envFlag], cwd, value);
   }

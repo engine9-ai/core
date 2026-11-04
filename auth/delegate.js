@@ -26,7 +26,9 @@ import {
   base64urlDecode,
   signPayload,
   verifySignedPayload,
-  splitSignedToken
+  splitSignedToken,
+  signingSecretProblem,
+  signingSecretMessage
 } from './hmac.js';
 import {
   standardRoleRegistry,
@@ -792,6 +794,8 @@ export function createDelegateAuth({
 }) {
   if (!worker) throw new Error('createDelegateAuth requires a worker (PersonWorker)');
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
+  const secretProblem = signingSecretProblem(sessionSecret);
+  if (secretProblem) throw new Error(signingSecretMessage('sessionSecret (SESSION_SECRET)', secretProblem));
   const accountId = worker.accountId;
   const roleRegistry = normalizeRoleRegistry({ roles, roleSegments, accountId });
   /* Superadmins act as this account's `admin` role. Make sure the registry

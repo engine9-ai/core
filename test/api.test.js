@@ -190,7 +190,7 @@ test('client API: role scopes, default_role_id, and POST /auth/role', async () =
       worker,
       delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       roles: {
         [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },

@@ -43,7 +43,7 @@ async function setup({ authOptions = {} } = {}) {
     worker,
     delegateUrl: DELEGATE_URL,
     domain: DOMAIN,
-    sessionSecret: 'binding-secret',
+    sessionSecret: '0123456789abcdef'.repeat(4),
     pluginId: 'p',
     roles: { [ROLE_A]: { name: 'A' }, [ROLE_B]: { name: 'B' } },
     jwks: { keys: [jwk] },
@@ -121,7 +121,7 @@ test('session tokens carry a purpose; other purposes and (optionally) untyped to
   const { auth } = await setup();
   const { auth: strict } = await setup({ authOptions: { acceptLegacySessions: false } });
   const encoded = Buffer.from(JSON.stringify({ personId: 7, roles: [], exp: Date.now() + 60000 })).toString('base64url');
-  const legacy = `${encoded}.${signPayload(encoded, 'binding-secret')}`;
+  const legacy = `${encoded}.${signPayload(encoded, '0123456789abcdef'.repeat(4))}`;
   assert.equal(auth.verify(legacy).personId, 7);
   assert.equal(strict.verify(legacy), null);
 });

@@ -498,6 +498,7 @@ export function createDelegateAuth(config: {
   issuer?: string;
   /** Preloaded JWKS; skips fetch of /.well-known/jwks.json. */
   jwks?: { keys: Record<string, unknown>[] };
+  /** 64 hex characters (32 random bytes), as `e9core setup-keys` writes. Anything else throws. */
   sessionSecret: string;
   sessionTtlSeconds?: number;
   pluginId?: string;

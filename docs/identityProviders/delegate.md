@@ -45,7 +45,8 @@ Do this after `POST /api/people` works. See [../deploy.md](../deploy.md).
    development.
 2. Make sure `SESSION_SECRET` is set. `npx e9core setup` (and `setup --node`)
    writes it to `.env`; `npx e9core setup --remote` stores it as a Cloudflare
-   secret (`openssl rand -hex 32` is the same kind of value). It signs the
+   secret (`openssl rand -hex 32` is the same kind of value; core refuses a
+   value you typed). It signs the
    Core Session this host checks on later requests, so those requests do not
    call Delegate again. Full account of the token, the cookie, and when a
    request still hits Delegate:

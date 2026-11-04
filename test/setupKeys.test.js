@@ -77,6 +77,33 @@ describe('setupKeys', () => {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  it('writes both signing secrets, and replaces one someone typed', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-keys-secrets-'));
+    try {
+      const first = await setupKeys({ cwd, skipWrangler: true });
+      assert.equal(first.created.session, true);
+      assert.equal(first.created.agentCredentials, true);
+      const env1 = readFileSync(path.join(cwd, '.env'), 'utf8');
+      const session = readEnvValue(env1, 'SESSION_SECRET');
+      const agent = readEnvValue(env1, 'AGENT_CREDENTIALS_SECRET');
+      assert.match(session, /^[0-9a-f]{64}$/);
+      assert.match(agent, /^[0-9a-f]{64}$/);
+      assert.notEqual(session, agent);
+
+      writeFileSync(path.join(cwd, '.env'), upsertEnv(env1, { SESSION_SECRET: 'I am god' }));
+      const second = await setupKeys({ cwd, skipWrangler: true });
+      assert.equal(second.reused, false);
+      assert.equal(second.created.session, true);
+      assert.equal(second.created.agentCredentials, false);
+      assert.match(second.notes.join('\n'), /SESSION_SECRET in \.env is not 64 hex characters.*replaced/);
+      const env2 = readFileSync(path.join(cwd, '.env'), 'utf8');
+      assert.match(readEnvValue(env2, 'SESSION_SECRET'), /^[0-9a-f]{64}$/);
+      assert.equal(readEnvValue(env2, 'AGENT_CREDENTIALS_SECRET'), agent, 'a good secret is kept');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('setupKeys --remote', () => {
@@ -104,7 +131,7 @@ describe('setupKeys --remote', () => {
       assert.notEqual(readEnvValue(prodEnv, 'SESSION_SECRET'), readEnvValue(local, 'SESSION_SECRET'));
       assert.equal(readEnvValue(prodEnv, 'E9_PUBLIC_API_KEY'), readEnvValue(local, 'E9_PUBLIC_API_KEY'));
       const secrets = prod.calls.filter((c) => c.args[0] === 'secret').map((c) => c.args[2]);
-      assert.deepEqual(secrets.sort(), ['E9_ADMIN_API_KEY', 'E9_PUBLIC_API_KEY', 'SESSION_SECRET']);
+      assert.deepEqual(secrets.sort(), ['AGENT_CREDENTIALS_SECRET', 'E9_ADMIN_API_KEY', 'E9_PUBLIC_API_KEY', 'SESSION_SECRET']);
       const put = prod.calls.find((c) => c.args[2] === 'E9_ADMIN_API_KEY');
       assert.equal(put.input, readEnvValue(prodEnv, 'E9_ADMIN_API_KEY'));
       assert.ok(prod.calls.every((c) => !c.args.includes('--env')));
@@ -112,9 +139,22 @@ describe('setupKeys --remote', () => {
       assert.match(sql, /INSERT OR IGNORE INTO api_key/);
       assert.doesNotMatch(sql, new RegExp(readEnvValue(local, 'E9_ADMIN_API_KEY')));
 
+      assert.notEqual(readEnvValue(prodEnv, 'AGENT_CREDENTIALS_SECRET'), readEnvValue(local, 'AGENT_CREDENTIALS_SECRET'));
+      const agentPut = prod.calls.find((c) => c.args[2] === 'AGENT_CREDENTIALS_SECRET');
+      assert.equal(agentPut.input, readEnvValue(prodEnv, 'AGENT_CREDENTIALS_SECRET'));
+
       const again = recorder();
       await setupKeys({ cwd, remote: true, wrangler: again.run, applySql: async () => {} });
       assert.equal(readFileSync(path.join(cwd, '.env.production'), 'utf8'), prodEnv, 'second run reuses production keys');
+
+      // A value typed into .env.production is replaced and sent to Cloudflare.
+      writeFileSync(path.join(cwd, '.env.production'), upsertEnv(prodEnv, { AGENT_CREDENTIALS_SECRET: 'this is a secret this is a secret' }));
+      const fixed = recorder();
+      const repaired = await setupKeys({ cwd, remote: true, wrangler: fixed.run, applySql: async () => {} });
+      assert.match(repaired.notes.join('\n'), /AGENT_CREDENTIALS_SECRET in \.env\.production is not 64 hex characters/);
+      const repairedValue = readEnvValue(readFileSync(path.join(cwd, '.env.production'), 'utf8'), 'AGENT_CREDENTIALS_SECRET');
+      assert.match(repairedValue, /^[0-9a-f]{64}$/);
+      assert.equal(fixed.calls.find((c) => c.args[2] === 'AGENT_CREDENTIALS_SECRET').input, repairedValue);
       assert.match(again.calls.find((c) => c.args[0] === 'd1').args.at(-1), /INSERT OR IGNORE/, 'a rebuilt database gets the keys back');
 
       const staging = recorder();

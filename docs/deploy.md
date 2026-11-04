@@ -218,7 +218,10 @@ npx e9core setup --node --db mysql://user:pass@host/dbname
 
 For production on your own host, run the same Node app (or mount `createApi` in
 Express/Astro/etc. as in the [README quick start](../README.md#install-on-your-own-server-nodejs)).
-Keep `.env` off git.
+Keep `.env` off git. Production needs its own `SESSION_SECRET` and
+`AGENT_CREDENTIALS_SECRET`, not the ones in this `.env`: give each the output
+of `openssl rand -hex 32` in your host's secret store. Core refuses any other
+form.
 
 ---
 
@@ -255,15 +258,21 @@ separate key command.
 | `E9_ADMIN_API_KEY` | Full access. Server and scripts only. Never put this in page JavaScript |
 | `E9_PUBLIC_API_KEY` | Signup forms. Safe to show to the browser (`e9publickey_…`) |
 | `SESSION_SECRET` | HMAC key for a Core Session after login. Production has its own (see below) |
+| `AGENT_CREDENTIALS_SECRET` | HMAC key for AI agent access tokens, when the site uses `@engine9/core-agent-credentials`. Production has its own |
 | `E9_SETUP_TOKEN` | Opens the local `/setup` wizard until you finish. Not used by the production Worker |
 | `E9_ALLOWED_ORIGINS` | Optional comma-separated origins (independent hosts). The wizard's origins step writes it here; the API reads only this value |
 
 `.env` is for this development machine. `npx e9core setup --remote` gives
-production its own admin key and `SESSION_SECRET`, saves them in
+production its own admin key, `SESSION_SECRET`, and `AGENT_CREDENTIALS_SECRET`, saves them in
 `.env.production`, and stores them as Cloudflare secrets. The public key is the
 same everywhere, because it is already in page JavaScript. A leaked laptop
 `.env` therefore cannot call production as admin or mint production sessions.
 `.env.*` files are ignored by git.
+
+Never type `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` yourself, and never
+set them with `wrangler secret put`. Each is 32 random bytes as 64 hex
+characters. Core refuses login with anything else, and `e9core status` fails
+the check. `setup-keys` (and `--remote`) replaces a value of any other form.
 
 For another wrangler environment, add `--env staging`. It gets `.env.staging`,
 its own keys, and the `DB` binding under `env.staging` in `wrangler.jsonc`.
@@ -428,7 +437,8 @@ Configuration failures are not fixed by signing in again.
 | `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/schemas`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
 | `Cannot add a column with non-constant default` | `schema_update_failed` | `installDefaultPlugins` tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
 | other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
-| `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `wrangler secret put SESSION_SECRET`, then redeploy. |
+| `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `npx e9core setup-keys --remote`. Do not choose a value yourself. |
+| `SESSION_SECRET is not 64 hex characters` (501 from `/auth/*`) | none | Someone typed the secret. Login stays off; a typed value can be guessed from any session. | `npx e9core setup-keys --remote` replaces it. |
 | invalid or expired token | `invalid_identity_token` | The Identity Token did not verify. | Sign in again. |
 
 ### When the API answers `unauthorized`

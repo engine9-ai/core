@@ -107,6 +107,8 @@ export {
   intersectScopes,
   meetsRequiredAuth,
   parseSharedSecrets,
+  generateSigningSecret,
+  signingSecretProblem,
   signPayload,
   verifySignedPayload
 } from './auth/index.js';

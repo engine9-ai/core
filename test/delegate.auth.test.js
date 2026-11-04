@@ -312,7 +312,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
       worker,
       delegateUrl: 'https://delegate.example.test',
       domain,
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       remoteInputId: 'delegate-login',
       roles: {
@@ -459,7 +459,7 @@ test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on sess
       worker,
       delegateUrl: 'https://delegate.example.test',
       domain: 'site.example.com',
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       roleSegments: { vip: vipSegmentId },
       fetchImpl: await jwksFetch(publicKey, 'legacy-roles-key')
@@ -500,7 +500,7 @@ test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', 
       worker,
       delegateUrl: 'https://delegate.example.test',
       domain: 'site.example.com',
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       remoteInputId: 'delegate-login',
       roles: {
@@ -629,7 +629,7 @@ test('createDelegateAuth: login() with JWT creates session with level and shared
       worker,
       delegateUrl: 'https://delegate.network',
       domain: 'site.example.com',
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       fetchImpl
     });

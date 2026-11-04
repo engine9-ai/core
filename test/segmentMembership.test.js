@@ -132,7 +132,7 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
     const delegateAuth = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.example.test',
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       roles
     });

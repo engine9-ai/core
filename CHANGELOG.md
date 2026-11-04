@@ -7,6 +7,28 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.18.1: signing secrets are made by setup, and a typed one is refused
+
+**`SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET` are now 64 random hex
+characters (32 random bytes) or nothing.** Anyone who signs in once holds a
+token signed with the secret and can test guesses against it offline, so a
+phrase such as `I am god` let anyone mint a session for any person, admins
+included. Until now core accepted any non-empty `SESSION_SECRET`.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | `createDelegateAuth` throws when `sessionSecret` is not 64 hex characters. `createApi` with such a `delegate.sessionSecret` leaves `/auth/*` off (501, with the fix) and every other route works | Sites whose `SESSION_SECRET` was typed rather than made by `e9core setup` | Login stops until the secret is replaced. A secret `e9core setup` or `openssl rand -hex 32` made is unaffected |
+| 2 | `e9core setup-keys` (and `--remote`) writes `AGENT_CREDENTIALS_SECRET` beside `SESSION_SECRET`, its own value in each environment, and stores it as a Cloudflare secret | Sites that use `@engine9/core-agent-credentials` | No |
+| 3 | `e9core setup-keys` replaces a `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` of any other form, and says so | Sites with a typed secret | No. People signed in with the old value sign in again |
+| 4 | `e9core status` fails `secrets.SESSION_SECRET` and `secrets.AGENT_CREDENTIALS_SECRET` (site) and `secrets.<target>.<NAME>` (`.env`, `.env.<target>`) when the value is not 64 hex characters | Everyone | No |
+| 5 | New exports: `generateSigningSecret`, `signingSecretProblem` | Hosts that make their own secrets | No |
+
+| What a site changes | |
+| --- | --- |
+| Cloudflare | `npx e9core setup-keys --remote` (add `--env staging` per environment). It replaces a typed secret and stores the new one |
+| Your own servers | Set `SESSION_SECRET` (and `AGENT_CREDENTIALS_SECRET` if used) to the output of `openssl rand -hex 32`, one per environment |
+| Code | Nothing, unless it passes a hand-written `sessionSecret` to `createDelegateAuth` or `createApi` (tests included). Use `generateSigningSecret()` or a 64-hex value |
+
 ## 1.18.0: one session cookie for every sign-in, and an access-denied page that fixes itself
 
 **The recommended way to sign people in is now one session, core's HttpOnly

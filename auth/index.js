@@ -32,6 +32,9 @@ import {
 } from './policy.js';
 import {
   parseSharedSecrets,
+  generateSigningSecret,
+  signingSecretProblem,
+  signingSecretMessage,
   base64urlEncode,
   base64urlDecode,
   signPayload,
@@ -83,6 +86,9 @@ export {
 } from './segmentAccess.js';
 export {
   parseSharedSecrets,
+  generateSigningSecret,
+  signingSecretProblem,
+  signingSecretMessage,
   base64urlEncode,
   base64urlDecode,
   signPayload,

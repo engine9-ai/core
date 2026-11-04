@@ -285,15 +285,23 @@ unguessable value kept out of git. Each host has its own value. One host’s
 secret does not sign the engine9 API’s sessions, and the API’s secret does
 not sign another host’s cookie.
 
-Create one (32 random bytes, hex). This is the same generator `e9core setup-keys` uses:
+A person never chooses it. Anyone who signs in once holds a session signed
+with it, and can test guesses against that session offline, with no rate
+limit, so a phrase falls in minutes. `npx e9core setup-keys` writes
+`SESSION_SECRET` (and `AGENT_CREDENTIALS_SECRET`) into `.env` next to the API
+keys. `npx e9core setup-keys --remote` gives a Cloudflare environment its own
+and stores them as secrets. Rotate with `npx e9core setup-keys --rotate`, then
+`--remote` again.
+
+The value is 32 random bytes as 64 hex characters. `createDelegateAuth`
+throws on anything else, `createApi` leaves login off and says why, and
+`e9core status` fails the check. `setup-keys` replaces a value of any other
+form. On your own servers, where setup-keys does not reach production, use the
+same generator:
 
 ```bash
 openssl rand -hex 32
 ```
-
-`npx e9core setup-keys` writes `SESSION_SECRET` into `.env` next to the API
-keys. `npx e9core setup-keys --remote` stores that value as a Cloudflare
-secret. Rotate with `npx e9core setup-keys --rotate`, then `--remote` again.
 
 ### What it is, and what it is not
 

@@ -81,7 +81,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
       worker,
       delegateUrl: DELEGATE_URL,
       domain: DOMAIN,
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       roles: {
         [vipRoleId]: { name: 'VIP', scopes: ['data:read'] },
@@ -286,7 +286,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
     const api = createApi({
       worker,
       keyStore,
-      delegate: { sessionSecret: 'session-secret', fetchImpl },
+      delegate: { sessionSecret: '0123456789abcdef'.repeat(4), fetchImpl },
       config: { pluginId }
     });
 
@@ -411,7 +411,7 @@ test('API role_id: only roles the caller holds', async () => {
       scopes: ['people:write', 'data:read'],
       defaultRoleId: viewerRoleId
     });
-    const delegateAuth = createDelegateAuth({ worker, delegateUrl: DELEGATE_URL, domain: DOMAIN, sessionSecret: 's', pluginId, roles });
+    const delegateAuth = createDelegateAuth({ worker, delegateUrl: DELEGATE_URL, domain: DOMAIN, sessionSecret: '0123456789abcdef'.repeat(4), pluginId, roles });
     const api = createApi({ worker, keyStore, delegateAuth, config: { pluginId, roles } });
     const headers = { authorization: `Bearer ${key}` };
     const body = { people: [{ email: 'role-id@example.com' }] };

@@ -46,7 +46,7 @@ async function setup({ roleMember = true, level = 3, signIn = {}, secureSite = t
   const delegateAuth = createDelegateAuth({
     worker,
     delegateUrl: DELEGATE_URL,
-    sessionSecret: 'signin-secret',
+    sessionSecret: '0123456789abcdef'.repeat(4),
     pluginId: 'p',
     roles: { [ADMIN]: { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } } },
     jwks: { keys: [jwk] }

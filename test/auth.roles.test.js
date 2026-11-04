@@ -204,7 +204,7 @@ test("createDelegateAuth roles: 'standard' -- email granted before first login l
       worker,
       delegateUrl: 'https://delegate.example.test',
       domain,
-      sessionSecret: 'session-secret',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       pluginId,
       roles: 'standard',
       fetchImpl: await jwksFetch(publicKey, 'k1')
@@ -245,7 +245,7 @@ test("createDelegateAuth roles: 'standard' -- email granted before first login l
     const explicit = createDelegateAuth({
       worker,
       delegateUrl: 'https://delegate.example.test',
-      sessionSecret: 's',
+      sessionSecret: '0123456789abcdef'.repeat(4),
       roles: { [adminId]: { name: 'Admin', scopes: ['admin'] } }
     });
     await assert.rejects(explicit.ensureSegments(), /roles: 'standard'/);
