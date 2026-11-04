@@ -32,7 +32,7 @@ describe('findDatabaseId', () => {
 describe('mergeWranglerConfig', () => {
   it('fills the database id and does not drop an existing setting', () => {
     const cfg = mergeWranglerConfig(
-      { name: 'kept', vars: { OTHER: '1', E9_PLUGIN_ID: 'retired' } },
+      { name: 'kept', vars: { OTHER: '1', E9_PLUGIN_ID: 'pinned-plugin-id' } },
       {
         name: 'my-site',
         databaseName: 'engine9',
@@ -45,9 +45,15 @@ describe('mergeWranglerConfig', () => {
     assert.equal(cfg.d1_databases[0].database_id, DB_ID);
     assert.equal(cfg.vars.OTHER, '1');
     assert.equal(cfg.vars.E9_ACCOUNT_ID, 'my-site');
-    assert.equal('E9_PLUGIN_ID' in cfg.vars, false);
+    // Deprecated, but an existing value is kept: the site's rows depend on it.
+    assert.equal(cfg.vars.E9_PLUGIN_ID, 'pinned-plugin-id');
     assert.equal(cfg.routes[0].pattern, 'www.example.com');
     assert.ok(cfg.compatibility_flags.includes('nodejs_compat'));
+  });
+
+  it('never adds E9_PLUGIN_ID to a new project', () => {
+    const cfg = mergeWranglerConfig({}, { name: 'new-site', databaseName: 'engine9', databaseId: DB_ID, accountId: 'new-site' });
+    assert.equal('E9_PLUGIN_ID' in cfg.vars, false);
   });
 
   it('writes the Worker aliases and has wrangler build the plugin registry', () => {

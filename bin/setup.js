@@ -242,10 +242,9 @@ export function mergeWranglerConfig(existing, patch) {
   if (index >= 0) databases[index] = entry;
   else databases.push(entry);
   cfg.d1_databases = databases;
-  // The site's plugin id derives from E9_ACCOUNT_ID; an old E9_PLUGIN_ID is
-  // no longer read, so drop it rather than leave a dead setting behind.
-  const { E9_PLUGIN_ID: _retired, ...vars } = cfg.vars || {};
-  cfg.vars = { ...vars, E9_ACCOUNT_ID: patch.accountId };
+  // E9_PLUGIN_ID is deprecated: never written here, but an existing one is
+  // kept, because the site's rows (and often its own code) depend on it.
+  cfg.vars = { ...(cfg.vars || {}), E9_ACCOUNT_ID: patch.accountId };
   if (patch.domain) {
     const routes = Array.isArray(cfg.routes) ? [...cfg.routes] : [];
     if (!routes.some((route) => route.pattern === patch.domain)) {
@@ -329,9 +328,11 @@ export async function setup(options = {}) {
   const name = options.name || 'my-site';
   const databaseName = options.d1 || 'engine9';
   const accountId = name;
-  const pluginId = getPluginUUID(accountId, 'website');
-  const notes = [];
   const wranglerPath = path.join(cwd, 'wrangler.jsonc');
+  // A project that already pins the deprecated E9_PLUGIN_ID keeps its
+  // website row under that id; setup never adds the variable itself.
+  const pluginId = readJsonc(wranglerPath)?.vars?.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
+  const notes = [];
   const statePath = path.join(cwd, '.e9core', 'setup.json');
   const state = existsSync(statePath)
     ? JSON.parse(readFileSync(statePath, 'utf8'))

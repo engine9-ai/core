@@ -77,7 +77,7 @@ function wranglerProject(cwd, env) {
     const cfg = JSON5.parse(readFileSync(file, 'utf8'));
     const scope = env ? cfg.env?.[env] : cfg;
     const db = scope?.d1_databases?.find((d) => d.binding === 'DB');
-    return { cfg, file: name, databaseName: db?.database_name || 'engine9', databaseId: db?.database_id || null };
+    return { cfg, file: name, vars: scope?.vars || {}, databaseName: db?.database_name || 'engine9', databaseId: db?.database_id || null };
   }
   return null;
 }
@@ -235,10 +235,19 @@ async function wranglerCopyStatus({ exec, cwd, project, envFlag, keys, plugins, 
     const dbFile = path.join(dir, 'copy.db');
     loadCopy(dbFile, schemaSql, tables);
     ensureNodePluginRegistry({ cwd });
-    const worker = new PluginWorker({ accountId: 'status', auth: { database_connection: `sqlite://${dbFile}` } });
+    // The same account id, handle, and plugin id the deployed Worker uses
+    // (cloudflare/worker.js), so the handle checks compare like with like.
+    const vars = project.vars || {};
+    const accountId = vars.E9_ACCOUNT_ID || 'cloudflare';
+    const worker = new PluginWorker({
+      accountId,
+      accountHandle: vars.E9_ACCOUNT_HANDLE || accountId,
+      auth: { database_connection: `sqlite://${dbFile}` }
+    });
     try {
       const report = await worker.status({
         upgrades: 'schema_only',
+        sitePluginId: vars.E9_PLUGIN_ID || undefined,
         keys,
         plugins,
         source: 'wrangler copy',
@@ -347,13 +356,27 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
 
   if (db && !url) {
     ensureNodePluginRegistry({ cwd });
-    const worker = new PluginWorker({ accountId: args.account || 'client', auth: { database_connection: db } });
+    // With no account id from --account or .env, the handle checks would
+    // compare against a guess, so they are skipped.
+    const accountId = (args.account && args.account !== true ? String(args.account) : '') || readEnvValue(localEnv, 'E9_ACCOUNT_ID') || process.env.E9_ACCOUNT_ID || '';
+    const handle = (args.handle && args.handle !== true ? String(args.handle) : '') || readEnvValue(localEnv, 'E9_ACCOUNT_HANDLE') || process.env.E9_ACCOUNT_HANDLE || '';
+    const worker = new PluginWorker({
+      accountId: accountId || 'client',
+      accountHandle: handle || accountId || 'client',
+      auth: { database_connection: db }
+    });
     try {
       const keys = {};
       if (publicKey) keys.public = { value: publicKey, source: '.env' };
       const admin = readEnvValue(localEnv, ENV_ADMIN_KEY);
       if (admin) keys.admin = { value: admin, source: '.env' };
-      report = await worker.status({ keys, plugins, source: 'database', fixTarget: `--db ${db}`, keysFix: `npx e9core setup-keys --db ${db}` });
+      report = await worker.status({
+        keys,
+        plugins,
+        handleChecks: Boolean(accountId || handle),
+        sitePluginId: readEnvValue(localEnv, 'E9_PLUGIN_ID') || process.env.E9_PLUGIN_ID || undefined,
+        source: 'database',
+        fixTarget: `--db ${db}`, keysFix: `npx e9core setup-keys --db ${db}` });
       sources.push(`database ${db}`);
       checks.push(...report.checks);
     } finally {

@@ -190,6 +190,8 @@ export async function serve(options = {}) {
         }
       : null,
     config: {
+      // Deprecated: honored when an existing project still sets it.
+      pluginId: process.env.E9_PLUGIN_ID || undefined,
       defaultRemoteInputId: 'website',
       upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
       // The wizard's origins step updates the variable while this server runs.

@@ -16,7 +16,7 @@ import { buildPlugins } from '../bin/buildPlugins.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { ensurePluginRow } from './helpers/applySchemas.js';
+import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
 import { makeLegacyPersonNames } from './helpers/legacyPersonNames.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -370,6 +370,52 @@ test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run o
     assert.ok(records.some((r) => r.action === 'upgrade'), 'with no AUDIT_BUCKET the upgrade is in the Worker log');
   } finally {
     console.info = info;
+    d1.db.close();
+    await rm(built.dir, { recursive: true, force: true });
+    await rm(siteDir, { recursive: true, force: true });
+  }
+});
+
+test('Cloudflare worker: a site that pins the deprecated E9_PLUGIN_ID writes people under it', async () => {
+  const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-pinned-'));
+  const registryFile = path.join(siteDir, 'engine9.plugins.js');
+  const dbFile = path.join(siteDir, 'engine9.db');
+  buildPlugins({ cwd: root, packages: ['@engine9/schemas'], out: registryFile });
+  const accountId = 'cf-pinned';
+  const pinned = '6e1f8877-0000-5000-8000-000000000002';
+  assert.notEqual(pinned, getPluginUUID(accountId, 'website'));
+  const setupWorker = new PersonWorker({ accountId, auth: { database_connection: `sqlite://${dbFile}` } });
+  let publicKey;
+  try {
+    await applyStandardStack(setupWorker);
+    await ensurePluginRow(setupWorker, { id: pinned, path: 'website', name: 'Website' });
+    const keyStore = new SqlApiKeyStore({ worker: setupWorker });
+    await keyStore.deploy();
+    publicKey = (await keyStore.create({ name: 'public', scopes: ['public'] })).key;
+  } finally {
+    await setupWorker.destroy();
+  }
+  const built = await bundleWorkerd({
+    aliases: { '@engine9/core/plugins/site': registryFile },
+    contents: "export { default } from '@engine9/core/cloudflare/worker';\n",
+    sourcefile: 'site-worker.js'
+  });
+  const d1 = sqliteD1(dbFile);
+  try {
+    const mod = await import(built.href);
+    const fetch = mod.default?.fetch || mod.default?.default?.fetch;
+    const res = await fetch(
+      new Request('https://www.example.test/api/people', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${publicKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ people: [{ email: 'pinned@example.com' }] })
+      }),
+      { DB: d1, E9_ACCOUNT_ID: accountId, E9_PLUGIN_ID: pinned }
+    );
+    assert.equal(res.status, 200, await res.clone().text());
+    const ids = d1.db.prepare('select distinct plugin_id from input').all().map((r) => r.plugin_id);
+    assert.deepEqual(ids, [pinned]);
+  } finally {
     d1.db.close();
     await rm(built.dir, { recursive: true, force: true });
     await rm(siteDir, { recursive: true, force: true });

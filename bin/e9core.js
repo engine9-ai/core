@@ -89,7 +89,7 @@
         changes nothing; --sql adds the statements the diff would run
         (SQLite and D1).
 
-    e9core status [--url https://www.example.com] [--db …] [--env staging] [--plugin <path>] [--json] [--strict] [--no-wrangler]
+    e9core status [--url https://www.example.com] [--db … [--account <id>] [--handle <handle>]] [--env staging] [--plugin <path>] [--json] [--strict] [--no-wrangler]
         Read-only: does the database match the deployed code, and if not,
         what fixes it (docs/status.md). Uses every source it can reach:
         --url asks the deployed site (GET /api/admin/status, admin key found
@@ -305,7 +305,7 @@ async function segmentCommand(args) {
   // never the account id (see auth/roles.js). Defaults to accountId: a
   // database that has never set a handle keeps the ids it already has.
   const accountHandle = args.handle || process.env.E9_ACCOUNT_HANDLE || accountId;
-  const pluginId = args['plugin-id'] || getPluginUUID(accountHandle, 'website');
+  const pluginId = args['plugin-id'] || process.env.E9_PLUGIN_ID || getPluginUUID(accountHandle, 'website');
   const registry = standardRoleRegistry(accountHandle);
   const roleNames = STANDARD_ROLES.map((r) => r.name).join(', ');
   // A role name or a raw segment id.

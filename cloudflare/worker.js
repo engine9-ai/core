@@ -18,6 +18,9 @@
                           changed since those ids were first computed; a
                           site that has never set a handle must never set
                           it to anything but its current E9_ACCOUNT_ID.
+    E9_PLUGIN_ID       -- deprecated; still honored on a site that already
+                          has it. Setup never writes it. Pins the plugin id
+                          people writes use instead of the derived one.
     E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
     E9_SUPERADMINS     -- optional comma-separated verified emails that act as this
                           site's admin role (Identity Level 3 or higher)
@@ -98,6 +101,7 @@ export default {
           }
         : null,
       config: {
+        pluginId: env.E9_PLUGIN_ID || undefined,
         defaultRemoteInputId: 'website',
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         allowedOrigins: env.E9_ALLOWED_ORIGINS || '',

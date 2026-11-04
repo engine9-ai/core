@@ -460,3 +460,47 @@ test('e9core status --url uses the site report when the admin key works, and ski
     rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+test('e9core status (D1 copy) checks handles with the site\'s own E9_ACCOUNT_ID and pinned E9_PLUGIN_ID', async () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'e9-status-handle-'));
+  const dbFile = path.join(cwd, 'remote.db');
+  const pinned = '6e1f8877-0000-5000-8000-000000000003';
+  const worker = new PersonWorker({ accountId: 'sirens', auth: { database_connection: `sqlite://${dbFile}` } });
+  try {
+    await worker.installDefaultPlugins();
+    await ensurePluginRow(worker, { id: pinned, path: 'website', name: 'Website' });
+    const vars = { E9_ACCOUNT_ID: 'sirens', E9_PLUGIN_ID: pinned };
+    writeFileSync(path.join(cwd, 'wrangler.jsonc'), JSON.stringify({ vars, d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: 'x' }] }));
+    const { exec } = fakeWrangler(dbFile);
+
+    const report = await runStatusCommand({}, { cwd, exec });
+    const fingerprint = byId(report, 'handle.fingerprint')[0];
+    assert.equal(fingerprint.status, 'pass', JSON.stringify(fingerprint));
+    assert.ok(fingerprint.data.matches.includes('website'));
+    assert.equal(byId(report, 'handle.default').length, 0, 'sirens is not a core fallback');
+  } finally {
+    await worker.destroy();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('e9core status --db with no account id skips the handle checks instead of guessing', async () => {
+  const cwd = mkdtempSync(path.join(tmpdir(), 'e9-status-db-'));
+  const dbFile = path.join(cwd, 'site.db');
+  const worker = new PersonWorker({ accountId: 'sirens', auth: { database_connection: `sqlite://${dbFile}` } });
+  const saved = process.env.E9_ACCOUNT_ID;
+  delete process.env.E9_ACCOUNT_ID;
+  try {
+    await worker.installDefaultPlugins();
+    await ensurePluginRow(worker, { id: getPluginUUID('sirens', 'website'), path: 'website', name: 'Website' });
+    const report = await runStatusCommand({ db: `sqlite://${dbFile}` }, { cwd });
+    assert.equal(report.checks.some((c) => c.id.startsWith('handle.')), false);
+
+    const withAccount = await runStatusCommand({ db: `sqlite://${dbFile}`, account: 'sirens' }, { cwd });
+    assert.equal(byId(withAccount, 'handle.fingerprint')[0].status, 'pass');
+  } finally {
+    if (saved !== undefined) process.env.E9_ACCOUNT_ID = saved;
+    await worker.destroy();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});

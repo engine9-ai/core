@@ -204,14 +204,15 @@ test('the Durable Object identifier store is keyed by accountHandle, not account
   assert.deepEqual(seen, ['mrss_peta']);
 });
 
-test('status: warns when running on a core default account id', async () => {
+test('status: a core default account id is reported as a pass, never a warning', async () => {
   const worker = new PersonWorker({ accountId: 'cloudflare', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await applyStandardStack(worker);
     const result = await worker.status();
     const found = result.checks.find((c) => c.id === 'handle.default');
     assert.ok(found, 'handle.default check is present');
-    assert.equal(found.status, 'warn');
+    assert.equal(found.status, 'pass');
+    assert.equal(found.fix, undefined);
   } finally {
     await worker.destroy();
   }
@@ -269,5 +270,40 @@ test('status: catches an account id changed with no handle set -- the mistake th
   } finally {
     await renamed.destroy();
     await fs.promises.unlink(dbFile.replace('sqlite://', '')).catch(() => {});
+  }
+});
+
+// The deprecated E9_PLUGIN_ID: a site that pinned its plugin id by hand keeps
+// it, and status compares its website row against the pin, not the derived id.
+const PINNED_SITE_PLUGIN = '6e1f8877-0000-5000-8000-000000000001';
+
+test('status: a website row under a pinned E9_PLUGIN_ID matches when the pin is passed, warns when it is not', async () => {
+  const worker = new PersonWorker({ accountId: 'sirens', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await applyStandardStack(worker);
+    await worker.insertArray({
+      table: 'plugin',
+      array: [{ id: PINNED_SITE_PLUGIN, path: 'website', name: 'Sirens', table_prefix: '' }]
+    });
+    const pinned = (await worker.status({ sitePluginId: PINNED_SITE_PLUGIN })).checks.find((c) => c.id === 'handle.fingerprint');
+    assert.equal(pinned.status, 'pass');
+    assert.ok(pinned.data.matches.includes('website'));
+
+    const unpinned = (await worker.status()).checks.find((c) => c.id === 'handle.fingerprint');
+    assert.equal(unpinned.status, 'warn');
+    assert.ok(unpinned.data.mismatches.some((m) => m.path === 'website' && m.found === PINNED_SITE_PLUGIN));
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('status: handleChecks: false leaves out both handle checks', async () => {
+  const worker = new PersonWorker({ accountId: 'cloudflare', auth: { database_connection: 'sqlite://:memory:' } });
+  try {
+    await applyStandardStack(worker);
+    const result = await worker.status({ handleChecks: false });
+    assert.equal(result.checks.some((c) => c.id.startsWith('handle.')), false);
+  } finally {
+    await worker.destroy();
   }
 });

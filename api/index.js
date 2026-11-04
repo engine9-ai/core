@@ -701,6 +701,7 @@ export function createApi({
         keys,
         checks,
         source: 'site',
+        sitePluginId: pluginId,
         fixTarget: `--url ${origin}`
       });
       return json(200, report);

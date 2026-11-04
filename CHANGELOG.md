@@ -7,44 +7,52 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
-## 1.19.0: accountHandle, and E9_PLUGIN_ID retired
+## 1.19.0: accountHandle; E9_PLUGIN_ID deprecated
+
+No site needs to change anything for this release.
 
 Every id namespaced under an account -- role segments, the site's own
-`website` plugin, the `roles` plugin, `e9console`/`e9workers`/`e9forms` --
-used to be computed from `accountId` directly. That meant an account's id
-could never change: a rename silently moved every admin out of their role
-and every account-scoped plugin onto a new, empty row.
+`website` plugin, the `roles` plugin, `e9console`/`e9workers`/`e9forms`,
+the Durable Object identifier store -- used to be computed from `accountId`
+directly, so an account's id could never change: a rename silently moved
+every admin out of their role and every account-scoped plugin onto a new,
+empty row.
 
 Those ids are now computed from `worker.accountHandle`, which defaults to
-`worker.accountId` so nothing changes for an existing site. Set
-`accountHandle` (`E9_ACCOUNT_HANDLE` on a Worker, `--handle` on the CLI)
-only for a database whose account id has already changed since those ids
-were first produced; otherwise leave it out. A handle must never change
-once it has produced rows.
-
-`e9core status` and `GET /admin/status` gained two checks: `handle.default`
-warns when a process is still running on one of core's own generic account
-ids (`client`, `cloudflare`, `local`, `my-site`); `handle.fingerprint` warns
-when the configured account id or handle does not match the ids already in
-the database -- the state a bad rename, or a stale `E9_PLUGIN_ID`, leaves
-behind.
+`worker.accountId`, so every existing site computes exactly the ids it did
+before. Set `accountHandle` (`E9_ACCOUNT_HANDLE` on a Worker or in `.env`,
+`--handle` on the CLI) only if the account id changes later: set it to the
+old id. A handle never changes once it has produced rows.
 
 `config.pluginId` in `createApi` is now optional; it defaults to the site's
 own `website` plugin (`getPluginUUID(worker.accountHandle, 'website')`),
-the row `e9core setup` always creates. `E9_PLUGIN_ID` is no longer read
-anywhere -- it was never asked for by setup, and a value other than the
-derived default pointed writes at a plugin row that did not exist.
+the row `e9core setup` creates.
 
-`npx e9core setup` now also writes `E9_ACCOUNT_ID` to `.env` (previously
-only `wrangler.jsonc`), so a local `npx e9core serve` against the same
-project computes the same ids setup did.
+**`E9_PLUGIN_ID` is deprecated, and still honored.** The Worker, `serve`,
+and the CLI use it when it is set, before the derived default. `e9core
+setup` no longer writes it to a new project; on an existing project it
+keeps the value and uses it for the local `website` row. A site that sets
+it keeps writing under the same plugin it always has. Support will be
+removed in a later release, which will say what such a site changes.
+
+`e9core status` and `GET /admin/status` gained two checks:
+- `handle.default` reports, as a pass, a site running on one of core's
+  generic account ids (`client`, `cloudflare`, `local`, `my-site`). That
+  value is the site's permanent handle; nothing to change.
+- `handle.fingerprint` warns when the configured account id or handle (or
+  `E9_PLUGIN_ID`, when set) does not match the ids already in the database.
+  `e9core status` reads these from `wrangler.jsonc` vars, or from `.env`
+  / `--account` / `--handle` with `--db`; with `--db` and no account id,
+  the check is skipped.
+
+`npx e9core setup` also writes `E9_ACCOUNT_ID` to `.env` when it is not
+there yet, so a local `npx e9core serve` computes the same ids setup did.
 
 | What a site changes | |
 | --- | --- |
-| Deployed with `E9_PLUGIN_ID` set in `wrangler.jsonc` to anything other than `getPluginUUID(E9_ACCOUNT_ID, 'website')` | Pass that value as `config.pluginId` in your own `createApi` call, then delete the `E9_PLUGIN_ID` var |
-| Everyone else | Nothing. Delete `E9_PLUGIN_ID` from `wrangler.jsonc` if present; it is no longer read |
-| Local development only, `.env` predates this release | Run `npx e9core setup` once (or add `E9_ACCOUNT_ID=<your account id>` to `.env` by hand) so `serve` stops falling back to `local` |
-| `e9core status` / `GET /admin/status` reports `handle.default` or `handle.fingerprint` | Read the check's `detail`; set `E9_ACCOUNT_ID` (or `accountHandle`) to the value that produced the account's existing rows. Never change it afterward |
+| Every site | Nothing |
+| Optional, local development: `.env` has no `E9_ACCOUNT_ID` | Re-run `npx e9core setup` (or add `E9_ACCOUNT_ID` from `wrangler.jsonc`) so `serve` uses the site's account id instead of `local` |
+| `e9core status` warns `handle.fingerprint` | Read the check's `detail`; set `E9_ACCOUNT_HANDLE` to the value that produced the existing rows. Never change it afterward |
 
 ## 1.18.2: 1.18.1 as intended
 
