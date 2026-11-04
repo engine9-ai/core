@@ -27,6 +27,14 @@
   Any process that knows the account id can compute a role's segment id
   with no lookup, in core sites and on the engine9 server alike.
 
+  The `accountId` argument here is the account's *handle*: the permanent
+  string these ids are namespaced under (worker.accountHandle, which
+  defaults to worker.accountId when no handle is configured). It must never
+  change once a role segment exists -- a different value computes a
+  different segment, and every member of it would silently lose the role.
+  The account id a site or operator sees (worker.accountId) is allowed to
+  change; functions here never read it on their own.
+
   `pluginId` in this module is the plugin people are created under when an
   email is new (the site plugin). It does not affect segment ids.
 */
@@ -74,7 +82,10 @@ function requireWorker(worker, fn) {
 }
 
 function requireAccountId(accountId, worker, fn) {
-  const id = typeof accountId === 'string' && accountId.trim() ? accountId.trim() : worker?.accountId;
+  const id =
+    typeof accountId === 'string' && accountId.trim()
+      ? accountId.trim()
+      : worker?.accountHandle ?? worker?.accountId;
   if (!id) throw new Error(`${fn} requires accountId`);
   return id;
 }

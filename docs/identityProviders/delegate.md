@@ -66,7 +66,6 @@ const api = createApi({
     // domain: 'www.example.com',       // only when /api is on a different host than the pages
   },
   config: {
-    pluginId: env.E9_PLUGIN_ID,
     roles: {
       '<admin-segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } },
     },

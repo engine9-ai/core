@@ -170,8 +170,9 @@ Either key may be omitted. An entry is:
 - an object with `person_id` or `email` → **someone else**.
 
 `email` on an `add` creates the person when new. Entries with `email` need
-`people:write` (or `admin`) and `config.pluginId`. The whole body is checked
-first; `403 { error, segment_id, operation, subject }` means nothing was
+`people:write` (or `admin`). New people are recorded under `config.pluginId`,
+which defaults to the site's own plugin (the row `e9core setup` creates).
+The whole body is checked first; `403 { error, segment_id, operation, subject }` means nothing was
 written. `200` echoes both lists with `person_id` and `subject` filled in.
 
 `segment_id` may also be a role name: a name from `config.roles`, else a

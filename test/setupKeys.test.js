@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  ENV_ACCOUNT_ID,
   apiKeyInsertSql,
   ensureGitignore,
   readEnvValue,
@@ -73,6 +74,26 @@ describe('setupKeys', () => {
       assert.equal(second.reused, true);
       assert.match(second.notes.join('\n'), /Delete \.dev\.vars/);
       assert.equal(readEnvValue(readFileSync(path.join(cwd, '.env'), 'utf8'), 'E9_ADMIN_API_KEY'), admin);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('writes E9_ACCOUNT_ID to .env, matching wrangler.jsonc, and never overwrites it once set', async () => {
+    // Local serve() and setup's own Cloudflare write both read E9_ACCOUNT_ID;
+    // leaving it out of .env is the local-setup mismatch that lets serve()
+    // run under a different account than the one setup created rows for.
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-keys-account-'));
+    try {
+      await setupKeys({ cwd, accountId: 'my-site', skipWrangler: true });
+      const env1 = readFileSync(path.join(cwd, '.env'), 'utf8');
+      assert.equal(readEnvValue(env1, ENV_ACCOUNT_ID), 'my-site');
+
+      // A later run (e.g. a rotate) with a different accountId does not move it:
+      // E9_ACCOUNT_ID must only ever be set once, by hand or by first setup.
+      await setupKeys({ cwd, accountId: 'something-else', rotate: true, skipWrangler: true });
+      const env2 = readFileSync(path.join(cwd, '.env'), 'utf8');
+      assert.equal(readEnvValue(env2, ENV_ACCOUNT_ID), 'my-site');
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

@@ -29,7 +29,6 @@ createApi({
   keyStore,
   delegate: { sessionSecret: process.env.SESSION_SECRET },
   config: {
-    pluginId: process.env.E9_PLUGIN_ID,
     roles: 'standard',
     superadmins: createSuperadminsReader() // optional; see below
   }

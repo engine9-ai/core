@@ -14,7 +14,6 @@ import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { JsonlFileLogger, NullLogger } from '../logging/index.js';
 import { createApi } from '../api/index.js';
-import { getPluginUUID } from '../lib/utilities.js';
 import { renderWizardHtml, timingSafeEqualString } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
 import { isSetupFinished, setSetupFinished } from './setupFlow.js';
@@ -151,7 +150,10 @@ export async function serve(options = {}) {
   const port = Number(options.port || process.env.PORT || DEFAULT_PORT);
   const db = resolveDatabase(cwd, options.db || process.env.ENGINE9_DATABASE_CONNECTION || 'sqlite://./engine9.db');
   const accountId = process.env.E9_ACCOUNT_ID || 'local';
-  const pluginId = process.env.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
+  // Role and plugin ids are namespaced under the account's permanent handle,
+  // never the account id (see auth/roles.js). Defaults to accountId: a
+  // database that has never set a handle keeps the ids it already has.
+  const accountHandle = process.env.E9_ACCOUNT_HANDLE || accountId;
   const staticRoot = options.apiOnly
     ? null
     : (options.staticRoot ? path.resolve(cwd, options.staticRoot) : resolveStaticRoot(cwd));
@@ -159,6 +161,7 @@ export async function serve(options = {}) {
   ensureNodePluginRegistry({ cwd });
   const worker = new PersonWorker({
     accountId,
+    accountHandle,
     auth: { database_connection: db }
   });
   const keyStore = new SqlApiKeyStore({ worker });
@@ -187,7 +190,6 @@ export async function serve(options = {}) {
         }
       : null,
     config: {
-      pluginId,
       defaultRemoteInputId: 'website',
       upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
       // The wizard's origins step updates the variable while this server runs.

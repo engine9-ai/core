@@ -265,7 +265,7 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
   try {
     const mod = await import(built.href);
     const fetch = mod.default?.fetch || mod.default?.default?.fetch;
-    const env = { DB: d1, E9_ACCOUNT_ID: accountId, E9_PLUGIN_ID: pluginId };
+    const env = { DB: d1, E9_ACCOUNT_ID: accountId };
     const call = (route, key, body) =>
       fetch(
         new Request(`https://www.example.test/api${route}`, {

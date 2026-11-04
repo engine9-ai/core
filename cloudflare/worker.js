@@ -9,8 +9,15 @@
                            Session instead of only clearing the cookie
 
   Vars / secrets:
-    E9_ACCOUNT_ID      -- account identifier used in logs
-    E9_PLUGIN_ID       -- plugin id (UUID) used for people writes
+    E9_ACCOUNT_ID      -- the account id setup wrote. Role ids and the site's
+                          plugin id (people writes) derive from it, unless
+                          E9_ACCOUNT_HANDLE is set.
+    E9_ACCOUNT_HANDLE  -- optional; the permanent string role and plugin ids
+                          are namespaced under. Defaults to E9_ACCOUNT_ID.
+                          Set this only for a site whose account id has
+                          changed since those ids were first computed; a
+                          site that has never set a handle must never set
+                          it to anything but its current E9_ACCOUNT_ID.
     E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
     E9_SUPERADMINS     -- optional comma-separated verified emails that act as this
                           site's admin role (Identity Level 3 or higher)
@@ -64,6 +71,7 @@ export default {
   async fetch(request, env, ctx) {
     const worker = new PersonWorker({
       accountId: env.E9_ACCOUNT_ID || 'cloudflare',
+      accountHandle: env.E9_ACCOUNT_HANDLE || env.E9_ACCOUNT_ID || 'cloudflare',
       d1: env.DB,
       personIds: env.PERSON_IDS,
       plugins
@@ -90,7 +98,6 @@ export default {
           }
         : null,
       config: {
-        pluginId: env.E9_PLUGIN_ID,
         defaultRemoteInputId: 'website',
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         allowedOrigins: env.E9_ALLOWED_ORIGINS || '',

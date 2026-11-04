@@ -105,17 +105,22 @@
         Reads "engine9.pluginPackages" (or legacy "engine9.plugins") from package.json.
         --check exits non-zero when the file is out of date (for CI).
 
-    e9core segment list    [--db ...] [--account <id>]
+    e9core segment list    [--db ...] [--account <id>] [--handle <handle>]
     e9core segment members --segment <role name | segment id>
     e9core segment add     --segment admin --email a@x.org[,b@y.org] [--emails file.txt] [--person-id 12]
     e9core segment remove  --segment admin --email a@x.org
     e9core segment policy  --segment <id> [--join 0-7|none] [--leave 1-7|none] [--manager <role name | id>|none]
         Membership of any segment. --segment takes a standard role name
-        (admin; ids derive from --account or E9_ACCOUNT_ID,
-        default "local") or any segment id.
+        (admin; ids derive from --handle or E9_ACCOUNT_HANDLE, default
+        --account or E9_ACCOUNT_ID, default "local") or any segment id.
+        --account (E9_ACCOUNT_ID) is the account's own, possibly mutable,
+        id; --handle (E9_ACCOUNT_HANDLE) is the permanent string role and
+        plugin ids are namespaced under. Pass --handle only for a database
+        whose account id has changed since its handle was set; otherwise
+        leave it out and --account also serves as the handle.
         `add` creates a standard role's segment row if missing, and any people
-        who do not exist yet (under the site plugin: E9_PLUGIN_ID or
-        --plugin-id), so an email can be granted before its owner ever signs
+        who do not exist yet (under the site plugin, derived from the
+        account; --plugin-id overrides), so an email can be granted before its owner ever signs
         in. Email is the key: a later Delegate login with that verified email
         lands on the same person. `policy` sets who may add or remove
         themselves (join, leave: Identity Level) and which role may add or
@@ -296,8 +301,12 @@ async function segmentCommand(args) {
     process.exit(1);
   }
   const accountId = args.account || process.env.E9_ACCOUNT_ID || 'local';
-  const pluginId = args['plugin-id'] || process.env.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
-  const registry = standardRoleRegistry(accountId);
+  // Role and plugin ids are namespaced under the account's permanent handle,
+  // never the account id (see auth/roles.js). Defaults to accountId: a
+  // database that has never set a handle keeps the ids it already has.
+  const accountHandle = args.handle || process.env.E9_ACCOUNT_HANDLE || accountId;
+  const pluginId = args['plugin-id'] || getPluginUUID(accountHandle, 'website');
+  const registry = standardRoleRegistry(accountHandle);
   const roleNames = STANDARD_ROLES.map((r) => r.name).join(', ');
   // A role name or a raw segment id.
   const resolveSegment = (value) => {
@@ -306,7 +315,7 @@ async function segmentCommand(args) {
   };
 
   ensureNodePluginRegistry({ cwd: process.cwd() });
-  const worker = new PersonWorker({ accountId, auth: { database_connection: db } });
+  const worker = new PersonWorker({ accountId, accountHandle, auth: { database_connection: db } });
   try {
     if (action === 'list' || !action) {
       const { data } = await worker.query(

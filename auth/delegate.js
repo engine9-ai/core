@@ -763,7 +763,7 @@ export function sessionNeedsRole(session) {
     auth.roleRegistry                       // normalized UUID-keyed map
 
     roles: 'standard' uses the canonical names in auth/roleNames.js
-    (admin) with ids derived from worker.accountId
+    (admin) with ids derived from worker.accountHandle
     (see auth/roles.js). Other role names are site-specific.
 
   loadRolesOnLogin (default true): when false, login() always returns
@@ -796,7 +796,9 @@ export function createDelegateAuth({
   if (!sessionSecret) throw new Error('createDelegateAuth requires a sessionSecret');
   const secretProblem = signingSecretProblem(sessionSecret);
   if (secretProblem) throw new Error(signingSecretMessage('sessionSecret (SESSION_SECRET)', secretProblem));
-  const accountId = worker.accountId;
+  // Role and admin-segment ids are namespaced under the account's permanent
+  // handle, never the mutable account id (see auth/roles.js).
+  const accountId = worker.accountHandle;
   const roleRegistry = normalizeRoleRegistry({ roles, roleSegments, accountId });
   /* Superadmins act as this account's `admin` role. Make sure the registry
      knows that role even when the site listed its own roles. */

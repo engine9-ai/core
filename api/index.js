@@ -79,11 +79,12 @@
       environment,      // the site's env (Worker env / process.env), read by GET /admin/status
       delegateAuth,     // optional createDelegateAuth() — enables /auth/*
       config: {
-        pluginId,
+        pluginId,         // optional; default getPluginUUID(worker.accountHandle, 'website'),
+                          // the plugin row `e9core setup` creates for the site
         defaultRemoteInputId: 'website',
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         roles: { '<segment-uuid>': { name: 'VIP', scopes: ['data:read'] } },
-                          // or roles: 'standard' (auth/roleNames.js, ids from worker.accountId)
+                          // or roles: 'standard' (auth/roleNames.js, ids from worker.accountHandle)
         superadmins: ['ops@example.com'],
                           // optional: verified emails (Level 3+) that act as this
                           // account's admin role. An array, or a function read on
@@ -141,6 +142,7 @@ import {
 } from '../auth/signIn.js';
 import { parseOriginList } from './setupPage.js';
 import { extractApiKey, hashApiKey, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
+import { getPluginUUID } from '../lib/utilities.js';
 
 const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
 
@@ -256,6 +258,10 @@ export function requestDomain(headers) {
  * Login (`/auth/*`) is on when `delegateAuth` is passed, or when
  * `delegate.sessionSecret` is set — then createApi builds the default
  * delegate provider itself using `config.pluginId` and `config.roles`.
+ *
+ * `config.pluginId` defaults to the site's own plugin,
+ * `getPluginUUID(worker.accountHandle, 'website')`. Pass it only when people
+ * writes belong to a different plugin row.
  * Without either, `/auth/*` answers 501 and every other route still works.
  *
  * `config.allowedOrigins` (CORS) is a comma-separated string, an array, or a
@@ -280,7 +286,9 @@ export function createApi({
   const auditLog = audit || worker.audit || new ConsoleLogger();
   worker.audit = auditLog;
   const {
-    pluginId,
+    // People writes are recorded under this plugin. The default is the site's
+    // own plugin row, which `e9core setup` creates from the account's handle.
+    pluginId = getPluginUUID(worker.accountHandle, 'website'),
     defaultRemoteInputId = 'website',
     defaultInputType = 'api',
     upsertTables = ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
@@ -350,7 +358,7 @@ export function createApi({
     normalizeRoleRegistry({
       roles: configRoles,
       roleSegments: configRoleSegments,
-      accountId: worker?.accountId
+      accountId: worker?.accountHandle
     });
 
   function authContextFor({ apiKey, query, body, session }) {
@@ -703,7 +711,7 @@ export function createApi({
   }
 
   function roleNameOf(segmentId) {
-    return rolesRegistry?.[segmentId]?.name || standardRoleFor(worker.accountId, segmentId)?.name || null;
+    return rolesRegistry?.[segmentId]?.name || standardRoleFor(worker.accountHandle, segmentId)?.name || null;
   }
 
   /** Every segment with its membership policy, and standard roles with no row yet. */
@@ -716,7 +724,7 @@ export function createApi({
     );
     const segments = data.map((row) => ({ ...row, role: roleNameOf(row.id) }));
     const present = new Set(segments.map((row) => row.id));
-    const missingRoles = STANDARD_ROLES.filter((role) => !present.has(roleSegmentId(worker.accountId, role.name))).map(
+    const missingRoles = STANDARD_ROLES.filter((role) => !present.has(roleSegmentId(worker.accountHandle, role.name))).map(
       (role) => role.name
     );
     return json(200, { account_id: worker.accountId, segments, missing_roles: missingRoles });
@@ -1182,8 +1190,8 @@ export function createApi({
     if (!id) return id;
     const configured = roleIdByName(rolesRegistry, id);
     if (configured) return configured;
-    const standard = standardRoleFor(worker.accountId, id);
-    return standard ? roleSegmentId(worker.accountId, standard.name) : id;
+    const standard = standardRoleFor(worker.accountHandle, id);
+    return standard ? roleSegmentId(worker.accountHandle, standard.name) : id;
   }
 
   /**
@@ -1271,10 +1279,10 @@ export function createApi({
       // The first admin on a new database: a standard role's row is created
       // with its standard policy, as `e9core segment add` does.
       const missing = adds.filter((item) => !policies[item.segmentId]);
-      const creatable = missing.filter((item) => standardRoleFor(worker.accountId, item.segmentId));
+      const creatable = missing.filter((item) => standardRoleFor(worker.accountHandle, item.segmentId));
       if (creatable.length && creatable.length === missing.length) {
-        for (const name of new Set(creatable.map((item) => standardRoleFor(worker.accountId, item.segmentId).name))) {
-          await ensureStandardRoleSegment({ worker, accountId: worker.accountId, name });
+        for (const name of new Set(creatable.map((item) => standardRoleFor(worker.accountHandle, item.segmentId).name))) {
+          await ensureStandardRoleSegment({ worker, accountId: worker.accountHandle, name });
         }
         policies = await loadMembershipPolicies(worker, segmentIds, rolesRegistry);
       }
@@ -1314,7 +1322,7 @@ export function createApi({
       return json(status, { error: msg });
     }
     // Who holds a role is admin behavior (audit log); any other segment is people data.
-    const isRole = (segmentId) => Boolean(rolesRegistry?.[segmentId] || standardRoleFor(worker.accountId, segmentId));
+    const isRole = (segmentId) => Boolean(rolesRegistry?.[segmentId] || standardRoleFor(worker.accountHandle, segmentId));
     const roleEdits = edits.filter((item) => isRole(item.segmentId));
     const dataEdits = edits.filter((item) => !isRole(item.segmentId));
     if (dataEdits.length) {

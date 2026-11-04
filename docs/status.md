@@ -64,6 +64,8 @@ when it is not a pass, a `fix`.
 | `secrets.<target>.<NAME>` | `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` in `.env` (`local`) or `.env.<target>` is not 64 random hex characters | `npx e9core setup-keys`, or `setup-keys --remote` for a deployed environment. Either replaces the value |
 | `audit.configured` | No audit log sink: changes go only to the Worker log | Bind `AUDIT_BUCKET` |
 | `database.copy` | Wrangler could not export the schema or read the rows | Read the detail |
+| `handle.default` | No `E9_ACCOUNT_ID` (or `accountId`) was set; running on a core default (`client`, `cloudflare`, `local`, `my-site`) | Set it explicitly once, and never change it afterward |
+| `handle.fingerprint` | The configured account id or handle does not match the ids already in the `roles`/`website`/`e9console`/`e9workers`/`e9forms` plugin rows or the admin segment (fail only in effect — reported as `warn`; it does not block requests, but every write under this config lands on a different row than the account's existing data) | Set `accountHandle` (`E9_ACCOUNT_HANDLE`) to the value that produced the existing rows; never change the rows |
 | `core.tables` | `plugin`, `setting`, or `api_key` is missing | `npx e9core installDefaultPlugins` |
 | `core.core_plugin` | `@engine9/schemas/plugin` has no row | `npx e9core installDefaultPlugins` |
 | `core.triggers` | A table with `modified_at` has no `<table>_modified_at_auto_update` trigger (SQLite, D1) | Load `e9core sqlite-ddl` output for that plugin with `wrangler d1 execute --file` |

@@ -136,7 +136,6 @@ const api = createApi({
   // Login with delegate. Leave out `delegate` to run the people API alone.
   delegate: { sessionSecret: process.env.SESSION_SECRET },
   config: {
-    pluginId: process.env.E9_PLUGIN_ID,
     upsertTables: [
       "person_name",
       "person_email",

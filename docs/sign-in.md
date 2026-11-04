@@ -46,7 +46,6 @@ createApi({
   keyStore,
   delegate: { sessionSecret: env.SESSION_SECRET },
   config: {
-    pluginId: env.E9_PLUGIN_ID,
     roles: 'standard',
     signIn: { minLevel: 1, fields: ['display_name', 'email'], brand: { name: 'My Site' } },
   },

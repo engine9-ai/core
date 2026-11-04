@@ -32,26 +32,26 @@ describe('findDatabaseId', () => {
 describe('mergeWranglerConfig', () => {
   it('fills the database id and does not drop an existing setting', () => {
     const cfg = mergeWranglerConfig(
-      { name: 'kept', vars: { OTHER: '1' } },
+      { name: 'kept', vars: { OTHER: '1', E9_PLUGIN_ID: 'retired' } },
       {
         name: 'my-site',
         databaseName: 'engine9',
         databaseId: DB_ID,
         accountId: 'my-site',
-        pluginId: 'plugin-1',
         domain: 'www.example.com',
       }
     );
     assert.equal(cfg.name, 'kept');
     assert.equal(cfg.d1_databases[0].database_id, DB_ID);
     assert.equal(cfg.vars.OTHER, '1');
-    assert.equal(cfg.vars.E9_PLUGIN_ID, 'plugin-1');
+    assert.equal(cfg.vars.E9_ACCOUNT_ID, 'my-site');
+    assert.equal('E9_PLUGIN_ID' in cfg.vars, false);
     assert.equal(cfg.routes[0].pattern, 'www.example.com');
     assert.ok(cfg.compatibility_flags.includes('nodejs_compat'));
   });
 
   it('writes the Worker aliases and has wrangler build the plugin registry', () => {
-    const base = { name: 'my-site', databaseName: 'engine9', databaseId: DB_ID, accountId: 'a', pluginId: 'p' };
+    const base = { name: 'my-site', databaseName: 'engine9', databaseId: DB_ID, accountId: 'a' };
     const plain = mergeWranglerConfig({}, base);
     assert.equal(plain.alias['@engine9/input-tools'], '@engine9/core/cloudflare/input-tools-shim');
     assert.equal(plain.alias.knex, '@engine9/core/cloudflare/unavailable-module');

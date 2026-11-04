@@ -242,11 +242,10 @@ export function mergeWranglerConfig(existing, patch) {
   if (index >= 0) databases[index] = entry;
   else databases.push(entry);
   cfg.d1_databases = databases;
-  cfg.vars = {
-    ...(cfg.vars || {}),
-    E9_ACCOUNT_ID: patch.accountId,
-    E9_PLUGIN_ID: patch.pluginId
-  };
+  // The site's plugin id derives from E9_ACCOUNT_ID; an old E9_PLUGIN_ID is
+  // no longer read, so drop it rather than leave a dead setting behind.
+  const { E9_PLUGIN_ID: _retired, ...vars } = cfg.vars || {};
+  cfg.vars = { ...vars, E9_ACCOUNT_ID: patch.accountId };
   if (patch.domain) {
     const routes = Array.isArray(cfg.routes) ? [...cfg.routes] : [];
     if (!routes.some((route) => route.pattern === patch.domain)) {
@@ -368,6 +367,7 @@ export async function setup(options = {}) {
       await withDatabase(cwd, db, name, async (worker) => {
         const keys = await setupKeys({
           cwd,
+          accountId,
           rotate: options.rotate === true,
           skipWrangler: true,
           applySql: async (sql) => {
@@ -426,7 +426,6 @@ export async function setup(options = {}) {
     databaseName,
     databaseId,
     accountId,
-    pluginId,
     domain: options.domain || ''
   });
   writeFileSync(wranglerPath, `${JSON.stringify(cfg, null, 2)}\n`);
@@ -469,6 +468,7 @@ export async function setup(options = {}) {
   if (!options.skipKeys) {
     const keys = await setupKeys({
       cwd,
+      accountId,
       d1: databaseName,
       remote: options.remote === true,
       env: envName || undefined,

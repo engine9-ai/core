@@ -16,6 +16,7 @@ export const ENV_SESSION_SECRET = 'SESSION_SECRET';
 export const ENV_AGENT_CREDENTIALS_SECRET = 'AGENT_CREDENTIALS_SECRET';
 export const ENV_SETUP_TOKEN = 'E9_SETUP_TOKEN';
 export const ENV_ALLOWED_ORIGINS = 'E9_ALLOWED_ORIGINS';
+export const ENV_ACCOUNT_ID = 'E9_ACCOUNT_ID';
 
 /*
   A signing secret from the file, or a new one when it is missing or is not
@@ -207,6 +208,11 @@ export async function setupKeys(options = {}) {
   const agentCredentials = signingSecretFrom(existingEnv, ENV_AGENT_CREDENTIALS_SECRET, { rotate, notes, file: '.env' });
   let setupToken = rotate ? '' : readEnvValue(existingEnv, ENV_SETUP_TOKEN);
   const allowedOrigins = readEnvValue(existingEnv, ENV_ALLOWED_ORIGINS);
+  // Keep whatever .env already has; never overwrite it with options.accountId.
+  // A local serve() that read a different value than wrangler.jsonc has is
+  // exactly the mismatch this is here to prevent, so once .env has a value,
+  // setup leaves it alone.
+  const accountId = readEnvValue(existingEnv, ENV_ACCOUNT_ID) || options.accountId || '';
 
   const created = { admin: false, public: false, session: session.created, agentCredentials: agentCredentials.created, setupToken: false };
   const inserts = [];
@@ -259,6 +265,7 @@ export async function setupKeys(options = {}) {
     [ENV_SETUP_TOKEN]: setupToken
   };
   if (allowedOrigins) entries[ENV_ALLOWED_ORIGINS] = allowedOrigins;
+  if (accountId) entries[ENV_ACCOUNT_ID] = accountId;
 
   const envBody = upsertEnv(existingEnv, entries);
   writeFileSync(envPath, envBody);

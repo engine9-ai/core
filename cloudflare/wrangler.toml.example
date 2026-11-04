@@ -48,7 +48,6 @@ new_classes = ["PersonIdentifierDO"]
 
 [vars]
 E9_ACCOUNT_ID = "my-account"
-E9_PLUGIN_ID = "<uuid of the website plugin row>"
 
 # Workers bundler aliases. Same list as cloudflare/README.md.
 # Astro/Vite SSR still resolves Node entries unless these are set there too.

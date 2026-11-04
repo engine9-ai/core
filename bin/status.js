@@ -295,7 +295,7 @@ async function liveKeyChecks({ url, publicKey, fetchImpl }) {
 /* ------------------------------------------------------------ render */
 
 const MARK = { pass: '✔', warn: '⚠', fail: '✖', skip: '·' };
-const AREAS = ['account', 'project', 'secrets', 'audit', 'database', 'core', 'keys', 'upgrades', 'plugins'];
+const AREAS = ['account', 'project', 'secrets', 'audit', 'database', 'handle', 'core', 'keys', 'upgrades', 'plugins'];
 
 export function renderStatus(report) {
   const lines = [`engine9 status: ${report.sources.join(' + ')}`];
