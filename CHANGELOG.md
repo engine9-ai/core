@@ -7,6 +7,15 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.18.2: 1.18.1 as intended
+
+1.18.1 on npm was published from a working tree that also held unreleased
+changes. 1.18.2 is the 1.18.1 below and nothing else. Install 1.18.2.
+
+| What a site changes | |
+| --- | --- |
+| On 1.18.1 | `npm install @engine9/core@1.18.2`, then the 1.18.1 steps below if not done |
+
 ## 1.18.1: signing secrets are made by setup, and a typed one is refused
 
 **`SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET` are now 64 random hex
