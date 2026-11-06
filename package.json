@@ -38,6 +38,10 @@
       "types": "./auth/signIn.d.ts",
       "default": "./auth/signIn.js"
     },
+    "./auth/loginButton": {
+      "types": "./auth/loginButton.d.ts",
+      "default": "./auth/loginButton.js"
+    },
     "./auth/gate": {
       "types": "./auth/gate.d.ts",
       "default": "./auth/gate.js"

@@ -28,6 +28,7 @@
  * Flags are listed in SETUP_HELP (`npx e9core setup --help`).
  */
 
+import { loginButtonSnippet } from '../auth/loginButton.js';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -443,6 +444,7 @@ export async function setup(options = {}) {
         });
         notes.push(...keys.notes);
       });
+      notes.push(loginButtonNote());
     }
     return { notes, pluginId, databaseId: '' };
   }
@@ -551,6 +553,7 @@ export async function setup(options = {}) {
       rotate: options.rotate === true
     });
     notes.push(...keys.notes);
+    notes.push(loginButtonNote());
   }
 
   if (options.remote && options.deploy !== false) {
@@ -559,6 +562,19 @@ export async function setup(options = {}) {
   }
 
   return { notes, pluginId, databaseId };
+}
+
+/*
+  Login is on once setup has made SESSION_SECRET. Optional for the site: a
+  page that should let people log in adds these two lines. No key to copy;
+  core serves the button with the site's public key (auth/loginButton.js).
+*/
+export function loginButtonNote() {
+  return [
+    'Optional, when visitors should log in: put the Delegate Login button in your page header.',
+    loginButtonSnippet().replace(/^/gm, '    '),
+    '  Nothing to copy or configure: core serves it with this site\'s public key. Details: node_modules/@engine9/core/docs/sign-in.md'
+  ].join('\n');
 }
 
 async function withDatabase(cwd, db, { accountId, accountHandle }, fn) {

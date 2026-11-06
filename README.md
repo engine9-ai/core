@@ -224,37 +224,29 @@ are pre-allowed on the public delegate.
 server side is ready, and it is the same button
 [`demo-festival`](https://github.com/engine9-ai/demo-festival) has in its
 header. One button shows **Login** or who is signed in, and one dialog logs
-in, switches the email address the site sees, changes role, and logs out.
-Put it in the header of every page:
+in, switches the email address the site sees, and logs out. Put these two
+lines in the header of every page:
 
 ```html
 <span data-e9-login-widget></span>
-
-<script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
-<script>
-  const id = engine9Id.createEngine9Id({
-    core: { apiUrl: "/api", publicApiKey: "PASTE_E9_PUBLIC_API_KEY", session: "cookie" },
-  });
-  engine9Id.loginWidget({
-    id,
-    siteName: "My Site", // the name on the dialog and on Delegate's sign-in page
-    async onLogin() {
-      const { session } = await id.core.login(); // core sets the e9_session cookie
-      return { email: session.email, level: session.level };
-    },
-    onLoggedOut() {
-      location.reload();
-    },
-  });
-</script>
+<script src="/api/auth/login.js" defer></script>
 ```
 
-The public key is `E9_PUBLIC_API_KEY` in `.env` (`e9publickey_…`); it is
-safe in page JavaScript. `session: "cookie"` is what makes this the
-recommended setup: core sets its HttpOnly `e9_session` cookie, the same
-session its one-link sign-in (`/api/auth/start`) sets, so the server gate
-(`requireRole`) sees the person however they signed in. Roles in the dialog,
-branding, and the rest: [docs/sign-in.md](docs/sign-in.md).
+That is all. Core serves `/api/auth/login.js` with the site's own public key
+(the `E9_PUBLIC_API_KEY` secret), so there is nothing to copy. That matters
+on a site set up only in GitHub and Cloudflare, where no person ever sees the
+key. The script loads [`@engine9/id`](https://github.com/engine9-ai/id) and
+runs its login widget with `core: { session: "cookie" }`: core sets its
+HttpOnly `e9_session` cookie, the same session its one-link sign-in
+(`/api/auth/start`) sets, so the server gate (`requireRole`) sees the person
+however they signed in. The name on the dialog and on Delegate's sign-in page
+is `config.signIn.brand.name` (`E9_SIGN_IN` on the shipped Worker), else the
+hostname.
+
+It is optional: nothing changes until a page includes the script, and
+`config.signIn.loginButton: false` turns the route off. When the site needs
+more (roles in the dialog, its own `onLogin`), call `loginWidget` from its
+own code instead: [docs/sign-in.md](docs/sign-in.md#2-add-the-login-button).
 
 Do not make the Login button a plain link to `/api/auth/start` or a bare
 `<button data-e9-login>`. Both sign in, but neither lets the person see who

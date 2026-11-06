@@ -4,6 +4,9 @@
  */
 
 import { setupStep } from './setupSteps.js';
+import { loginButtonSnippet } from '../auth/loginButton.js';
+
+const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function timingSafeEqualString(a, b) {
   const left = Buffer.from(String(a || ''), 'utf8');
@@ -82,6 +85,9 @@ export function renderWizardHtml({ token }) {
   </section>
 
   <section id="after" hidden>
+    <h3>Optional: let visitors log in</h3>
+    <p class="note">Put the Delegate Login button in your page header. Core serves it with this site's public key, so there is nothing to copy or configure. Details: <code>docs/sign-in.md</code>.</p>
+    <pre>${escapeHtml(loginButtonSnippet())}</pre>
     <button type="button" id="finish">${prompt('finish')}</button>
     <p class="note">Finish closes this wizard. Reopen later with <code>npx e9core serve --setup</code> on this machine.</p>
     <details>

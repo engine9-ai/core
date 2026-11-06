@@ -346,13 +346,21 @@ Worker and `e9core serve` turn on `/api/auth/*` because setup wrote
 `SESSION_SECRET`. Two things remain:
 
 1. Allow your Domain on delegate (`localhost:3000`–`3003` already are).
-2. Add the **Login button** to the header of every page. This is the
-   `@engine9/id` login widget with `core: { session: 'cookie' }`, the same
-   button `demo-festival` has: one button and one dialog that logs in,
-   switches email, changes role, and logs out. Copy the snippet in the
-   [README](../README.md#add-login). Do not use a plain link to
-   `/api/auth/start` as the Login button; that link is the no-JavaScript
-   fallback.
+2. Add the **Login button** to the header of every page, the same button
+   `demo-festival` has: one button and one dialog that logs in, switches
+   email, and logs out.
+
+   ```html
+   <span data-e9-login-widget></span>
+   <script src="/api/auth/login.js" defer></script>
+   ```
+
+   Core serves the script with the site's public key, so there is nothing
+   to copy, on a laptop or in a site set up only in GitHub. Setup prints
+   these lines too. Do not use a plain link to `/api/auth/start` as the
+   Login button; that link is the no-JavaScript fallback.
+
+Both are optional: a site with no login skips this section.
 
 Details: [sign-in.md](sign-in.md) and
 [identityProviders/delegate.md](identityProviders/delegate.md).

@@ -61,9 +61,43 @@ own.
 Delegate, and the button in `demo-festival`'s header. One button shows
 **Login** or who is signed in; one dialog logs in, switches the email
 address the site sees, changes role, and logs out. Put it in the header of
-every page.
+every page:
 
-With a bundler (Vite, Astro, Next, and so on):
+```html
+<span data-e9-login-widget></span>
+<script src="/api/auth/login.js" defer></script>
+```
+
+Core serves `GET /api/auth/login.js` (no API key; a script tag cannot send
+one). It loads `@engine9/id` from unpkg, unless the page already loaded
+`window.engine9Id`, and calls `loginWidget` on a client with
+`core: { session: 'cookie' }`. Its `onLogin` calls `id.core.login()`, so core
+sets `e9_session`. A visitor already signed in (another tab, or the link in
+step 3) shows as signed in, from `/api/auth/me`.
+
+- **The public key** comes from the site's own environment
+  (`E9_PUBLIC_API_KEY`), so no one copies it. A site set up only in GitHub and
+  Cloudflare never sees its keys ([no-command-line.md](no-command-line.md));
+  this is how its pages get one. It is the same key any page using
+  `@engine9/id` carries: it adds people and logs in, nothing else.
+- **What Delegate asks for** is `config.signIn`, the same settings as
+  `/api/auth/start`: `minLevel`, `fields`, `optionalFields`, `loginLevel`,
+  `loginProviders`, and `brand` (on the shipped Worker, the `E9_SIGN_IN`
+  JSON). The dialog's name is `brand.name`, else the hostname, or set
+  `signIn.loginButton: { siteName }`.
+- **Optional.** Nothing appears until a page includes the script.
+  `signIn.loginButton: false` turns the route off (404).
+  `loginButton: { idScript: 'https://…' }` loads `@engine9/id` from your own
+  host instead of unpkg.
+- When something is wrong (login off, no public key), the script still loads
+  and says what to fix in the browser console.
+- `window.engine9Login` holds `{ id, widget }`, and the page gets an
+  `engine9:login-ready` event, for a link that opens the dialog
+  (`engine9Login.widget.open()`).
+
+**When the site needs more**, such as roles in the dialog or its own
+`onLogin`, call the widget from its own code instead of the script. With a
+bundler (Vite, Astro, Next, and so on):
 
 ```js
 import { createEngine9Id } from '@engine9/id';
@@ -85,18 +119,11 @@ loginWidget({
 });
 ```
 
-The button goes in `<span data-e9-login-widget></span>` (or pass `target`).
-On a plain HTML page, load
-`https://unpkg.com/@engine9/id@1/dist/id.iife.js` and call the same two
-functions as `engine9Id.createEngine9Id` and `engine9Id.loginWidget`. The
-public key is `E9_PUBLIC_API_KEY` from `.env`.
-
 `session: 'cookie'` is what makes this the recommended path. Without it, the
 widget's session lives in the browser, and your server gate cannot see it.
-
-To offer roles in the dialog, pass `roles` and an `onRoleChange` that calls
-`id.core.changeRole(roleId)`. To brand Delegate's sign-in page, pass `brand`
-to `createEngine9Id`. Both are in `demo-festival`'s
+Roles go in `roles` with an `onRoleChange` that calls
+`id.core.changeRole(roleId)`; branding goes in `brand` on `createEngine9Id`.
+Both are in `demo-festival`'s
 [`Layout.astro`](https://github.com/engine9-ai/demo-festival/blob/main/src/layouts/Layout.astro).
 
 ### 3. The link: a fallback, and where the gate sends people

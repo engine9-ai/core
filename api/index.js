@@ -20,6 +20,12 @@
                                    the sign-in, sets the Core Session cookie (e9_session),
                                    clears the login cookie, redirects to returnTo. A failure
                                    redirects there with ?login_error=<reason>.
+    GET  /auth/login.js         -- no API key. The Delegate Login button as a script:
+                                   <span data-e9-login-widget></span>
+                                   <script src="/api/auth/login.js" defer></script>
+                                   (@engine9/id loginWidget, session: 'cookie', the site's
+                                   public key from E9_PUBLIC_API_KEY). Off with
+                                   config.signIn.loginButton: false. auth/loginButton.js
     POST /auth/begin            -- start a popup sign-in bound to this browser: sets the
                                    signed e9_login cookie, returns { state, nonce } for the
                                    popup request (@engine9/id does this with session: 'cookie')
@@ -102,7 +108,8 @@
           fields: ['email'],       // default ['email']
           brand: { name: 'My Site', color: '#7a1fa2' },
           loginProviders: ['google'],
-          sessionCookie: 'e9_session'
+          sessionCookie: 'e9_session',
+          loginButton: { siteName: 'My Site' }   // GET /auth/login.js; false turns it off
         }
       }
     });
@@ -150,6 +157,7 @@ import { extractApiKey, hashApiKey, isEngine9ApiKeyToken, signingSecretProblem, 
 import { getPluginUUID } from '../lib/utilities.js';
 import { requireRole } from '../auth/gate.js';
 import { isPageRequest } from '../auth/signIn.js';
+import { loginButtonScript, loginButtonUnavailable } from '../auth/loginButton.js';
 import { messagePage, renderStatusPage } from './statusPage.js';
 
 /*
@@ -210,6 +218,11 @@ const SCOPES = {
 
 function json(status, body, extra = {}) {
   return { status, body, contentType: 'application/json', ...extra };
+}
+
+/* A result whose body is sent as is (an HTML page, a script), not as JSON. */
+export function isRawBody(result) {
+  return Boolean(result?.contentType) && String(result.contentType).indexOf('application/json') !== 0;
 }
 
 function getHeader(headers, name) {
@@ -944,6 +957,45 @@ export function createApi({
     return json(501, loginOffBody());
   }
 
+  /* GET /auth/login.js: the Delegate Login button (auth/loginButton.js). */
+  function getLoginButton() {
+    if (signIn.loginButton === false) {
+      return json(404, { error: 'the Login button is off on this site (config.signIn.loginButton: false)' });
+    }
+    // Always a script, even when it cannot work: a failed script tag says
+    // nothing, a console error says what to fix.
+    const script = (status, body, cache) => ({
+      status,
+      body,
+      contentType: 'text/javascript; charset=utf-8',
+      headers: { 'cache-control': cache, 'x-content-type-options': 'nosniff' }
+    });
+    if (!delegateAuth) {
+      const off = loginOffBody();
+      return script(200, loginButtonUnavailable(`${off.error}. Fix: ${off.fix} (or: ${off.fix_web}).`), 'no-store');
+    }
+    const publicApiKey = environment?.E9_PUBLIC_API_KEY;
+    if (typeof publicApiKey !== 'string' || !publicApiKey.startsWith('e9publickey_')) {
+      return script(
+        200,
+        loginButtonUnavailable(
+          'This site has no E9_PUBLIC_API_KEY in its environment, so the Login button cannot sign in. Fix: npx e9core setup --remote (or run the deploy workflow again). A site that calls createApi itself passes its env as `environment`.'
+        ),
+        'no-store'
+      );
+    }
+    return script(
+      200,
+      loginButtonScript({
+        publicApiKey,
+        delegateUrl: delegateAuth.delegateUrl || delegate?.delegateUrl || DEFAULT_DELEGATE_URL,
+        signIn
+      }),
+      // Short: a rotated public key reaches pages within minutes.
+      'public, max-age=300'
+    );
+  }
+
   function getAuthStart({ query, apiBase }) {
     if (!delegateAuth) return notConfigured();
     if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
@@ -1486,6 +1538,10 @@ export function createApi({
       const route = parts[1] === 'start' ? getAuthStart : getAuthCallback;
       return route({ query: req.query || {}, headers: req.headers, apiBase: req.apiBase });
     }
+    // The Login button script: a script tag cannot send an API key either.
+    if (method === 'GET' && parts[0] === 'auth' && parts.length === 2 && parts[1] === 'login.js') {
+      return getLoginButton();
+    }
     // The status page: a browser opening /admin/status sends no key.
     if (
       method === 'GET' &&
@@ -1646,10 +1702,7 @@ export function createApi({
     if (result.status === 204 || result.status === 302) {
       return new Response(null, { status: result.status, headers });
     }
-    const payload =
-      result.contentType && String(result.contentType).indexOf('text/html') === 0
-        ? result.body
-        : JSON.stringify(result.body);
+    const payload = isRawBody(result) ? result.body : JSON.stringify(result.body);
     return new Response(payload, { status: result.status, headers });
   }
 
@@ -1678,8 +1731,8 @@ export function createApi({
           res.status(result.status).end();
           return;
         }
-        if (result.contentType && String(result.contentType).indexOf('text/html') === 0) {
-          res.status(result.status).type('html').send(result.body);
+        if (isRawBody(result)) {
+          res.status(result.status).type(result.contentType).send(result.body);
           return;
         }
         res.status(result.status).json(result.body);

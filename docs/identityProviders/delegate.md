@@ -82,32 +82,21 @@ const api = createApi({
 4. In the browser, add the `@engine9/id` **Login button** (the login
    widget) to the header of every page. It is the default way to use
    Delegate and the same button `demo-festival` has: one button, and one
-   dialog that logs in, switches email, changes role, and logs out. Its
-   `onLogin` calls `id.core.login()` with the public API key, and
-   `session: 'cookie'` makes core set its `e9_session` cookie, which your
-   server gate reads; see [Sign-in on a site](../sign-in.md):
+   dialog that logs in, switches email, and logs out. Core serves it, with
+   the site's public key, so these two lines are the whole setup:
 
 ```html
 <span data-e9-login-widget></span>
-
-<script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
-<script>
-  const id = engine9Id.createEngine9Id({
-    core: { apiUrl: '/api', publicApiKey: 'e9publickey_…', session: 'cookie' },
-  });
-  engine9Id.loginWidget({
-    id,
-    siteName: 'My Site',
-    async onLogin() {
-      const { session } = await id.core.login(); // core sets e9_session
-      return { email: session.email, level: session.level };
-    },
-    onLoggedOut() {
-      location.reload();
-    },
-  });
-</script>
+<script src="/api/auth/login.js" defer></script>
 ```
+
+   The script runs `loginWidget` on a client with `session: 'cookie'`, and
+   its `onLogin` calls `id.core.login()`, so core sets the `e9_session`
+   cookie your server gate reads. It asks Delegate for what `config.signIn`
+   says (`fields`, `minLevel`, `brand`, …). It is optional, and
+   `config.signIn.loginButton: false` turns it off. For roles in the dialog
+   or your own `onLogin`, call `loginWidget` yourself:
+   [Sign-in on a site](../sign-in.md#2-add-the-login-button).
 
    Do not use a plain link to `/api/auth/start` or a bare
    `<button data-e9-login>` as the site's Login button. They sign in, but

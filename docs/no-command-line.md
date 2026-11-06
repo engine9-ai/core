@@ -96,9 +96,26 @@ To replace the key, run the workflow with `rotate`.
 
 An agent session that writes the site's code needs no Cloudflare login and
 no secrets. It commits and pushes; the workflow sets up, deploys, and
-upgrades. Do not ask the owner to run a command or to paste a value. When
+upgrades. Do not ask the owner to run a command or to paste a value. For
+login, add the two lines in [Letting visitors log in](#letting-visitors-log-in);
+never ask for the public key. When
 something fails, read the workflow's log and the status page, and change the
 code or the workflow inputs.
+
+## Letting visitors log in
+
+Optional. A site whose visitors log in adds two lines to the header of every
+page, in GitHub's editor or by an agent's commit:
+
+```html
+<span data-e9-login-widget></span>
+<script src="/api/auth/login.js" defer></script>
+```
+
+That is the Delegate Login button
+([sign-in.md](sign-in.md#2-add-the-login-button)). The deployed Worker
+serves the script with the public key the workflow made, so nobody needs to
+see or copy a key. The site's Domain must also be allowed on Delegate.
 
 ## What this needs from the site
 

@@ -1161,6 +1161,8 @@ export function createDelegateAuth({
   }
 
   return {
+    /** The Delegate host this provider verifies tokens from (the browser must use the same). */
+    delegateUrl,
     identityUrl,
     beginLogin,
     beginLoginRequest,

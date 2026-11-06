@@ -266,12 +266,22 @@ Local development does not require one.
 
 ## Sign-in on a site built with core
 
-When a site adds login, the first thing to build is the **Login button**:
-the `@engine9/id` login widget (`loginWidget`) in the header of every page,
-on a client made with `core: { apiUrl: '/api', publicApiKey, session: 'cookie' }`,
-with `onLogin` calling `id.core.login()`. It is the button in
-`demo-festival`'s header. Copy the snippet in
-[README.md](README.md#add-login) or [docs/sign-in.md](docs/sign-in.md).
+When a site adds login, the first thing to build is the **Login button**,
+the button in `demo-festival`'s header. The default is two lines in the
+header of every page; core serves the script (`GET /api/auth/login.js`,
+[auth/loginButton.js](auth/loginButton.js)) with the site's public key:
+
+```html
+<span data-e9-login-widget></span>
+<script src="/api/auth/login.js" defer></script>
+```
+
+Never ask the owner for the public key or paste it into a page for this; a
+site set up only in GitHub has no way to read it. Only a site that needs
+roles in the dialog or its own `onLogin` calls `loginWidget` itself
+([docs/sign-in.md](docs/sign-in.md#2-add-the-login-button)). The button is
+optional: a site without login leaves it out, and
+`config.signIn.loginButton: false` turns the route off.
 
 - Do not make a plain link to `/api/auth/start`, or a bare
   `<button data-e9-login>`, the site's Login control. Both sign in, but the
@@ -284,8 +294,10 @@ with `onLogin` calling `id.core.login()`. It is the button in
 - Do not write a sign-in route, a callback, or a session of the site's own.
   Gate private pages with `requireRole`.
 - Any doc in this repository that shows how to sign in leads with this
-  button. Keep the README, `docs/sign-in.md`, `docs/deploy.md`, and
-  `docs/identityProviders/delegate.md` showing the same snippet.
+  button. Keep the README, `docs/sign-in.md`, `docs/deploy.md`,
+  `docs/no-command-line.md`, `docs/identityProviders/delegate.md`, the setup
+  output (`loginButtonNote` in `bin/setup.js`), and the setup wizard showing
+  the same two lines (`loginButtonSnippet()`).
 
 ## Tests
 

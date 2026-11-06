@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { JsonlFileLogger, NullLogger } from '../logging/index.js';
-import { createApi } from '../api/index.js';
+import { createApi, isRawBody } from '../api/index.js';
 import { renderWizardHtml, timingSafeEqualString } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
 import { isSetupFinished, setSetupFinished } from './setupFlow.js';
@@ -319,10 +319,7 @@ export async function serve(options = {}) {
           res.end();
           return;
         }
-        const payload =
-          result.contentType && String(result.contentType).indexOf('text/html') === 0
-            ? result.body
-            : JSON.stringify(result.body);
+        const payload = isRawBody(result) ? result.body : JSON.stringify(result.body);
         send(res, result.status, payload, headers);
         return;
       }
