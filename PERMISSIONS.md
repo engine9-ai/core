@@ -184,9 +184,8 @@ recorded reason.
   with any value that is not 64 hex characters, and `e9core status` reports
   it as a failure. `AGENT_CREDENTIALS_SECRET` follows the same rules and
   differs from `SESSION_SECRET`. Production also
-  SHOULD configure `sessionRevocations` so logout actually ends a session,
-  and set `acceptLegacySessions: false` once a day has passed after upgrading
-  to a version that adds session `typ`. Deliver the Core Session as an
+  SHOULD configure `sessionRevocations` so logout actually ends a session.
+  Deliver the Core Session as an
   `HttpOnly`, `Secure` cookie (`GET /auth/callback` does this: `HttpOnly`,
   `SameSite=Lax`, and `Secure` on https).
 - **PL-8 (MUST)** Host code that decides a privileged action from a session
@@ -336,8 +335,7 @@ upgrade sequence as every release, plus a membership step.
 
    Cloudflare: set `E9_SUPERADMINS` in the Worker's vars and deploy.
 8. **Tighten what the review found** (PL-2 to PL-10): remove ad-hoc admin
-   lists, move keys, add `sessionRevocations`, set `acceptLegacySessions:
-   false`.
+   lists, move keys, add `sessionRevocations`.
 9. **Verify** with [Verifying a site](#verifying-a-site) and keep the output
    with the change record.
 

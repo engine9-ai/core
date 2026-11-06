@@ -5,16 +5,6 @@
 
 import { setupStep } from './setupSteps.js';
 
-export function parseOriginList(value) {
-  if (Array.isArray(value)) {
-    return value.map((v) => String(v || '').trim()).filter(Boolean);
-  }
-  return String(value || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
 export function timingSafeEqualString(a, b) {
   const left = Buffer.from(String(a || ''), 'utf8');
   const right = Buffer.from(String(b || ''), 'utf8');

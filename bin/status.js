@@ -32,6 +32,7 @@ import { adminKey, callSite, siteEndpoint } from './upgrade.js';
 import { readEnvValue, remoteEnvPath, ENV_SESSION_SECRET, ENV_AGENT_CREDENTIALS_SECRET } from './setupKeys.js';
 import { signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { LEGACY_SCHEMA_FILE } from './setup.js';
+import { cliAccount } from './cliAccount.js';
 
 const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
 const ENV_ADMIN_KEY = 'E9_ADMIN_API_KEY';
@@ -358,11 +359,10 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
     ensureNodePluginRegistry({ cwd });
     // With no account id from --account or .env, the handle checks would
     // compare against a guess, so they are skipped.
-    const accountId = (args.account && args.account !== true ? String(args.account) : '') || readEnvValue(localEnv, 'E9_ACCOUNT_ID') || process.env.E9_ACCOUNT_ID || '';
-    const handle = (args.handle && args.handle !== true ? String(args.handle) : '') || readEnvValue(localEnv, 'E9_ACCOUNT_HANDLE') || process.env.E9_ACCOUNT_HANDLE || '';
+    const { accountId, accountHandle, configured } = cliAccount(args, { cwd, fallback: 'client' });
     const worker = new PluginWorker({
-      accountId: accountId || 'client',
-      accountHandle: handle || accountId || 'client',
+      accountId,
+      accountHandle,
       auth: { database_connection: db }
     });
     try {
@@ -373,8 +373,8 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
       report = await worker.status({
         keys,
         plugins,
-        handleChecks: Boolean(accountId || handle),
-        sitePluginId: readEnvValue(localEnv, 'E9_PLUGIN_ID') || process.env.E9_PLUGIN_ID || undefined,
+        handleChecks: configured,
+        sitePluginId: process.env.E9_PLUGIN_ID || readEnvValue(localEnv, 'E9_PLUGIN_ID') || undefined,
         source: 'database',
         fixTarget: `--db ${db}`, keysFix: `npx e9core setup-keys --db ${db}` });
       sources.push(`database ${db}`);

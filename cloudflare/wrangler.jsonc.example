@@ -1,0 +1,59 @@
+// Example wrangler configuration for the Engine9 core API on Cloudflare.
+// npx e9core setup writes wrangler.jsonc for you (database id, account id,
+// aliases, and build command included). Copy pieces from this file only when
+// you want the optional KV, R2, or Durable Object bindings.
+{
+  "name": "engine9-core-api",
+  "main": "node_modules/@engine9/core/cloudflare/worker.js",
+  "compatibility_date": "2026-07-01",
+  // Required: core uses node:crypto and node:buffer via nodejs_compat.
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The engine9 database. API keys live in its api_key table.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "engine9", "database_id": "<your d1 database id>" }
+  ],
+
+  // Revoked Core Sessions (optional). With it, POST /api/auth/logout ends the
+  // session token itself, not only the cookie. Entries expire with the session.
+  "kv_namespaces": [
+    { "binding": "SESSION_REVOCATIONS", "id": "<your kv namespace id>" }
+  ],
+
+  "r2_buckets": [
+    // Batch modification logs (optional). People data.
+    { "binding": "LOG_BUCKET", "bucket_name": "engine9-modification-logs" },
+    // Audit log: schema, plugin, and role changes. Keep it in its own bucket,
+    // apart from people data. Without it, audit records go to the Worker log.
+    { "binding": "AUDIT_BUCKET", "bucket_name": "engine9-audit" }
+  ],
+
+  // Compact person identifier lookups via Durable Object (optional).
+  // Without this binding, D1 uses the person_id_<id_type> tables.
+  "durable_objects": {
+    "bindings": [{ "name": "PERSON_IDS", "class_name": "PersonIdentifierDO" }]
+  },
+  "migrations": [{ "tag": "v1-person-ids", "new_classes": ["PersonIdentifierDO"] }],
+
+  // The account id every derived id (roles, the website plugin) comes from.
+  // Never change it once the database has rows.
+  "vars": { "E9_ACCOUNT_ID": "my-account" },
+
+  // Workers bundler aliases. Same list as cloudflare/README.md.
+  // Astro/Vite SSR still resolves Node entries unless these are set there too.
+  "alias": {
+    "@engine9/input-tools": "@engine9/core/cloudflare/input-tools-shim",
+    "knex": "@engine9/core/cloudflare/unavailable-module",
+    "mysql2": "@engine9/core/cloudflare/unavailable-module",
+    "mysql2/promise": "@engine9/core/cloudflare/unavailable-module",
+    "better-sqlite3": "@engine9/core/cloudflare/unavailable-module",
+    // Package root is the Node build, which require()s every locale at import.
+    "i18n-iso-countries": "i18n-iso-countries/index.js",
+    // Plugins compiled into the Worker: every plugin in package.json
+    // "engine9.pluginPackages" (default @engine9/schemas). wrangler's build
+    // step below writes this file on every dev/deploy.
+    "@engine9/core/plugins/site": "./engine9.plugins.js"
+  },
+
+  "build": { "command": "npx e9core build-plugins" }
+}

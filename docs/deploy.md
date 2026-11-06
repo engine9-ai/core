@@ -339,7 +339,7 @@ commands below.
 
 | Flag | Effect |
 | --- | --- |
-| `--name <worker>` | Cloudflare Worker name. Default `my-site` |
+| `--name <worker>` | Cloudflare Worker name, and a new project's `E9_ACCOUNT_ID`. Default `my-site`. Setup never changes an `E9_ACCOUNT_ID` the project already has |
 | `--d1 <database>` | D1 name. Default `engine9` |
 | `--domain <host>` | Adds a custom domain route, then use with `--remote` |
 | `--no-deploy` | With `--remote`, update the database and secrets but do not deploy |
@@ -365,7 +365,7 @@ people writes.
 
 The Worker that `setup` points at is
 [`cloudflare/worker.js`](../cloudflare/worker.js). Optional KV and R2 bindings
-are in [`cloudflare/wrangler.toml.example`](../cloudflare/wrangler.toml.example).
+are in [`cloudflare/wrangler.jsonc.example`](../cloudflare/wrangler.jsonc.example).
 
 Wire `createApi` into your HTTP app. A short sketch is in the
 [core README quick start](../README.md#install-on-your-own-server-nodejs).

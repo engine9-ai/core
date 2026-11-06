@@ -195,7 +195,7 @@ whole integration for signups. The setup page shows a copy-paste snippet.
 > `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
 > change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
 > default), and change `@engine9/id` in the browser in the same deploy. The
-> exact list of places is in [CHANGELOG.md](CHANGELOG.md#1150-delegate-moves-to-delegatenetwork).
+> exact list of places is in [docs/upgrade-1.15.md](docs/upgrade-1.15.md#1150-delegate-moves-to-delegatenetwork).
 <!-- END REMOVE-AFTER 2026-11-06 -->
 
 Login is optional. Saving people needs only the API key. When visitors
@@ -404,8 +404,7 @@ Request
 ```
 
 **Layer 1 — API key.** `Authorization: Bearer e9key_…` or `X-API-Key: e9key_…`.
-Keys are SHA-256 hashed at rest (`SqlApiKeyStore` in the `api_key` table;
-`KVApiKeyStore` is an optional Cloudflare store). Fields: `scopes` (required,
+Keys are SHA-256 hashed at rest (`SqlApiKeyStore` in the `api_key` table). Fields: `scopes` (required,
 non-empty), `default_role_id`, `active`, `expires_at`. `store.rotate()`
 creates a new key and revokes the old one. A rejected key is a 401 with
 `kind: "api_key"` and a `reason` (`missing_key`, `unknown_key`,
@@ -439,8 +438,7 @@ Effective scopes are the intersection of the key and the active role; the
 key is always the ceiling; `admin` on one side means that side does not
 constrain. Who may add or remove people in each segment is on the segment row
 and enforced by `POST /auth/segments` and `POST /auth/role`
-([docs/segments.md](docs/segments.md)). Legacy
-`roleSegments: { admin: '<uuid>' }` is still accepted. Soft **declared
+([docs/segments.md](docs/segments.md)). Soft **declared
 roles** with the same `requiredAuth` shape live in
 [`@engine9/id`](https://github.com/engine9-ai/id/blob/main/docs/declared-roles.md)
 for browser-only personalization.

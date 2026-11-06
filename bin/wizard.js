@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ENV_PUBLIC_KEY, readEnvValue } from './setupKeys.js';
-import { parseOriginList } from '../api/setupPage.js';
+import { parseOriginList } from '../api/origins.js';
 import { readWizardState, runSetupStep } from './setupFlow.js';
 
 function readEnvFile(cwd) {

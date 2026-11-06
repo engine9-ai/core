@@ -33,7 +33,7 @@ import { DatabaseSync } from 'node:sqlite';
 import JSON5 from 'json5';
 import { getPluginUUID } from '../lib/utilities.js';
 import { quoteIdent } from '../lib/sql/sqliteDDL.js';
-import { ensureGitignore, setupKeys } from './setupKeys.js';
+import { ensureGitignore, setupKeys, readEnvValue, ENV_ACCOUNT_ID } from './setupKeys.js';
 
 const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
 const PLUGINS_MODULE = 'engine9.plugins.js';
@@ -76,7 +76,8 @@ Advanced: HTML on one host and the API on another — see docs/deploy.md
 
 Options most people use:
 
-  --name <worker>     Worker name. Default: my-site
+  --name <worker>     Worker name, and a new project's account id. Default: my-site.
+                      A project that already has E9_ACCOUNT_ID keeps it
   --remote            Production database, Cloudflare secrets, and deploy
   --domain <host>     Custom domain. Use together with --remote
   --node              SQLite file and .env only. No Cloudflare (use with serve)
@@ -153,11 +154,11 @@ export function removeLegacySchemaFile(cwd) {
  * dumps it, and hands the SQL file to load(path). The folder is deleted
  * afterwards, whatever load does. Returns the tables the SQL creates.
  */
-async function withFreshSchemaSql({ cwd, pluginId, name }, load) {
+async function withFreshSchemaSql({ cwd, pluginId, name, account }, load) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e9core-schema-'));
   try {
     const dbFile = path.join(dir, 'build.db');
-    await installLocalDatabase({ cwd, db: `sqlite://${dbFile}`, pluginId, name });
+    await installLocalDatabase({ cwd, db: `sqlite://${dbFile}`, pluginId, name, account });
     const sql = dumpSqliteFile(dbFile);
     const sqlPath = path.join(dir, 'schema.sql');
     writeFileSync(sqlPath, sql);
@@ -244,7 +245,10 @@ export function mergeWranglerConfig(existing, patch) {
   cfg.d1_databases = databases;
   // E9_PLUGIN_ID is deprecated: never written here, but an existing one is
   // kept, because the site's rows (and often its own code) depend on it.
-  cfg.vars = { ...(cfg.vars || {}), E9_ACCOUNT_ID: patch.accountId };
+  // An existing E9_ACCOUNT_ID is never replaced: every derived id depends on
+  // it. accountId is omitted for a project that already runs without one.
+  cfg.vars = { ...(cfg.vars || {}) };
+  if (!cfg.vars.E9_ACCOUNT_ID && patch.accountId) cfg.vars.E9_ACCOUNT_ID = patch.accountId;
   if (patch.domain) {
     const routes = Array.isArray(cfg.routes) ? [...cfg.routes] : [];
     if (!routes.some((route) => route.pattern === patch.domain)) {
@@ -253,6 +257,42 @@ export function mergeWranglerConfig(existing, patch) {
     cfg.routes = routes;
   }
   return cfg;
+}
+
+/*
+  The account a setup run works under. An account id the project already has
+  always wins, so a rerun (or the wizard, which never passes --name) cannot
+  move a site onto other ids:
+  - Cloudflare: E9_ACCOUNT_ID in wrangler.jsonc. A project that already has a
+    D1 database but no E9_ACCOUNT_ID runs on the Worker's "cloudflare"
+    default, and keeps running on it (nothing is added to wrangler.jsonc).
+  - Node: E9_ACCOUNT_ID in .env.
+  --name (default my-site) is the account id of a new project only.
+*/
+export function projectAccount({ cwd, wranglerPath = path.join(cwd, 'wrangler.jsonc'), node = false, name = 'my-site' }) {
+  const envPath = path.join(cwd, '.env');
+  const dotenv = existsSync(envPath) ? readFileSync(envPath, 'utf8') : '';
+  if (node) {
+    const accountId = readEnvValue(dotenv, ENV_ACCOUNT_ID) || name;
+    return {
+      accountId,
+      accountHandle: readEnvValue(dotenv, 'E9_ACCOUNT_HANDLE') || accountId,
+      pluginId: readEnvValue(dotenv, 'E9_PLUGIN_ID') || '',
+      writeAccountId: true
+    };
+  }
+  const cfg = readJsonc(wranglerPath) || {};
+  const vars = cfg.vars || {};
+  const hasDatabase = (cfg.d1_databases || []).some(
+    (db) => db.binding === 'DB' && db.database_id && !String(db.database_id).includes('PASTE')
+  );
+  const accountId = vars.E9_ACCOUNT_ID || (hasDatabase ? 'cloudflare' : name);
+  return {
+    accountId,
+    accountHandle: vars.E9_ACCOUNT_HANDLE || accountId,
+    pluginId: vars.E9_PLUGIN_ID || '',
+    writeAccountId: Boolean(vars.E9_ACCOUNT_ID) || !hasDatabase
+  };
 }
 
 function readJsonc(file) {
@@ -327,11 +367,12 @@ export async function setup(options = {}) {
   const exec = options.exec || defaultExec;
   const name = options.name || 'my-site';
   const databaseName = options.d1 || 'engine9';
-  const accountId = name;
   const wranglerPath = path.join(cwd, 'wrangler.jsonc');
+  const account = projectAccount({ cwd, wranglerPath, node: Boolean(options.node), name });
+  const { accountId } = account;
   // A project that already pins the deprecated E9_PLUGIN_ID keeps its
   // website row under that id; setup never adds the variable itself.
-  const pluginId = readJsonc(wranglerPath)?.vars?.E9_PLUGIN_ID || getPluginUUID(accountId, 'website');
+  const pluginId = account.pluginId || getPluginUUID(account.accountHandle, 'website');
   const notes = [];
   const statePath = path.join(cwd, '.e9core', 'setup.json');
   const state = existsSync(statePath)
@@ -361,11 +402,11 @@ export async function setup(options = {}) {
     if (!options.skipInstall) {
       const installed = await ensureDatabaseDrivers(cwd, db);
       if (installed.length) notes.push(`Installed ${installed.join(' ')}.`);
-      await installLocalDatabase({ cwd, db, pluginId, name });
+      await installLocalDatabase({ cwd, db, pluginId, name, account });
       notes.push('Created tables in the database.');
     }
     if (!options.skipKeys) {
-      await withDatabase(cwd, db, name, async (worker) => {
+      await withDatabase(cwd, db, account, async (worker) => {
         const keys = await setupKeys({
           cwd,
           accountId,
@@ -426,7 +467,7 @@ export async function setup(options = {}) {
     name,
     databaseName,
     databaseId,
-    accountId,
+    accountId: account.writeAccountId ? accountId : undefined,
     domain: options.domain || ''
   });
   writeFileSync(wranglerPath, `${JSON.stringify(cfg, null, 2)}\n`);
@@ -442,12 +483,12 @@ export async function setup(options = {}) {
     const dbUrl = options.db || 'sqlite://./engine9.db';
     const installed = await ensureDatabaseDrivers(cwd, dbUrl);
     if (installed.length) notes.push(`Installed ${installed.join(' ')}.`);
-    await installLocalDatabase({ cwd, db: dbUrl, pluginId, name });
+    await installLocalDatabase({ cwd, db: dbUrl, pluginId, name, account });
   }
   if (needLocal || needRemote) {
     // D1 gets a fresh default install every time, never a copy of engine9.db
     // (which may hold test people). Nothing is kept: rerun setup to load again.
-    const tables = await withFreshSchemaSql({ cwd, pluginId, name }, (sqlPath) => {
+    const tables = await withFreshSchemaSql({ cwd, pluginId, name, account }, (sqlPath) => {
       if (needLocal) {
         execOk(exec(['wrangler', 'd1', 'execute', databaseName, '--local', '--file', sqlPath], cwd), 'load local D1');
       }
@@ -486,12 +527,13 @@ export async function setup(options = {}) {
   return { notes, pluginId, databaseId };
 }
 
-async function withDatabase(cwd, db, name, fn) {
+async function withDatabase(cwd, db, { accountId, accountHandle }, fn) {
   await ensureDatabaseDrivers(cwd, db);
   const { default: PluginWorker } = await import('../lib/PluginWorker.js');
   const { createNodePluginRegistry } = await import('./nodePluginRegistry.js');
   const worker = new PluginWorker({
-    accountId: name,
+    accountId,
+    accountHandle,
     auth: { database_connection: db },
     plugins: createNodePluginRegistry({ cwd })
   });
@@ -502,8 +544,8 @@ async function withDatabase(cwd, db, name, fn) {
   }
 }
 
-async function installLocalDatabase({ cwd, db, pluginId, name }) {
-  await withDatabase(cwd, db, name, async (worker) => {
+async function installLocalDatabase({ cwd, db, pluginId, name, account }) {
+  await withDatabase(cwd, db, account, async (worker) => {
     await worker.installDefaultPlugins();
     const { SqlApiKeyStore } = await import('../auth/index.js');
     await new SqlApiKeyStore({ worker }).deploy();

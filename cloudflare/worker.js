@@ -1,9 +1,10 @@
 /*
   Example Cloudflare Worker exposing the engine9 client API.
 
-  Bindings expected (see wrangler.toml.example):
+  Bindings expected (see wrangler.jsonc.example):
     DB          -- D1 database (the engine9 database)
-    API_KEYS    -- KV namespace for API keys (optional: use SqlApiKeyStore instead)
+    API_KEYS    -- deprecated, removed in 1.20: keys in KV (KVApiKeyStore).
+                   Without it, keys are in the api_key D1 table.
     LOG_BUCKET  -- R2 bucket for batch modification logs (optional)
     SESSION_REVOCATIONS -- KV namespace (optional); logout revokes the Core
                            Session instead of only clearing the cookie
@@ -79,7 +80,7 @@ export default {
       personIds: env.PERSON_IDS,
       plugins
     });
-    // Prefer SQL api_key table; API_KEYS KV is optional (not required for auth).
+    // Keys are in the api_key table. API_KEYS (KV) is deprecated, removed in 1.20.
     const keyStore = env.API_KEYS ? new KVApiKeyStore({ kv: env.API_KEYS }) : new SqlApiKeyStore({ worker });
     // Two logs, never mixed: people data (LOG_BUCKET) and schema, plugin, and
     // role changes (AUDIT_BUCKET). Without AUDIT_BUCKET, audit records go to the Worker log.

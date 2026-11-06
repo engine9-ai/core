@@ -29,7 +29,7 @@ API from a Worker.
 | --- | --- |
 | engine9 database | D1 (SQLite dialect) |
 | API endpoints | Worker (`api.handleFetch`) |
-| API keys | KV (`KVApiKeyStore`) or the `api_key` D1 table (`SqlApiKeyStore`) |
+| API keys | The `api_key` D1 table (`SqlApiKeyStore`) |
 | Revoked Core Sessions | KV `SESSION_REVOCATIONS` (optional) |
 | Modification logs | R2 batch objects (`BatchLogger` + `r2Sink`), flushed via `ctx.waitUntil` |
 | Audit log | Its own R2 binding, `AUDIT_BUCKET` (schema, plugin, and role changes); the Worker log without it |
@@ -100,7 +100,7 @@ one piece at a time.
    then create an API key:
 
    ```bash
-   # keys stored in D1 (or use KVApiKeyStore in a setup script for KV)
+   # keys are stored in the api_key table
    npx e9core create-api-key --db sqlite://./local-copy.db --name website --scopes people:write,tables:write,data:read
    ```
 
@@ -110,7 +110,7 @@ one piece at a time.
 5. **Configure wrangler**
 
    `npx e9core setup` writes `wrangler.jsonc` (Worker entry, `nodejs_compat`,
-   the D1 binding, and `E9_ACCOUNT_ID`). Copy from `wrangler.toml.example` only
+   the D1 binding, and `E9_ACCOUNT_ID`). Copy from `wrangler.jsonc.example` only
    when you want the optional KV or R2 bindings. The important parts:
 
    - `compatibility_flags = ["nodejs_compat"]` (the library uses `node:crypto`

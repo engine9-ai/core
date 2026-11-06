@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { setupStep } from '../api/setupSteps.js';
-import { parseOriginList } from '../api/setupPage.js';
+import { parseOriginList } from '../api/origins.js';
 import {
   ENV_ALLOWED_ORIGINS,
   ENV_PUBLIC_KEY,
@@ -16,6 +16,7 @@ import {
   upsertEnv
 } from './setupKeys.js';
 import { accountFromWhoami, setup } from './setup.js';
+import { cliAccount } from './cliAccount.js';
 
 const WIZARD_FILE = 'wizard.json';
 
@@ -107,8 +108,11 @@ async function openWorker(ctx) {
     const file = db.slice('sqlite://'.length);
     if (!path.isAbsolute(file)) db = `sqlite://${path.join(cwd, file)}`;
   }
+  // The local database setup built: its account id is in .env.
+  const { accountId, accountHandle } = cliAccount({}, { cwd, fallback: 'local' });
   const worker = new PluginWorker({
-    accountId: 'local',
+    accountId,
+    accountHandle,
     auth: { database_connection: db }
   });
   return { worker, keyStore: new SqlApiKeyStore({ worker }), owned: true };

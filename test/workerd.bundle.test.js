@@ -26,7 +26,7 @@ const packageJson = require(path.join(root, 'package.json'));
 const unavailableModule = path.join(root, 'cloudflare/unavailable-module.js');
 /*
   Package-root aliases only. Subpaths (checkUnicode.js, langs/en.json) stay on
-  the real packages. Keep in sync with cloudflare/README.md and wrangler.toml.example.
+  the real packages. Keep in sync with cloudflare/README.md and wrangler.jsonc.example.
 */
 const rootAliases = {
   '@engine9/input-tools': path.join(root, 'cloudflare/input-tools-shim.js'),

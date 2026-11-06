@@ -18,12 +18,12 @@ export {
 export {
   listAccountPluginSettings,
   normalizePluginSettings,
-  publicSettingDefinition,
   settingDefaultValue,
-  settingFormFromDefs,
   updateAccountPluginSetting,
   validateSettingValue
 } from './lib/pluginSettings.js';
+/** @deprecated Root exports removed in 1.20. listAccountPluginSettings returns the same form. */
+export { publicSettingDefinition, settingFormFromDefs } from './lib/pluginSettings.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
 export { loadStackMetadata, DEFAULT_STACK_PATH } from './lib/stackMetadata.js';
 export {
@@ -66,6 +66,7 @@ export * as utilities from './lib/utilities.js';
 export {
   assignPersonIds,
   appendPersonId,
+  /** @deprecated Removed in 1.20: a one-time server migration, now in the server. */
   bulkConvertPersonIdentifiers,
   createDefaultIdentifierStore,
   createIdentifierStoreForKind,
@@ -91,6 +92,7 @@ export { sqlIndexName, SQL_IDENTIFIER_MAX_LENGTH } from './lib/sql/sqlIndexName.
 export { standardizeSchema, defaultStandardColumn } from './lib/sql/standardizeSchema.js';
 export {
   SqlApiKeyStore,
+  /** @deprecated Removed in 1.20. Use SqlApiKeyStore. */
   KVApiKeyStore,
   generateApiKey,
   hashApiKey,

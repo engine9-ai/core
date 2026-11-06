@@ -140,11 +140,9 @@ import {
   sessionTokenFromCookie,
   withQueryParam
 } from '../auth/signIn.js';
-import { parseOriginList } from './setupPage.js';
-import { extractApiKey, hashApiKey, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
+import { parseOriginList } from './origins.js';
+import { extractApiKey, hashApiKey, isEngine9ApiKeyToken, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-
-const API_KEY_PREFIXES = ['e9key_', 'e9publickey_'];
 
 /*
   Layer 1 failures. `kind: 'api_key'` marks the site's own key, not the person
@@ -172,19 +170,14 @@ function apiKeyRejection(reason) {
 function logApiKeyRejection(req, reason) {
   if (reason === 'missing_key') return;
   const key = extractApiKey(req.original || req);
-  const origin = getHeader(req.headers, 'Origin') || getHeader(req.headers, 'origin') || '';
+  const origin = getHeader(req.headers, 'Origin') || '';
   console.warn(
     `engine9 api key rejected: ${reason} key_hash=${key ? hashApiKey(key).slice(0, 12) : '-'} path=/${String(req.path || '').replace(/^\/+/, '')}${origin ? ` origin=${origin}` : ''}`
   );
 }
 
-function isApiKeyBearer(token) {
-  const t = String(token || '');
-  return API_KEY_PREFIXES.some((p) => t.indexOf(p) === 0);
-}
-
 function extractBearer(headers) {
-  const auth = getHeader(headers, 'Authorization') || getHeader(headers, 'authorization');
+  const auth = getHeader(headers, 'Authorization');
   if (auth && String(auth).indexOf('Bearer ') === 0) {
     return String(auth).slice('Bearer '.length).trim();
   }
@@ -224,11 +217,11 @@ function getHeader(headers, name) {
   site that equals the API `Host`.
 */
 export function requestDomain(headers) {
-  const origin = getHeader(headers, 'Origin') || getHeader(headers, 'origin');
+  const origin = getHeader(headers, 'Origin');
   const fromOrigin = origin && origin !== 'null' ? domainFromUrl(origin) : null;
   if (fromOrigin) return fromOrigin;
-  const forwardedHost = getHeader(headers, 'X-Forwarded-Host') || getHeader(headers, 'x-forwarded-host');
-  const host = String(forwardedHost || getHeader(headers, 'Host') || getHeader(headers, 'host') || '')
+  const forwardedHost = getHeader(headers, 'X-Forwarded-Host');
+  const host = String(forwardedHost || getHeader(headers, 'Host') || '')
     .split(',')[0]
     .trim();
   if (!host) return undefined;
@@ -333,7 +326,7 @@ export function createApi({
   const allowedOrigins = () => fixedOrigins || parseOriginList(configAllowedOrigins());
 
   function corsHeaders(reqHeaders, { includeOrigin = true } = {}) {
-    const requestOrigin = getHeader(reqHeaders, 'Origin') || getHeader(reqHeaders, 'origin');
+    const requestOrigin = getHeader(reqHeaders, 'Origin');
     const headers = {
       'access-control-allow-methods': 'GET, POST, OPTIONS',
       'access-control-allow-headers': 'Authorization, Content-Type, X-API-Key, X-Engine9-Session',
@@ -881,7 +874,7 @@ export function createApi({
     if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
     const origin = new URL(apiBase).origin;
     const secure = apiBase.startsWith('https:');
-    const cookie = getHeader(headers, 'Cookie') || getHeader(headers, 'cookie');
+    const cookie = getHeader(headers, 'Cookie');
     const clearLogin = `e9_login=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
     const nextFor = () => {
       const pending = delegateAuth.readLoginRequest({ cookie, state: query.state });
@@ -952,7 +945,7 @@ export function createApi({
 
   /** True when the request comes from a page on this site (the Origin's host is the API's). */
   function sameSiteOrigin(headers, apiBase) {
-    const origin = getHeader(headers, 'Origin') || getHeader(headers, 'origin');
+    const origin = getHeader(headers, 'Origin');
     if (!origin || origin === 'null') return false;
     try {
       return new URL(origin).host === new URL(apiBase).host;
@@ -978,7 +971,7 @@ export function createApi({
     try {
       const result = await delegateAuth.finishLogin(token, {
         state: body?.state,
-        cookie: getHeader(headers, 'Cookie') || getHeader(headers, 'cookie'),
+        cookie: getHeader(headers, 'Cookie'),
         secure,
         returnTo: body?.return_to || body?.returnTo,
         domain: body?.domain,
@@ -1056,7 +1049,7 @@ export function createApi({
     // With sessionRevocations configured, the session token also stops working.
     // The e9_session cookie (set by /auth/callback) is cleared here; a host that
     // delivered its own cookie clears it itself.
-    const cookie = getHeader(headers, 'Cookie') || getHeader(headers, 'cookie');
+    const cookie = getHeader(headers, 'Cookie');
     const cookieToken = sessionTokenFromCookie(cookie, sessionCookieName);
     const sessionToken =
       body?.session_token ||
@@ -1410,7 +1403,7 @@ export function createApi({
         getHeader(req.headers, 'x-engine9-session');
       const cookieToken = explicitToken
         ? null
-        : sessionTokenFromCookie(getHeader(req.headers, 'Cookie') || getHeader(req.headers, 'cookie'), sessionCookieName);
+        : sessionTokenFromCookie(getHeader(req.headers, 'Cookie'), sessionCookieName);
       const sessionToken = explicitToken || cookieToken;
       if (sessionToken) session = await readSessionToken(sessionToken);
       sessionFromCookie = Boolean(session && cookieToken);
@@ -1419,7 +1412,7 @@ export function createApi({
         const bearer = extractBearer(req.headers);
         if (
           bearer &&
-          !isApiKeyBearer(bearer) &&
+          !isEngine9ApiKeyToken(bearer) &&
           isDelegateIdentityJwt(bearer) &&
           typeof delegateAuth.verifyIdentityToken === 'function'
         ) {

@@ -111,8 +111,7 @@
     e9core segment remove  --segment admin --email a@x.org
     e9core segment policy  --segment <id> [--join 0-7|none] [--leave 1-7|none] [--manager <role name | id>|none]
         Membership of any segment. --segment takes a standard role name
-        (admin; ids derive from --handle or E9_ACCOUNT_HANDLE, default
-        --account or E9_ACCOUNT_ID, default "local") or any segment id.
+        (admin; ids derive from the account handle, below) or any segment id.
         --account (E9_ACCOUNT_ID) is the account's own, possibly mutable,
         id; --handle (E9_ACCOUNT_HANDLE) is the permanent string role and
         plugin ids are namespaced under. Pass --handle only for a database
@@ -150,6 +149,11 @@
         higher with that verified email.
 
   --db may be omitted when ENGINE9_DATABASE_CONNECTION is set.
+
+  Every --db command works under one account: --account and --handle, else
+  E9_ACCOUNT_ID and E9_ACCOUNT_HANDLE from the environment, else from .env in
+  the current directory. The handle defaults to the account id. With none
+  set, segment uses "local" and the other commands "client".
 
   Plugins are every index.js directory and *.plugin.js file in the packages
   listed in package.json "engine9.pluginPackages" (default: @engine9/schemas).
@@ -190,6 +194,7 @@ import { membershipPolicyFromRow } from '../auth/segmentAccess.js';
 import { readSuperadminsFile, addSuperadmins, removeSuperadmins } from './superadminsFile.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { cliAccount } from './cliAccount.js';
 
 function emailsFromArgs(args) {
   const out = [];
@@ -300,11 +305,10 @@ async function segmentCommand(args) {
     console.error('Provide --db <connection>, --url <site> (a deployed site, D1 included), or set ENGINE9_DATABASE_CONNECTION');
     process.exit(1);
   }
-  const accountId = args.account || process.env.E9_ACCOUNT_ID || 'local';
   // Role and plugin ids are namespaced under the account's permanent handle,
-  // never the account id (see auth/roles.js). Defaults to accountId: a
-  // database that has never set a handle keeps the ids it already has.
-  const accountHandle = args.handle || process.env.E9_ACCOUNT_HANDLE || accountId;
+  // never the account id (see auth/roles.js). The handle defaults to the
+  // account id: a database that has never set a handle keeps its ids.
+  const { accountId, accountHandle } = cliAccount(args, { fallback: 'local' });
   const pluginId = args['plugin-id'] || process.env.E9_PLUGIN_ID || getPluginUUID(accountHandle, 'website');
   const registry = standardRoleRegistry(accountHandle);
   const roleNames = STANDARD_ROLES.map((r) => r.name).join(', ');
@@ -419,7 +423,7 @@ async function segmentCommand(args) {
         process.exit(1);
       }
       if (roleName) {
-        await ensureStandardRoleSegment({ worker, accountId, name: roleName });
+        await ensureStandardRoleSegment({ worker, accountId: accountHandle, name: roleName });
       } else {
         const { data } = await worker.query({ sql: 'select id from segment where id=?', values: [segmentId] });
         if (!data.length) {
@@ -497,8 +501,10 @@ function getPluginWorker(args) {
     process.exit(1);
   }
   ensureNodePluginRegistry({ cwd: process.cwd() });
+  const { accountId, accountHandle } = cliAccount(args, { fallback: 'client' });
   return new PluginWorker({
-    accountId: args.account || 'client',
+    accountId,
+    accountHandle,
     auth: { database_connection: db },
     defaultStackPath: args.stack || undefined,
     audit: cliAudit()
@@ -506,7 +512,7 @@ function getPluginWorker(args) {
 }
 
 /* Flags `e9core upgrade` reads itself; the rest go to the plugins' upgrades. */
-const UPGRADE_CLI_FLAGS = new Set(['url', 'key', 'env', 'db', 'account', 'stack', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
+const UPGRADE_CLI_FLAGS = new Set(['url', 'key', 'env', 'db', 'account', 'handle', 'stack', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
 
 function listArg(value) {
   if (!value || value === true) return undefined;

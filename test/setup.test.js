@@ -12,6 +12,8 @@ import {
   removeLegacySchemaFile,
   setup,
 } from '../bin/setup.js';
+import { cliAccount } from '../bin/cliAccount.js';
+import { getPluginUUID } from '../lib/utilities.js';
 
 const DB_ID = '11111111-1111-4111-8111-111111111111';
 
@@ -150,6 +152,80 @@ describe('setup', () => {
       const state = JSON.parse(readFileSync(path.join(cwd, '.e9core', 'setup.json'), 'utf8'));
       assert.equal(state.schemaRemote, true);
       assert.equal(state.schemaLocal, true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('setup keeps the account a project already has', () => {
+  const run = (cwd, options = {}) => setup({
+    cwd,
+    skipInstall: true,
+    skipKeys: true,
+    exec: () => ({ status: 0, stdout: `database_id = "${DB_ID}"\n` }),
+    ...options
+  });
+  const readCfg = (cwd) => JSON.parse(readFileSync(path.join(cwd, 'wrangler.jsonc'), 'utf8'));
+
+  it('a rerun without --name (the wizard) keeps E9_ACCOUNT_ID', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-rerun-'));
+    try {
+      await run(cwd, { name: 'festival' });
+      const again = await run(cwd);
+      assert.equal(readCfg(cwd).vars.E9_ACCOUNT_ID, 'festival');
+      assert.equal(again.pluginId, getPluginUUID('festival', 'website'));
+      await run(cwd, { name: 'other' });
+      assert.equal(readCfg(cwd).vars.E9_ACCOUNT_ID, 'festival', '--name does not replace it either');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('a project on D1 with no E9_ACCOUNT_ID stays on the Worker default', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-default-'));
+    try {
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({
+        name: 'old-site',
+        d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: DB_ID }]
+      })}\n`);
+      const result = await run(cwd);
+      assert.equal('E9_ACCOUNT_ID' in readCfg(cwd).vars, false);
+      assert.equal(result.pluginId, getPluginUUID('cloudflare', 'website'));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('derives the website id from E9_ACCOUNT_HANDLE', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-handle-'));
+    try {
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({
+        vars: { E9_ACCOUNT_ID: 'renamed', E9_ACCOUNT_HANDLE: 'original' },
+        d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: DB_ID }]
+      })}\n`);
+      const result = await run(cwd);
+      assert.equal(result.pluginId, getPluginUUID('original', 'website'));
+      assert.equal(readCfg(cwd).vars.E9_ACCOUNT_ID, 'renamed');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('cliAccount', () => {
+  it('reads flags, then the environment, then .env, then the fallback', () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-cli-account-'));
+    try {
+      assert.deepEqual(cliAccount({}, { cwd, env: {}, fallback: 'client' }), {
+        accountId: 'client', accountHandle: 'client', configured: false
+      });
+      writeFileSync(path.join(cwd, '.env'), 'E9_ACCOUNT_ID=from-dotenv\n');
+      assert.equal(cliAccount({}, { cwd, env: {} }).accountId, 'from-dotenv');
+      assert.equal(cliAccount({}, { cwd, env: {} }).accountHandle, 'from-dotenv');
+      assert.equal(cliAccount({}, { cwd, env: { E9_ACCOUNT_ID: 'from-env' } }).accountId, 'from-env');
+      const flagged = cliAccount({ account: 'a', handle: 'h' }, { cwd, env: { E9_ACCOUNT_ID: 'from-env' } });
+      assert.deepEqual(flagged, { accountId: 'a', accountHandle: 'h', configured: true });
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

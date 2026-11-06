@@ -284,7 +284,7 @@ export function sessionNeedsRole(
 export function normalizeRoleRegistry(options?: {
   /** UUID-keyed map, or `'standard'` (requires accountId; see auth/roles). */
   roles?: Record<string, RoleDefinition | string> | "standard";
-  /** @deprecated Prefer `roles` keyed by segment UUID. */
+  /** @deprecated Removed in 1.20. Use `roles` keyed by segment UUID. */
   roleSegments?: Record<string, string>;
   accountId?: string;
 }): Record<string, RoleDefinition>;
@@ -519,7 +519,7 @@ export function createDelegateAuth(config: {
    */
   superadmins?: string[] | (() => string[]);
   /**
-   * @deprecated Prefer `roles` keyed by segment UUID.
+   * @deprecated Removed in 1.20. Use `roles` keyed by segment UUID.
    * Legacy map of display name -> segment id; normalized into `roleRegistry`.
    */
   roleSegments?: Record<string, string>;
@@ -533,8 +533,6 @@ export function createDelegateAuth(config: {
     get(key: string): Promise<unknown>;
     put(key: string, value: string, options?: { expirationTtl?: number }): Promise<unknown>;
   } | null;
-  /** Accept sessions minted before `typ` existed. Default true; turn off one session lifetime after upgrading. */
-  acceptLegacySessions?: boolean;
   fetchImpl?: typeof fetch;
 }): DelegateAuth;
 

@@ -292,9 +292,11 @@ export function delegateIdentityUrl({
  * Standard names (auth/roleNames.js), ids derived from the account id:
  *   roles: 'standard'            (requires accountId)
  *
- * Legacy (deprecated):
+ * Deprecated, removed in 1.20 (logs a warning once):
  *   roleSegments: { admin: '<segment-uuid>', vip: '<segment-uuid>' }
+ *   Use roles: { '<segment-uuid>': { name: 'admin' } } instead.
  */
+let warnedRoleSegments = false;
 export function normalizeRoleRegistry({ roles, roleSegments, accountId } = {}) {
   const out = {};
   if (roles === 'standard') {
@@ -316,6 +318,12 @@ export function normalizeRoleRegistry({ roles, roleSegments, accountId } = {}) {
     }
   }
   if (roleSegments && typeof roleSegments === 'object') {
+    if (!warnedRoleSegments && Object.values(roleSegments).some(Boolean)) {
+      warnedRoleSegments = true;
+      console.warn(
+        "engine9: the roleSegments option is deprecated and is removed in @engine9/core 1.20. Use roles: { '<segment-uuid>': { name: '<role>' } } (or roles: 'standard')."
+      );
+    }
     for (const [name, segmentId] of Object.entries(roleSegments)) {
       if (!segmentId) continue;
       if (!out[segmentId]) {
@@ -641,10 +649,9 @@ export function createSessionToken(payload, { secret, ttlSeconds = 86400, typ = 
 
 /**
  * Verify a signed token of one purpose; returns the payload or null when
- * invalid, expired, or of another purpose. `acceptUntyped` reads tokens
- * minted before `typ` existed (sessions only, for one session lifetime).
+ * invalid, expired, or of another purpose (a token without `typ` has none).
  */
-export function verifySessionToken(token, { secret, typ = SESSION_TOKEN_TYPE, acceptUntyped = false }) {
+export function verifySessionToken(token, { secret, typ = SESSION_TOKEN_TYPE }) {
   if (!secret) throw new Error('verifySessionToken requires a secret');
   const parts = splitSignedToken(token);
   if (!parts) return null;
@@ -656,7 +663,7 @@ export function verifySessionToken(token, { secret, typ = SESSION_TOKEN_TYPE, ac
     return null;
   }
   if (!payload || typeof payload.exp !== 'number' || payload.exp <= Date.now()) return null;
-  if (payload.typ !== typ && !(acceptUntyped && payload.typ === undefined)) return null;
+  if (payload.typ !== typ) return null;
   return payload;
 }
 
@@ -734,12 +741,10 @@ export function sessionNeedsRole(session) {
       roles: {
         '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 2 } }
       },
-      // Legacy (deprecated):       roleSegments: { admin: '<segment uuid>' },
       superadmins,                 // optional: emails (array, or a function read on each
                                    // request) that act as this account's admin role
       sessionTtlSeconds: 86400,
-      sessionRevocations: null,    // KV-like { get, put } for logout()
-      acceptLegacySessions: true   // sessions minted before `typ`; turn off a day after upgrading
+      sessionRevocations: null     // KV-like { get, put } for logout()
     });
 
     auth.beginLogin({ returnTo, ... })      // { url, cookie, state, nonce }
@@ -786,7 +791,6 @@ export function createDelegateAuth({
   superadmins = null,
   loadRolesOnLogin = true,
   sessionRevocations = null,
-  acceptLegacySessions = true,
   fetchImpl = fetch,
   domain,
   issuer,
@@ -923,7 +927,7 @@ export function createDelegateAuth({
   }
 
   function verify(token) {
-    const payload = verifySessionToken(token, { secret: sessionSecret, acceptUntyped: acceptLegacySessions });
+    const payload = verifySessionToken(token, { secret: sessionSecret });
     if (!payload || !Number.isInteger(payload.personId)) return null;
     return withSuperadmin({
       personId: payload.personId,

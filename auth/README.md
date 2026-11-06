@@ -19,7 +19,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 
 | File               | Role                                                                                                                   |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `index.js`         | API keys (`SqlApiKeyStore`, `KVApiKeyStore`, prefixes, catalog)                                                        |
+| `index.js`         | API keys (`SqlApiKeyStore`, prefixes, catalog)                                                        |
 | `policy.js`        | Scopes, `requiredAuth` (`minLevel`, `twoFactor`), `resolveAuthContext`                                                 |
 | `hmac.js`          | `encoded.sig` HMAC helpers (Core Session + legacy bridge)                                                              |
 | `delegate.js`      | Identity Tokens, person + role + session                                                                               |
@@ -232,7 +232,6 @@ createDelegateAuth({
   roles, // { [segmentUuid]: { name, scopes, requiredAuth } }
   fetchImpl,
   sessionRevocations, // optional KV-like store; logout revokes the session
-  acceptLegacySessions, // default true; false refuses sessions without `typ`
 });
 ```
 
@@ -342,10 +341,6 @@ sessions. Default TTL is 86400 seconds. `verifySessionToken(token, { secret, typ
 returns the payload, or `null` when the signature, encoding, `exp`, or `typ`
 fails, so a login cookie can never be replayed as a session. Core does not
 store sessions.
-
-Sessions minted before `typ` existed have none. `createDelegateAuth` accepts
-them until they expire (`acceptLegacySessions: true`, the default). Set it to
-`false` once a day has passed after upgrading.
 
 ### Logout and revocation
 

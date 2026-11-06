@@ -13,7 +13,7 @@ Core setup without a provider: [../deploy.md](../deploy.md).
 > `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
 > change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
 > default), and change `@engine9/id` in the browser in the same deploy. The
-> exact list of places is in [CHANGELOG.md](../../CHANGELOG.md#1150-delegate-moves-to-delegatenetwork).
+> exact list of places is in [upgrade-1.15.md](../upgrade-1.15.md#1150-delegate-moves-to-delegatenetwork).
 <!-- END REMOVE-AFTER 2026-11-06 -->
 
 ## When you need it

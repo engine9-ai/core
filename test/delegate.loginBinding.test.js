@@ -108,7 +108,7 @@ test('login({ nonce }) and identityUrl expires_in', async () => {
   assert.equal(delegateDefault.searchParams.has('expires_in'), false);
 });
 
-test('session tokens carry a purpose; other purposes and (optionally) untyped tokens are refused', async () => {
+test('session tokens carry a purpose; other purposes and untyped tokens are refused', async () => {
   const typed = createSessionToken({ personId: 1 }, { secret: 's' });
   const payload = verifySessionToken(typed, { secret: 's' });
   assert.equal(payload.typ, 'e9.session');
@@ -119,11 +119,10 @@ test('session tokens carry a purpose; other purposes and (optionally) untyped to
 
   // A token minted by an earlier release (no typ).
   const { auth } = await setup();
-  const { auth: strict } = await setup({ authOptions: { acceptLegacySessions: false } });
   const encoded = Buffer.from(JSON.stringify({ personId: 7, roles: [], exp: Date.now() + 60000 })).toString('base64url');
   const legacy = `${encoded}.${signPayload(encoded, '0123456789abcdef'.repeat(4))}`;
-  assert.equal(auth.verify(legacy).personId, 7);
-  assert.equal(strict.verify(legacy), null);
+  assert.equal(auth.verify(legacy), null);
+  assert.equal(verifySessionToken(legacy, { secret: '0123456789abcdef'.repeat(4) }), null);
 });
 
 test('logout revokes a session when sessionRevocations is configured', async () => {

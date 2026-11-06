@@ -15,7 +15,7 @@
 
   Two stores are provided:
     SqlApiKeyStore -- api_key table (created via SQLWorker.createTable or migrations)
-    KVApiKeyStore  -- Cloudflare Workers KV namespace binding
+    KVApiKeyStore  -- Cloudflare Workers KV namespace binding (deprecated, removed in 1.20)
 
   Policy helpers (resolveAuthContext, hasScope, ADMIN_SCOPE) live in ./policy.js.
   HMAC helpers for Delegate tokens live in ./hmac.js.
@@ -477,10 +477,18 @@ export class SqlApiKeyStore {
 }
 
 /* Cloudflare KV-backed store.  `kv` is a KVNamespace binding.
-   Stored under key `apikey:<sha256>` with a JSON record. */
+   Stored under key `apikey:<sha256>` with a JSON record.
+   @deprecated Removed in 1.20. Use SqlApiKeyStore (the api_key table). */
+let warnedKvStore = false;
 export class KVApiKeyStore {
   constructor({ kv }) {
     if (!kv) throw new Error('KVApiKeyStore requires a kv namespace binding');
+    if (!warnedKvStore) {
+      warnedKvStore = true;
+      console.warn(
+        'engine9: KVApiKeyStore (the API_KEYS KV binding) is deprecated and is removed in @engine9/core 1.20. Keep keys in the api_key table (SqlApiKeyStore): run npx e9core setup-keys --remote, then remove the API_KEYS binding.'
+      );
+    }
     this.kv = kv;
   }
   async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null, key: existingKey = null } = {}) {
