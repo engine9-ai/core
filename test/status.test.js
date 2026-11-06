@@ -61,6 +61,33 @@ test('a freshly installed stack reports no failures and no warnings, in a few qu
   }
 });
 
+test("D1's internal _cf_ tables are left out: reading their schema is refused with SQLITE_AUTH", async () => {
+  const worker = memory();
+  try {
+    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
+    await worker.query({ sql: 'create table _cf_KV (key text primary key, value blob)' });
+    // D1 refuses any schema read that reaches _cf_KV: PRAGMA table_info("_cf_KV"), or the pragma
+    // table-valued functions joined over a sqlite_master list that still includes it.
+    const query = worker.query.bind(worker);
+    worker.query = (opts, ...rest) => {
+      const sql = String(opts?.sql || '');
+      const direct = /pragma\s+\w+\(\s*["'`]?_cf_/i.test(sql);
+      const joined = /pragma_\w+\(m\.name\)/i.test(sql) && !/_cf/.test(sql);
+      if (direct || joined) return Promise.reject(new Error('D1_ERROR: not authorized: SQLITE_AUTH'));
+      return query(opts, ...rest);
+    };
+    const snapshot = await createSchemaSnapshot(worker);
+    assert.equal(snapshot.hasTable('_cf_KV'), false);
+    const { tables } = await worker.tables({ type: 'table' });
+    assert.equal(tables.includes('_cf_KV'), false);
+    const report = await worker.status();
+    assert.equal(report.ok, true);
+    assert.deepEqual(bad(report), []);
+  } finally {
+    await worker.destroy();
+  }
+});
+
 test('the batched snapshot and the per-table fallback diff the same', async () => {
   const worker = memory();
   try {
