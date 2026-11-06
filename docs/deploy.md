@@ -191,8 +191,16 @@ To deploy production, use **Deploy the production site to Cloudflare** in the wi
 npx e9core setup --remote
 ```
 
-That loads production D1, copies secrets from `.env` into Cloudflare, and
-deploys the Worker. Attach a hostname with `--domain www.example.com`.
+That works on production only. It loads the tables into production D1 when
+it has none, adds the keys and signing secrets the Worker does not have yet,
+and deploys the Worker. It reads what production already has, not files on
+this machine, so it is the same command on a laptop, in CI, and in an agent
+session, and re-running it changes nothing. It touches no local database and
+no `.env`. Attach a hostname with `--domain www.example.com`.
+
+No terminal at all (an owner in the GitHub and Cloudflare web pages, or an
+agent with no Cloudflare login): [no-command-line.md](no-command-line.md).
+A GitHub Actions workflow runs these commands on every push.
 
 ### Your own servers (Node.js)
 
@@ -269,17 +277,29 @@ same everywhere, because it is already in page JavaScript. A leaked laptop
 `.env` therefore cannot call production as admin or mint production sessions.
 `.env.*` files are ignored by git.
 
-Never type `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` yourself, and never
-set them with `wrangler secret put`. Each is 32 random bytes as 64 hex
+What production already has decides what `setup --remote` does. It asks
+Cloudflare for the Worker's secret names. A secret the Worker has is kept,
+even when `.env.production` is missing (a fresh CI runner, a new laptop).
+Its value cannot be read back, so it is not written to that file. Only a
+missing secret is made. A folder with no `.env` takes the public key from
+`.env.production` or the committed `public/engine9-config.js`, so a fresh
+clone does not make a second one.
+
+Never choose `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` yourself. A
+machine makes them: `e9core setup` (or `setup-keys`) here, and
+`openssl rand -hex 32` on your own servers. Each is 32 random bytes as 64 hex
 characters. Core refuses login with anything else, and `e9core status` fails
-the check. `setup-keys` (and `--remote`) replaces a value of any other form.
+the check. `setup-keys` (and `--remote`) replaces a value of any other form
+in `.env` or `.env.production`. One that is only on the Worker is replaced
+with `--rotate`.
 
 For another wrangler environment, add `--env staging`. It gets `.env.staging`,
 its own keys, and the `DB` binding under `env.staging` in `wrangler.jsonc`.
 `e9core upgrade --url … --env staging` reads its admin key from that file.
 
-To replace them: `npx e9core setup --rotate`, then `setup --remote` again.
-Rotating turns the old admin key off in that database.
+To replace them: `npx e9core setup --rotate` (local), and
+`npx e9core setup --remote --rotate` (production). Rotating turns the old
+keys off in that database, and everyone signed in signs in again.
 
 Sites set up by an earlier release copied the local admin key and
 `SESSION_SECRET` to production. The next `setup --remote` (or
@@ -296,7 +316,7 @@ there, and signs out everyone signed in to production.
 | `npx e9core setup --remote` | Production D1, secrets, and deploy |
 | `npx e9core setup --node` | SQLite (or MySQL) + `.env`; then `e9core serve` |
 | `npx e9core serve` | Same-platform local site (HTML + `/api`) |
-| `npx e9core setup --name festival` | Worker name. The database is still called `engine9` |
+| `npx e9core setup --name festival` | Worker name for a new project. Its database is still called `engine9` |
 | `npx e9core setup --remote --domain www.example.com` | Also attaches that hostname |
 
 Run `setup` again anytime. It keeps the database and the keys you already have.
@@ -320,14 +340,22 @@ Field names are `given_name`, `family_name`, `email`, and `email_type`
 
 ### Login
 
-Skip this while you are building the page. Saving people only needs the API key.
+Saving people only needs the API key. When visitors should log in, the
+identity provider is delegate, and the server side is already done: the
+Worker and `e9core serve` turn on `/api/auth/*` because setup wrote
+`SESSION_SECRET`. Two things remain:
 
-When visitors should log in, add an **identity provider**. Production defaults
-to delegate, and the server side is already done: the Worker and `e9core serve`
-turn on `/api/auth/*` because setup wrote `SESSION_SECRET`. What remains is
-allowing your Domain on delegate and adding `@engine9/id` to the page. Steps
-are in [identityProviders/delegate.md](identityProviders/delegate.md) and the
-[README](../README.md#add-login).
+1. Allow your Domain on delegate (`localhost:3000`–`3003` already are).
+2. Add the **Login button** to the header of every page. This is the
+   `@engine9/id` login widget with `core: { session: 'cookie' }`, the same
+   button `demo-festival` has: one button and one dialog that logs in,
+   switches email, changes role, and logs out. Copy the snippet in the
+   [README](../README.md#add-login). Do not use a plain link to
+   `/api/auth/start` as the Login button; that link is the no-JavaScript
+   fallback.
+
+Details: [sign-in.md](sign-in.md) and
+[identityProviders/delegate.md](identityProviders/delegate.md).
 
 ---
 
@@ -339,12 +367,12 @@ commands below.
 
 | Flag | Effect |
 | --- | --- |
-| `--name <worker>` | Cloudflare Worker name, and a new project's `E9_ACCOUNT_ID`. Default `my-site`. Setup never changes an `E9_ACCOUNT_ID` the project already has |
-| `--d1 <database>` | D1 name. Default `engine9` |
+| `--name <worker>` | Cloudflare Worker name, and a new project's `E9_ACCOUNT_ID`. Default: the `name` in `wrangler.jsonc`, else `my-site`. Setup never changes an `E9_ACCOUNT_ID` the project already has |
+| `--d1 <database>` | D1 name. Default: the `DB` binding in `wrangler.jsonc`, else `engine9` |
 | `--domain <host>` | Adds a custom domain route, then use with `--remote` |
 | `--no-deploy` | With `--remote`, update the database and secrets but do not deploy |
 | `--refresh-schema` | Load tables again (only safe on an empty database) |
-| `--rotate` | Replace the API keys and setup token in `.env` (with `--remote`, that environment's keys too) |
+| `--rotate` | Replace the API keys, signing secrets, and setup token in `.env`. With `--remote`, replace that environment's keys and secrets instead, even those only the Worker holds |
 | `--env <name>` | With `--remote`, target that wrangler environment. Keys go to `.env.<name>` |
 | `--db sqlite://./engine9.db` | The local database `e9core serve` uses. D1 never gets a copy of it |
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
@@ -360,6 +388,9 @@ npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes pub
 `setup` installs the default plugins into a new file in a temporary folder,
 loads its dump with `wrangler d1 execute --file`, prints the tables it
 loaded, and deletes it, so test people in `engine9.db` never reach D1.
+With `--remote`, it loads production only when production D1 has no
+engine9 tables (no `plugin` table); after that, `e9core upgrade` adds new
+tables. Building that file needs neither knex nor better-sqlite3.
 Tables without the plugin rows from `installDefaultPlugins` will not accept
 people writes.
 
@@ -390,7 +421,11 @@ the preferred scripting language here.
 Prefer, in this order:
 
 1. An `e9core` command (`setup`, `upgrade`, `create-api-key`, …). Do not
-   script what a command already does.
+   script what a command already does. CI runs the same commands: `setup
+   --remote` is safe to re-run, and `--remote` gives `upgrade` an admin key
+   for one run ([no-command-line.md](no-command-line.md)). Do not write a
+   guard that checks D1 before running setup, or a fallback that makes a
+   secret.
 2. A small Node.js script (ES modules, `node script.js`) that calls the
    core library or the site's HTTP API (`POST /api/people`, …).
 3. Python only when a task truly needs a Python-only library, and then keep
@@ -418,7 +453,7 @@ console.log(await res.json());
 | Task                | Call                                        |
 | ------------------- | ------------------------------------------- |
 | Health              | `GET /api/ok`                               |
-| Database matches the code | `npx e9core status --url <site>` ([status.md](status.md)) |
+| Database matches the code | `npx e9core status --url <site>`, or open `/api/admin/status` in a browser as an admin ([status.md](status.md)) |
 | Setup wizard (local) | `GET /setup?token=…` on `e9core serve` only |
 | Signup              | `POST /api/people` with `{ people: [ … ] }` |
 | Who is logged in    | `GET /api/auth/me` (after identity-provider login) |
@@ -437,8 +472,8 @@ Configuration failures are not fixed by signing in again.
 | `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/schemas`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
 | `Cannot add a column with non-constant default` | `schema_update_failed` | `installDefaultPlugins` tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
 | other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
-| `SESSION_SECRET is not set` | `missing_session_secret` | The site cannot mint its session cookie. | `npx e9core setup-keys --remote`. Do not choose a value yourself. |
-| `SESSION_SECRET is not 64 hex characters` (501 from `/auth/*`) | none | Someone typed the secret. Login stays off; a typed value can be guessed from any session. | `npx e9core setup-keys --remote` replaces it. |
+| `SESSION_SECRET is not set` | `missing_session_secret`; `login_off` (501 from `/auth/*`, with `missing`) | The site cannot mint its session cookie. | `npx e9core setup --remote`, or run the deploy workflow again ([no-command-line.md](no-command-line.md)). Do not choose a value yourself. |
+| `SESSION_SECRET is not 64 hex characters` | `login_off` (501 from `/auth/*`, with `invalid`) | Someone typed the secret. Login stays off; a typed value can be guessed from any session. | `npx e9core setup --remote --rotate`, or the deploy workflow with `rotate` checked. |
 | invalid or expired token | `invalid_identity_token` | The Identity Token did not verify. | Sign in again. |
 
 ### When the API answers `unauthorized`
@@ -486,12 +521,14 @@ If a key's row is missing, put both rows back without changing either key:
 npx e9core setup-keys --remote      # add --env staging for another environment
 ```
 
-It sends the keys in `.env` and `.env.production` to that D1 database again
-(rows that are already there are left alone) and saves the secrets. Keys are
-read from the database on every request, so no redeploy is needed. Run it
-where `.env` holds the public key the live page sends (compare it with the
-`publicKey` in the page source). A folder with no `.env` gets new keys, which
-the deployed page does not have.
+It sends the keys in `.env.production`, and the public key, to that D1
+database again (rows that are already there are left alone) and saves any
+secret the Worker lacks. Keys are read from the database on every request, so
+no redeploy is needed. The public key comes from `.env`, else
+`.env.production`, else the committed `public/engine9-config.js`: check that
+it is the one the live page sends. When the admin key exists only as a Worker
+secret, its row cannot be put back without the key: replace it with
+`npx e9core setup-keys --remote --rotate`.
 
 If `wrangler whoami` lists more than one account, add
 `"account_id": "<the account that owns the database>"` to `wrangler.jsonc`

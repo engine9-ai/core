@@ -7,7 +7,6 @@ import { insertPersons } from '../lib/id/sqlStore.js';
 import { contiguousInsertIds } from '../lib/id/sqlHelpers.js';
 import {
   assignPersonIds,
-  bulkConvertPersonIdentifiers,
   hashIdValueToU128,
   hashIdValueToU128Hex,
   u128ToHexKey,
@@ -297,44 +296,6 @@ describe('compact SQL person_id_<id_type> store', () => {
     }
   });
 
-  test('bulkConvert into compact SQL + assignPersonIds dedupes', async () => {
-    const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
-    try {
-      await applyStandardStack(worker);
-      await deployLegacyIdentifierTable(worker);
-      await worker.insertArray({ table: 'person', array: [{ id: 1 }, { id: 2 }] });
-      const { data: people } = await worker.query('select id from person order by id');
-      const p1 = people[0].id;
-      const p2 = people[1].id;
-      await worker.insertArray({
-        table: 'person_identifier',
-        array: [
-          { person_id: p1, source_input_id: null, id_type: 'email_hash_v1', id_value: 'hash-a' },
-          { person_id: p2, source_input_id: null, id_type: 'email_hash_v1', id_value: 'hash-b' }
-        ]
-      });
-
-      const compact = createCompactSqlIdentifierStore(worker);
-      const summary = await bulkConvertPersonIdentifiers({ worker, store: compact });
-      assert.equal(summary.written, 2);
-
-      const inputId = '00000000-0000-0000-0000-000000000011';
-      const batch = await assignPersonIds({
-        worker,
-        identifierStore: compact,
-        batch: [
-          {
-            input_id: inputId,
-            identifiers: [{ path: 'person_email', type: 'email_hash_v1', value: 'hash-a' }]
-          }
-        ]
-      });
-      assert.equal(batch[0].person_id, p1);
-    } finally {
-      await worker.destroy();
-    }
-  });
-
   test('assignPersonIds on SQLite defaults to compact tables', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
@@ -387,45 +348,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   });
 });
 
-describe('bulkConvertPersonIdentifiers + assignPersonIds with injectable store', () => {
-  test('bulk converts SQL person_identifier into a memory store', async () => {
-    const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
-    try {
-      await applyStandardStack(worker);
-      await deployLegacyIdentifierTable(worker);
-      await worker.insertArray({
-        table: 'person',
-        array: [{ id: 1 }, { id: 2 }]
-      });
-      const { data: people } = await worker.query('select id from person order by id');
-      const p1 = people[0].id;
-      const p2 = people[1].id;
-      await worker.insertArray({
-        table: 'person_identifier',
-        array: [
-          { person_id: p1, source_input_id: null, id_type: 'email_hash_v1', id_value: 'hash-a' },
-          { person_id: p2, source_input_id: null, id_type: 'email_hash_v1', id_value: 'hash-b' },
-          { person_id: p1, source_input_id: null, id_type: 'phone_hash_v1', id_value: 'hash-a' }
-        ]
-      });
-
-      const store = createMemoryIdentifierStore();
-      const summary = await bulkConvertPersonIdentifiers({ worker, store, batch_size: 2 });
-      assert.equal(summary.read, 3);
-      assert.equal(summary.written, 3);
-      assert.equal(summary.skipped, 0);
-
-      const found = await store.findByIdentifiers([
-        { id_type: 'email_hash_v1', id_value: 'hash-a' },
-        { id_type: 'phone_hash_v1', id_value: 'hash-a' }
-      ]);
-      assert.equal(found.find((r) => r.id_type === 'email_hash_v1').person_id, p1);
-      assert.equal(found.find((r) => r.id_type === 'phone_hash_v1').person_id, p1);
-    } finally {
-      await worker.destroy();
-    }
-  });
-
+describe('assignPersonIds with injectable store', () => {
   test('assignPersonIds uses injectable store for lookup and insert', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {

@@ -15,7 +15,10 @@
  *
  *   Then open the /setup URL that `npx e9core serve` prints.
  *
- * Production Cloudflare: npx e9core setup --remote
+ * Production Cloudflare: npx e9core setup --remote. The same command on a
+ * laptop, in CI, or in an agent session: it decides from the target (the D1
+ * tables, `wrangler secret list`), creates only what is missing, and
+ * touches no local database or .env.
  *
  * The command writes wrangler.jsonc (including the D1 database id), .env,
  * .gitignore, and engine9.db. Do not paste ids into those files. Do not add
@@ -34,6 +37,8 @@ import JSON5 from 'json5';
 import { getPluginUUID } from '../lib/utilities.js';
 import { quoteIdent } from '../lib/sql/sqliteDDL.js';
 import { ensureGitignore, setupKeys, readEnvValue, ENV_ACCOUNT_ID } from './setupKeys.js';
+import { sqliteD1 } from './sqliteD1.js';
+import { d1Rows } from './wranglerProject.js';
 
 const WORKER_MAIN = 'node_modules/@engine9/core/cloudflare/worker.js';
 const PLUGINS_MODULE = 'engine9.plugins.js';
@@ -68,32 +73,38 @@ Production Cloudflare deploy is --remote, or the deploy step.
     npx e9core serve
     Open the setup URL serve prints. Node serves your pages and /api together.
 
-Production Cloudflare:
+Production Cloudflare (a laptop, CI, or an agent session; the same command):
   npx e9core setup --remote
+  It reads what production already has (D1 tables, Worker secrets) and adds
+  only what is missing, so it is safe to re-run on a fresh machine.
 
 Advanced: HTML on one host and the API on another — see docs/deploy.md
 (independent hosts). You will need ENGINE9_API on the page and allowed origins.
 
 Options most people use:
 
-  --name <worker>     Worker name, and a new project's account id. Default: my-site.
+  --name <worker>     Worker name, and a new project's account id. Default: the
+                      name in wrangler.jsonc, else my-site.
                       A project that already has E9_ACCOUNT_ID keeps it
-  --remote            Production database, Cloudflare secrets, and deploy
+  --remote            Production database, Cloudflare secrets, and deploy.
+                      Touches no local database and no .env
   --domain <host>     Custom domain. Use together with --remote
   --node              SQLite file and .env only. No Cloudflare (use with serve)
 
 Other flags:
 
-  --d1 <database>     D1 name. Default: engine9
+  --d1 <database>     D1 name. Default: the DB binding in wrangler.jsonc, else engine9
   --no-deploy         With --remote, update the database and secrets but do not deploy
   --refresh-schema    Load tables again. Only safe on an empty database
-  --rotate            Replace the API keys and setup token in .env
+  --rotate            Replace the API keys and signing secrets (with --remote:
+                      production's; everyone signed in signs in again)
   --db <url>          sqlite:// file used before the data is copied to D1
                       With --node, mysql://user:pass@host/dbname also works
 
 setup writes wrangler.jsonc (Cloudflare path), .env (including API keys and
 E9_SETUP_TOKEN), and the database. It keeps a database id that is already
-filled in. It installs knex and better-sqlite3 if they are missing.
+filled in. The local database needs knex and better-sqlite3; setup installs
+them if they are missing. --remote needs neither.
 Do not add .dev.vars (Wrangler prefers that file over .env).
 
 The HTML wizard and an agent use the same steps. Ask with:
@@ -158,7 +169,14 @@ async function withFreshSchemaSql({ cwd, pluginId, name, account }, load) {
   const dir = mkdtempSync(path.join(tmpdir(), 'e9core-schema-'));
   try {
     const dbFile = path.join(dir, 'build.db');
-    await installLocalDatabase({ cwd, db: `sqlite://${dbFile}`, pluginId, name, account });
+    // Built the way the Worker builds it (D1 over SQLite), so it needs no
+    // knex or better-sqlite3 in the site.
+    const d1 = sqliteD1(dbFile);
+    try {
+      await installSchema({ cwd, d1, pluginId, name, account });
+    } finally {
+      d1.close();
+    }
     const sql = dumpSqliteFile(dbFile);
     const sqlPath = path.join(dir, 'schema.sql');
     writeFileSync(sqlPath, sql);
@@ -365,9 +383,16 @@ function execOk(result, what) {
 export async function setup(options = {}) {
   const cwd = options.cwd || process.cwd();
   const exec = options.exec || defaultExec;
-  const name = options.name || 'my-site';
-  const databaseName = options.d1 || 'engine9';
   const wranglerPath = path.join(cwd, 'wrangler.jsonc');
+  const existingCfg = options.node ? null : readJsonc(wranglerPath);
+  // The site's own wrangler.jsonc names the Worker and the database; the
+  // defaults are for a new project only.
+  const name = options.name || existingCfg?.name || 'my-site';
+  const envName = options.env ? String(options.env) : '';
+  const bindingName = (scope) => scope?.d1_databases?.find((db) => db.binding === 'DB')?.database_name || '';
+  const databaseName = options.d1 || bindingName(existingCfg) || 'engine9';
+  // The database a --env run loads and keys: that environment's own.
+  const targetDatabaseName = options.d1 || (envName ? bindingName(existingCfg?.env?.[envName]) : '') || databaseName;
   const account = projectAccount({ cwd, wranglerPath, node: Boolean(options.node), name });
   const { accountId } = account;
   // A project that already pins the deprecated E9_PLUGIN_ID keeps its
@@ -426,8 +451,7 @@ export async function setup(options = {}) {
     throw new Error('MySQL is the Node path: npx e9core setup --node --db mysql://user:pass@host/dbname');
   }
 
-  let cfg = readJsonc(wranglerPath) || {};
-  const envName = options.env ? String(options.env) : '';
+  let cfg = existingCfg || {};
   const envFlag = envName ? ['--env', envName] : [];
   if (envName && !options.remote) {
     throw new Error('--env names a deployed wrangler environment; use it together with --remote.');
@@ -474,10 +498,21 @@ export async function setup(options = {}) {
 
   const removed = removeLegacySchemaFile(cwd);
   if (removed) notes.push(removed);
-  const needLocal = !options.skipInstall && (options.refreshSchema || !state.schemaLocal);
-  const remoteKey = envName ? `schemaRemote:${envName}` : 'schemaRemote';
-  const needRemote = Boolean(options.remote) && !options.skipInstall
-    && (options.refreshSchema || !state[remoteKey]);
+  // --remote works on the deployed target only: no local database, no .env.
+  const needLocal = !options.remote && !options.skipInstall && (options.refreshSchema || !state.schemaLocal);
+  let needRemote = false;
+  if (options.remote && !options.skipInstall) {
+    if (options.refreshSchema) needRemote = true;
+    else {
+      const tables = remoteTableNames(exec, cwd, targetDatabaseName, envFlag);
+      needRemote = !tables.has('plugin');
+      if (!needRemote) {
+        notes.push(
+          `${envName || 'production'} D1 "${targetDatabaseName}" already has engine9 tables; loaded nothing. New tables come with: npx e9core upgrade --remote`
+        );
+      }
+    }
+  }
   if (needLocal) {
     // The local database e9core serve (and the wizard's try-signup) uses.
     const dbUrl = options.db || 'sqlite://./engine9.db';
@@ -494,7 +529,7 @@ export async function setup(options = {}) {
       }
       if (needRemote) {
         execOk(
-          exec(['wrangler', 'd1', 'execute', databaseName, '--remote', ...envFlag, '--file', sqlPath], cwd),
+          exec(['wrangler', 'd1', 'execute', targetDatabaseName, '--remote', ...envFlag, '--file', sqlPath], cwd),
           `load ${envName || 'production'} D1`
         );
       }
@@ -502,7 +537,6 @@ export async function setup(options = {}) {
     const where = [needLocal && 'local D1', needRemote && `${envName || 'production'} D1`].filter(Boolean).join(' and ');
     notes.push(`Loaded ${tables.length} tables into ${where}: ${tables.join(', ')}.`);
     if (needLocal) state.schemaLocal = true;
-    if (needRemote) state[remoteKey] = true;
   }
 
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
@@ -511,7 +545,7 @@ export async function setup(options = {}) {
     const keys = await setupKeys({
       cwd,
       accountId,
-      d1: databaseName,
+      d1: targetDatabaseName,
       remote: options.remote === true,
       env: envName || undefined,
       rotate: options.rotate === true
@@ -544,14 +578,46 @@ async function withDatabase(cwd, db, { accountId, accountHandle }, fn) {
   }
 }
 
-async function installLocalDatabase({ cwd, db, pluginId, name, account }) {
-  await withDatabase(cwd, db, account, async (worker) => {
-    await worker.installDefaultPlugins();
-    const { SqlApiKeyStore } = await import('../auth/index.js');
-    await new SqlApiKeyStore({ worker }).deploy();
-    await worker.query({
-      sql: 'INSERT OR IGNORE INTO plugin (id, path, name) VALUES (?, ?, ?)',
-      values: [pluginId, 'website', name]
-    });
+async function installDefaultSchema(worker, { pluginId, name }) {
+  await worker.installDefaultPlugins();
+  const { SqlApiKeyStore } = await import('../auth/index.js');
+  await new SqlApiKeyStore({ worker }).deploy();
+  await worker.query({
+    sql: 'INSERT OR IGNORE INTO plugin (id, path, name) VALUES (?, ?, ?)',
+    values: [pluginId, 'website', name]
   });
+}
+
+async function installLocalDatabase({ cwd, db, pluginId, name, account }) {
+  await withDatabase(cwd, db, account, (worker) => installDefaultSchema(worker, { pluginId, name }));
+}
+
+async function installSchema({ cwd, d1, pluginId, name, account }) {
+  const { default: PluginWorker } = await import('../lib/PluginWorker.js');
+  const { createNodePluginRegistry } = await import('./nodePluginRegistry.js');
+  const worker = new PluginWorker({
+    accountId: account.accountId,
+    accountHandle: account.accountHandle,
+    d1,
+    plugins: createNodePluginRegistry({ cwd })
+  });
+  try {
+    await installDefaultSchema(worker, { pluginId, name });
+  } finally {
+    await worker.destroy();
+  }
+}
+
+/*
+  The tables the target D1 database already has. Setup decides from this,
+  not from a file on this machine, whether to load the schema: a fresh CI
+  runner and a laptop make the same decision.
+*/
+export function remoteTableNames(exec, cwd, databaseName, envFlag = []) {
+  const ran = exec(
+    ['wrangler', 'd1', 'execute', databaseName, '--remote', ...envFlag, '--json', '--command', "SELECT name FROM sqlite_master WHERE type = 'table'"],
+    cwd
+  );
+  const text = execOk(ran, `read the tables of D1 database "${databaseName}"`);
+  return new Set(d1Rows(text).map((row) => row.name).filter(Boolean));
 }

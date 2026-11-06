@@ -7,6 +7,72 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.20.0: setup with no command line; the 1.19.0 deprecations are removed
+
+A site changes something only if it still uses one of the items 1.19.0
+deprecated ([Removed](#removed-in-1200)).
+
+This release came out of a site deployed only through GitHub Actions. Its
+owner works in the GitHub web pages and an agent wrote the code, so nobody
+could run a command. The site worked only because its workflow had a script
+that guarded `e9core setup` against a second run and made a signing secret
+itself when one was missing. The production admin key ended up stored
+nowhere a person could read it. Setup kept its state on the machine it ran
+on (`.env.production`, `.e9core/`). On a fresh CI runner that state is gone,
+so a second run would have made new signing secrets and signed everyone out.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | **`setup --remote` decides from the target.** It asks Cloudflare which secrets the Worker has (`wrangler secret list`) and which tables production D1 has. It sends only the secrets the Worker lacks. One the Worker has is kept, whether `.env.production` is missing or holds another value. A missing one is made. The tables load only when D1 has no `plugin` table. Before, it went by `.env.production` and `.e9core/setup.json`, and on a fresh machine it made new values and replaced the Worker's | Everyone who runs `setup --remote` or `setup-keys --remote` | No. A second run on any machine now changes nothing. `--rotate` still replaces everything |
+| 2 | `setup --remote` and `setup-keys --remote` work on production only: no local database, no local D1, no `.env`, and no knex or better-sqlite3 install. Production's schema is built over `node:sqlite` | A laptop that used `setup --remote` alone to make its local project | Run `npx e9core setup` for the local project |
+| 3 | A folder with no public key in `.env` takes it from `.env.production` or the committed `public/engine9-config.js` before making one, so a fresh clone or a CI run no longer makes a second public key | Fresh clones, CI | No |
+| 4 | Setup reads the Worker name and D1 database from the site's `wrangler.jsonc`. `--name` defaults to its `name`, `--d1` to its `DB` binding, and `--env` uses that environment's database. Before, a run without `--d1` used `engine9` and rewrote the binding's `database_name` to it | Sites whose database is not named `engine9` | No |
+| 5 | **New: `--remote` on `upgrade`, `status`, `segment`, and `installDefaultPlugins`.** It writes an admin key's hash to the site's D1 through wrangler with a 15-minute `expires_at`, runs the command, and deletes the row. `--url` defaults to the one custom-domain route in `wrangler.jsonc` | CI, agents, and any machine without the admin key | No |
+| 6 | **New: the status page.** `GET /api/admin/status` opened in a browser with no API key shows the status report as a page. Only a person signed in with the `admin` role at Level 3 or higher sees it: a member of the role's segment or a superadmin, checked with `requireRole`. It is read-only. The JSON answer and every other admin route still need the admin key ([PERMISSIONS.md](PERMISSIONS.md#how-a-request-is-decided)) | Sites with login on | No |
+| 7 | Status checks carry `fix_web` beside `fix` in the site's own report: the same fix for someone with no terminal (run the deploy workflow, with a command, options, or "rotate"). `secrets.<NAME>` names `setup --remote` for a missing secret and `setup-keys --remote --rotate` for a malformed one | Readers of `GET /admin/status` | No |
+| 8 | `/auth/*` without login answers 501 with `reason: 'login_off'`, `missing` or `invalid: 'SESSION_SECRET'`, `fix`, and `fix_web`. `error` still starts `login is not enabled:` | Code that reads the 501 | No |
+| 9 | New: [`cloudflare/github-deploy.yml.example`](cloudflare/github-deploy.yml.example), a GitHub Actions workflow (setup, deploy, upgrade on every push), and [docs/no-command-line.md](docs/no-command-line.md) | Sites deployed from GitHub | No |
+
+Upgrades still run only from `e9core upgrade`; a deploy never changes the
+database. The workflow runs `e9core upgrade --remote` after each deploy.
+
+The secrets rule now reads "never choose one yourself". A machine makes
+`SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET`: setup on Cloudflare,
+`openssl rand -hex 32` on your own servers.
+
+| What a site changes | |
+| --- | --- |
+| Every site | Nothing |
+| A Worker that binds `API_KEYS` (KV) | Run `npx e9core setup-keys --remote` on 1.19 first, so the keys are in the `api_key` table, then remove the binding and upgrade. On 1.20 the binding is ignored and keys are read from `api_key` only |
+| Code that imports `KVApiKeyStore` | `SqlApiKeyStore` |
+| Config that passes `roleSegments` to `createApi` or `createDelegateAuth` | `roles: { '<segment-uuid>': { name: '<role>' } }`, or `roles: 'standard'`. A `roleSegments` option is now ignored |
+| An import of `publicSettingDefinition` or `settingFormFromDefs` from `@engine9/core` | Import them from `@engine9/core/pluginSettings`, or read the form from `listAccountPluginSettings` |
+| A call to `bulkConvertPersonIdentifiers` or `PluginWorker.deployEmail` | The server's own copies |
+| An import of `@engine9/core/id/PersonIdentifierDO`, `/sql/sqliteDDL`, `/sql/standardizeSchema`, `/batchStallWatcher`, or `/sql/dialects/MySQLBinaryTypes` | `PersonIdentifierDO` from `@engine9/core/id`; the others from `@engine9/core` (root exports). `MySQLBinaryTypes` has no replacement |
+| Optional: a CI script that checks D1 before running `e9core setup`, runs setup in a scratch folder, or makes a signing secret when one is missing | Delete it. Run `npx e9core setup --remote --no-deploy` in the site's own folder, then `wrangler deploy`, then `npx e9core upgrade --remote` ([no-command-line.md](docs/no-command-line.md)) |
+| Optional: CI that keeps the admin key as a secret for `e9core upgrade --url` | Use `--remote` and delete that secret |
+| Optional: a site deployed from GitHub with no workflow yet | Copy `cloudflare/github-deploy.yml.example` to `.github/workflows/deploy.yml` and set the secrets it names |
+| A laptop that ran only `setup --remote` to get its local project | Run `npx e9core setup` |
+
+### Removed in 1.20.0
+
+1.19.0 deprecated these and named this release for their removal.
+
+- `KVApiKeyStore`, and the shipped Worker's `API_KEYS` KV binding. Keys are
+  in the `api_key` table (`SqlApiKeyStore`), which is what setup writes.
+- The `roleSegments` option of `createApi` and `createDelegateAuth`, and of
+  `normalizeRoleRegistry`.
+- `publicSettingDefinition` and `settingFormFromDefs` as root exports. They
+  stay in `@engine9/core/pluginSettings`.
+- `bulkConvertPersonIdentifiers` (root and `@engine9/core/id`) and
+  `PluginWorker.deployEmail`.
+- The package subpaths `@engine9/core/id/PersonIdentifierDO`,
+  `@engine9/core/sql/sqliteDDL`, `@engine9/core/sql/standardizeSchema`,
+  `@engine9/core/batchStallWatcher`, and
+  `@engine9/core/sql/dialects/MySQLBinaryTypes`.
+
+`E9_PLUGIN_ID` is still deprecated and still honored.
+
 ## 1.19.0: accountHandle; setup keeps the account id; E9_PLUGIN_ID deprecated
 
 No site needs to change anything for this release.

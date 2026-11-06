@@ -291,13 +291,8 @@ export function delegateIdentityUrl({
  *
  * Standard names (auth/roleNames.js), ids derived from the account id:
  *   roles: 'standard'            (requires accountId)
- *
- * Deprecated, removed in 1.20 (logs a warning once):
- *   roleSegments: { admin: '<segment-uuid>', vip: '<segment-uuid>' }
- *   Use roles: { '<segment-uuid>': { name: 'admin' } } instead.
  */
-let warnedRoleSegments = false;
-export function normalizeRoleRegistry({ roles, roleSegments, accountId } = {}) {
+export function normalizeRoleRegistry({ roles, accountId } = {}) {
   const out = {};
   if (roles === 'standard') {
     if (!accountId) throw new Error("roles: 'standard' requires accountId");
@@ -315,22 +310,6 @@ export function normalizeRoleRegistry({ roles, roleSegments, accountId } = {}) {
         scopes: Array.isArray(entry.scopes) ? entry.scopes : [],
         requiredAuth: entry.requiredAuth && typeof entry.requiredAuth === 'object' ? entry.requiredAuth : {}
       };
-    }
-  }
-  if (roleSegments && typeof roleSegments === 'object') {
-    if (!warnedRoleSegments && Object.values(roleSegments).some(Boolean)) {
-      warnedRoleSegments = true;
-      console.warn(
-        "engine9: the roleSegments option is deprecated and is removed in @engine9/core 1.20. Use roles: { '<segment-uuid>': { name: '<role>' } } (or roles: 'standard')."
-      );
-    }
-    for (const [name, segmentId] of Object.entries(roleSegments)) {
-      if (!segmentId) continue;
-      if (!out[segmentId]) {
-        out[segmentId] = { name, scopes: [], requiredAuth: {} };
-      } else if (!out[segmentId].name || out[segmentId].name === segmentId) {
-        out[segmentId] = { ...out[segmentId], name };
-      }
     }
   }
   return out;
@@ -787,7 +766,6 @@ export function createDelegateAuth({
   remoteInputId = 'delegate',
   inputType = 'api',
   roles,
-  roleSegments = {},
   superadmins = null,
   loadRolesOnLogin = true,
   sessionRevocations = null,
@@ -803,7 +781,7 @@ export function createDelegateAuth({
   // Role and admin-segment ids are namespaced under the account's permanent
   // handle, never the mutable account id (see auth/roles.js).
   const accountId = worker.accountHandle;
-  const roleRegistry = normalizeRoleRegistry({ roles, roleSegments, accountId });
+  const roleRegistry = normalizeRoleRegistry({ roles, accountId });
   /* Superadmins act as this account's `admin` role. Make sure the registry
      knows that role even when the site listed its own roles. */
   const superadminRoleId = superadmins && accountId ? roleSegmentId(accountId, ROLE_NAMES.ADMIN) : null;

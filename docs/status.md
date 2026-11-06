@@ -10,6 +10,7 @@ appear).
 
 ```bash
 npx e9core status --url https://www.example.com     # a deployed site
+npx e9core status --remote                          # the same, with a temporary admin key (CI)
 npx e9core status                                   # in a Cloudflare project folder, when the site cannot answer
 npx e9core status --db sqlite://./engine9.db         # a Node site or a local database
 ```
@@ -17,6 +18,7 @@ npx e9core status --db sqlite://./engine9.db         # a Node site or a local da
 | Flag | Meaning |
 | --- | --- |
 | `--url <site>` | Ask the deployed site (`GET /api/admin/status`, admin key found like `upgrade --url`) |
+| `--remote` | Ask the deployed site with a temporary admin key written through wrangler ([upgrading.md](upgrading.md#where-to-run-it)). `--url` defaults to the one custom-domain route in `wrangler.jsonc` |
 | `--db <connection>` | Read a database directly |
 | `--account <id>`, `--handle <handle>` | With `--db`: the account id and handle the database was built under. Default `E9_ACCOUNT_ID` and `E9_ACCOUNT_HANDLE` from `.env` or the environment. Without either, the `handle.*` checks are skipped |
 | `--env staging` | A wrangler environment: its D1 binding, its secrets, `.env.staging` |
@@ -24,6 +26,16 @@ npx e9core status --db sqlite://./engine9.db         # a Node site or a local da
 | `--json` | The report as JSON |
 | `--strict` | Exit 1 on a warning too (a failure always exits 1) |
 | `--no-wrangler` | Skip the Cloudflare checks |
+
+## In a browser
+
+An admin opens `https://www.example.com/api/admin/status` in a browser. A
+page load sends no API key. The site shows the same report as a page to a
+person signed in with the `admin` role at the role's Identity Level (Level 3
+or higher). That means a member of the role's segment or a superadmin, read
+fresh on each request (`requireRole`). A signed-out visit goes to sign-in and
+comes back. Anyone else gets a 403. The page is read-only and runs no script.
+The JSON answer and every other admin route still need the admin key.
 
 ## Where it looks
 
@@ -53,7 +65,12 @@ query budget.
 ## Checks
 
 Every check has a stable id, a status (`pass`, `warn`, `fail`, `skip`), and,
-when it is not a pass, a `fix`.
+when it is not a pass, a `fix`. The site's own report (`GET
+/api/admin/status` and the page) also gives `fix_web`, the same fix for
+someone with no terminal, where one exists: run the deploy workflow again, or
+run it by hand with a command, options, or "rotate"
+([no-command-line.md](no-command-line.md)), or a line to add to
+`wrangler.jsonc`.
 
 | Id | Fails or warns when | Fix it reports |
 | --- | --- | --- |
@@ -61,7 +78,7 @@ when it is not a pass, a `fix`.
 | `account.owns_database` | The logged-in account cannot see the `database_id` in `wrangler.jsonc` | Log in to the account that owns it; pin `account_id` |
 | `account.pinned` | More than one account is reachable and `wrangler.jsonc` has no `account_id`, or `account_id` is not one of them | Add `"account_id"` |
 | `schema_file.legacy` | `migrations/0001_engine9.sql` is in wrangler's migrations folder | Delete it, or run `npx e9core setup` |
-| `secrets.<NAME>` | `E9_ADMIN_API_KEY`, `E9_PUBLIC_API_KEY`, or `SESSION_SECRET` is not set (warn); `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` is set but is not 64 random hex characters (fail); `E9_SETUP_TOKEN` is set in production | `npx e9core setup-keys --remote` |
+| `secrets.<NAME>` | `E9_ADMIN_API_KEY`, `E9_PUBLIC_API_KEY`, or `SESSION_SECRET` is not set (warn); `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` is set but is not 64 random hex characters (fail); `E9_SETUP_TOKEN` is set in production | Not set: `npx e9core setup --remote` (the site's report; wrangler's says `setup-keys --remote`). Malformed: `npx e9core setup-keys --remote --rotate`, since a value only the Worker holds is kept by a plain run |
 | `secrets.<target>.<NAME>` | `SESSION_SECRET` or `AGENT_CREDENTIALS_SECRET` in `.env` (`local`) or `.env.<target>` is not 64 random hex characters | `npx e9core setup-keys`, or `setup-keys --remote` for a deployed environment. Either replaces the value |
 | `audit.configured` | No audit log sink: changes go only to the Worker log | Bind `AUDIT_BUCKET` |
 | `database.copy` | Wrangler could not export the schema or read the rows | Read the detail |

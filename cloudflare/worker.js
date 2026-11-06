@@ -3,8 +3,6 @@
 
   Bindings expected (see wrangler.jsonc.example):
     DB          -- D1 database (the engine9 database)
-    API_KEYS    -- deprecated, removed in 1.20: keys in KV (KVApiKeyStore).
-                   Without it, keys are in the api_key D1 table.
     LOG_BUCKET  -- R2 bucket for batch modification logs (optional)
     SESSION_REVOCATIONS -- KV namespace (optional); logout revokes the Core
                            Session instead of only clearing the cookie
@@ -24,7 +22,9 @@
                           people writes use instead of the derived one.
     E9_ALLOWED_ORIGINS -- optional comma-separated browser origins (independent hosts)
     E9_SUPERADMINS     -- optional comma-separated verified emails that act as this
-                          site's admin role (Identity Level 3 or higher)
+                          site's admin role (Identity Level 3 or higher). They,
+                          and the role's members, can open /api/admin/status
+                          in a browser
     SESSION_SECRET     -- secret; turns on login (/auth/*). `e9core setup --remote`
                           stores production's own (.env.production). Without it
                           /auth/* answers 501.
@@ -49,7 +49,7 @@
 import PersonWorker from '@engine9/core/PersonWorker';
 import pluginEntries, { packageVersions } from '@engine9/core/plugins/site';
 import { createPluginRegistry } from '@engine9/core/pluginRegistry';
-import { KVApiKeyStore, SqlApiKeyStore } from '@engine9/core/auth';
+import { SqlApiKeyStore } from '@engine9/core/auth';
 import { BatchLogger, NullLogger, r2Sink } from '@engine9/core/logging';
 import { createApi } from '@engine9/core/api';
 import { superadminsFromText } from '@engine9/core/auth/superadmins';
@@ -80,8 +80,8 @@ export default {
       personIds: env.PERSON_IDS,
       plugins
     });
-    // Keys are in the api_key table. API_KEYS (KV) is deprecated, removed in 1.20.
-    const keyStore = env.API_KEYS ? new KVApiKeyStore({ kv: env.API_KEYS }) : new SqlApiKeyStore({ worker });
+    // Keys are in the api_key table.
+    const keyStore = new SqlApiKeyStore({ worker });
     // Two logs, never mixed: people data (LOG_BUCKET) and schema, plugin, and
     // role changes (AUDIT_BUCKET). Without AUDIT_BUCKET, audit records go to the Worker log.
     const logger = env.LOG_BUCKET ? new BatchLogger({ sink: r2Sink(env.LOG_BUCKET) }) : new NullLogger();

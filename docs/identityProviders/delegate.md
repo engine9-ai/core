@@ -79,23 +79,39 @@ const api = createApi({
    build the provider yourself with `createDelegateAuth` from
    `@engine9/core/auth/delegate` and pass it as `delegateAuth`.
 
-4. In the browser, `@engine9/id` talks to delegate and then calls
-   `id.core.login()` with the public API key. `session: 'cookie'` is the
-   recommended setting (core sets its `e9_session` cookie, which your
-   server gate reads); see [Sign-in on a site](../sign-in.md):
+4. In the browser, add the `@engine9/id` **Login button** (the login
+   widget) to the header of every page. It is the default way to use
+   Delegate and the same button `demo-festival` has: one button, and one
+   dialog that logs in, switches email, changes role, and logs out. Its
+   `onLogin` calls `id.core.login()` with the public API key, and
+   `session: 'cookie'` makes core set its `e9_session` cookie, which your
+   server gate reads; see [Sign-in on a site](../sign-in.md):
 
 ```html
+<span data-e9-login-widget></span>
+
 <script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
 <script>
-  const id = engine9Id.mount({
+  const id = engine9Id.createEngine9Id({
     core: { apiUrl: '/api', publicApiKey: 'e9publickey_…', session: 'cookie' },
   });
-  id.onChange(async (identity) => {
-    if (identity && identity.level >= 1) await id.core.login();
+  engine9Id.loginWidget({
+    id,
+    siteName: 'My Site',
+    async onLogin() {
+      const { session } = await id.core.login(); // core sets e9_session
+      return { email: session.email, level: session.level };
+    },
+    onLoggedOut() {
+      location.reload();
+    },
   });
 </script>
-<button data-e9-login>Log in</button>
 ```
+
+   Do not use a plain link to `/api/auth/start` or a bare
+   `<button data-e9-login>` as the site's Login button. They sign in, but
+   leave no way to see the address in use, switch it, or log out.
 
    With `session: 'cookie'`, each sign-in starts with `POST /api/auth/begin`
    (a nonce core issued to this browser), and `id.core.login()` posts
@@ -107,21 +123,17 @@ const api = createApi({
    (`data-e9-min-level`, `id.gate()`) are soft; core's roles are the hard
    gate. See [id with core](https://github.com/engine9-ai/id/blob/main/docs/with-core.md).
 
-5. Add a **Change your Delegate information** button for signed-in people.
-   Include it unless the site asks for no fields.
+5. Let signed-in people **change their Delegate information**. The Login
+   button's dialog already does: its **Switch email** is this step.
 
    Delegate remembers which email address each person shares with your
    Domain, so logging in again returns the same address. When someone shared
    the wrong one (a personal Gmail instead of the address your roles
-   expect), this button reopens delegate's share page. There they can pick
+   expect), Switch email reopens delegate's share page. There they can pick
    another address, add one, or use a different Google account.
 
-```html
-<button data-e9-change-delegate hidden>Change your Delegate information</button>
-```
-
-   The existing `id.onChange` handler calls `id.core.login()` again with the
-   new token, so roles are re-read. Picking another address signs in as the
+   The new token goes through the widget's `onLogin`, which calls
+   `id.core.login()` again, so roles are re-read. Picking another address signs in as the
    person core knows by that address: a different person, unless core
    already joined the two addresses. Say so next to the link. Use cases:
    [Who is signing in](../../auth/README.md#who-is-signing-in-credential-identity-deduplication).

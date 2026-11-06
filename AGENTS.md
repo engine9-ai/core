@@ -12,6 +12,8 @@ Do not copy code from those repositories under this license.
 ## Deploy docs
 
 First-time deployment setup (id vs core, Cloudflare + D1): [docs/deploy.md](docs/deploy.md).
+No terminal (an owner in the GitHub and Cloudflare web pages, or an agent
+with no Cloudflare login): [docs/no-command-line.md](docs/no-command-line.md).
 Browser-only identity: [`id/docs/deploy.md`](../id/docs/deploy.md).
 
 ## Scripting language
@@ -63,6 +65,14 @@ Worker. Finish removes `E9_SETUP_TOKEN`. Reopen only with
 
 Do not start HTTP servers unless the person asked to open the wizard or try
 the site.
+
+`npx e9core setup --remote` is the one production setup path, on a laptop,
+in CI, and in an agent session. It decides from the target (the D1 tables,
+`wrangler secret list`), creates only what is missing, never replaces an
+existing key or secret without `--rotate`, and touches no local database or
+`.env`. Do not write a guard script around it, run it in a scratch folder,
+or add a fallback that makes a secret. When a site has no terminal, use the
+workflow in [docs/no-command-line.md](docs/no-command-line.md).
 
 ## Project
 
@@ -175,7 +185,8 @@ asks every upgrade again. Each install records itself in the
 `last_install*` columns of its `plugin` row. Do not keep upgrade or install
 records in `setting`: settings are what people set. `--url` posts to the site's
 `POST /api/admin/upgrade` (admin key), so a Cloudflare site upgrades its own
-D1 inside the Worker. `--db` runs locally. The server uses
+D1 inside the Worker. `--remote` does the same with an admin key that exists
+for that one command (bin/temporaryKey.js); CI uses it. `--db` runs locally. The server uses
 `e9 pluginworker upgrade -a <account_id>` or MCP `plugin` `upgrade`.
 
 Core holds the upgrade machinery only, never an upgrade. `lib/upgrades` is
@@ -253,6 +264,29 @@ An identity provider is optional. Production defaults to delegate
 ([docs/identityProviders/delegate.md](docs/identityProviders/delegate.md)).
 Local development does not require one.
 
+## Sign-in on a site built with core
+
+When a site adds login, the first thing to build is the **Login button**:
+the `@engine9/id` login widget (`loginWidget`) in the header of every page,
+on a client made with `core: { apiUrl: '/api', publicApiKey, session: 'cookie' }`,
+with `onLogin` calling `id.core.login()`. It is the button in
+`demo-festival`'s header. Copy the snippet in
+[README.md](README.md#add-login) or [docs/sign-in.md](docs/sign-in.md).
+
+- Do not make a plain link to `/api/auth/start`, or a bare
+  `<button data-e9-login>`, the site's Login control. Both sign in, but the
+  person cannot see who they are signed in as, switch email, or log out.
+  The link is the no-JavaScript fallback and where `requireRole` sends
+  signed-out visitors.
+- Do not build a header of text links (the email, "Use a different email",
+  "Log out"). The Login button shows the email, and its dialog has Switch
+  email, Role, and Log out.
+- Do not write a sign-in route, a callback, or a session of the site's own.
+  Gate private pages with `requireRole`.
+- Any doc in this repository that shows how to sign in leads with this
+  button. Keep the README, `docs/sign-in.md`, `docs/deploy.md`, and
+  `docs/identityProviders/delegate.md` showing the same snippet.
+
 ## Tests
 
 ```
@@ -309,11 +343,12 @@ not in setup docs.
   `X-Engine9-Session`). Never required for authentication. The env name is
   `SESSION_SECRET`. It is the local authenticator so later requests skip the
   identity provider. Documented in [auth/README.md](auth/README.md).
-- `SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET` are made by
-  `npx e9core setup-keys` (and `--remote`), never by a person or by you. Do
-  not ask someone for a value, invent one, or set one with
-  `wrangler secret put`. Missing or refused: run `setup-keys --remote`.
-  Own servers: `openssl rand -hex 32`. Core accepts only 64 hex characters
+- `SESSION_SECRET` and `AGENT_CREDENTIALS_SECRET` are made by a machine,
+  never chosen by a person or by you: `npx e9core setup` / `setup-keys`
+  (and `--remote`) on Cloudflare, `openssl rand -hex 32` on own servers. Do
+  not ask someone for a value, invent one, or have someone paste one into a
+  CI secret. Missing: `npx e9core setup --remote` (the deploy workflow runs
+  it). Set but malformed, or leaked: `setup --remote --rotate`. Core accepts only 64 hex characters
   (`signingSecretProblem` in [auth/hmac.js](auth/hmac.js)); do not loosen it.
 - Roles may set `requiredAuth.minLevel`; that is authorization policy, not
   an identity level itself.

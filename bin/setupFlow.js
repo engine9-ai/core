@@ -13,6 +13,7 @@ import {
   ENV_SETUP_TOKEN,
   readEnvValue,
   removeEnvKeys,
+  sharedPublicKey,
   upsertEnv
 } from './setupKeys.js';
 import { accountFromWhoami, setup } from './setup.js';
@@ -195,7 +196,8 @@ export async function runSetupStep(answers = {}, ctx = {}) {
   }
 
   if (action === 'write-config') {
-    const publicKey = readEnvValue(readEnvFile(cwd), ENV_PUBLIC_KEY);
+    // .env, else the deployed environment's file: the public key is one key everywhere.
+    const publicKey = readEnvValue(readEnvFile(cwd), ENV_PUBLIC_KEY) || sharedPublicKey(cwd);
     if (!publicKey) throw new Error('Create the local development database first so a public key exists.');
     const dir = path.join(cwd, 'public');
     mkdirSync(dir, { recursive: true });

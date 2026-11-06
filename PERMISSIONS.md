@@ -91,6 +91,8 @@ The `operator` role from earlier releases no longer exists. See
   this one account (data, tasks, plugins, API keys) and may add or remove
   other admins of it.
 - Is **not** a superadmin and cannot become one by any action in a database.
+- May open the site's status page (`GET /api/admin/status` in a browser),
+  which is read-only. Every admin action still needs the admin key.
 
 ### Superadmin
 
@@ -109,11 +111,19 @@ The `operator` role from earlier releases no longer exists. See
 
 ```
 Request
-  → 1. API key        required on every route except GET /ok
+  → 1. API key        required on every route except GET /ok, the two
+                      sign-in navigations, and the status page
   → 2. Role           effective scopes = key scopes ∩ role scopes
   → 3. Identity Level role's requiredAuth checked against the session
   → handler
 ```
+
+- **The status page is the one admin route with no key.** A browser opening
+  `GET /api/admin/status` cannot send one. The site checks the session
+  cookie instead: the `admin` role read now from `person_segment` plus
+  superadmins (`auth.rolesForSession`) and its `requiredAuth` (PL-2, PL-8),
+  through core's `requireRole`. It only reads. The JSON answer, upgrades,
+  segment changes, and every other admin route still need an `admin` key.
 
 - **The key is the ceiling.** A role only narrows it. A session with a key
   that lacks `admin` gets that key's scopes, even for an admin or a
@@ -180,7 +190,10 @@ recorded reason.
 - **PL-7 (MUST)** `SESSION_SECRET` is 32 random bytes, different for every
   host and every environment, kept out of git, and set in production. Core
   has no built-in default and will not create login without it. A machine
-  makes the value (`e9core setup-keys`), never a person. Core refuses login
+  makes the value, never a person: `e9core setup` and `setup-keys` (and
+  `setup --remote`, wherever it runs) on Cloudflare, `openssl rand -hex 32`
+  on your own servers. Nobody chooses one, types one, or pastes one into a CI
+  secret. Core refuses login
   with any value that is not 64 hex characters, and `e9core status` reports
   it as a failure. `AGENT_CREDENTIALS_SECRET` follows the same rules and
   differs from `SESSION_SECRET`. Production also
@@ -203,7 +216,9 @@ recorded reason.
   `SESSION_SECRET` to end every session.
 - **PL-11 (MUST)** Upgrades follow install, deploy, then `e9core upgrade`
   for every release and every database ([docs/upgrading.md](docs/upgrading.md)).
-  A deploy alone never changes the database.
+  A deploy alone never changes the database. In CI, `e9core upgrade --remote`
+  runs the upgrade with an admin key that expires in 15 minutes and is
+  deleted when the command ends, so no long-lived admin key is kept for it.
 - **PL-12 (SHOULD)** Review the admin list, the superadmins list, and the
   active API keys at least quarterly and after any staff change, and keep the
   result. [Verifying a site](#verifying-a-site) gives the commands.
@@ -355,7 +370,7 @@ only way to read the production D1 database, so use it there.
 | Requirement | How to check |
 | --- | --- |
 | PL-1 | `npx e9core segment list` shows only the roles you meant. No `operator`. `config.roles` in the host code lists only intended roles with non-empty `scopes`. |
-| PL-2 | Read the role registry (`config.roles` or `roles: 'standard'`): the `admin` entry has `requiredAuth.minLevel` of 3 or more. A sign-in at Level 2 must not reach an admin route. |
+| PL-2 | Read the role registry (`config.roles` or `roles: 'standard'`): the `admin` entry has `requiredAuth.minLevel` of 3 or more. A sign-in at Level 2 must not reach an admin route, and `/api/admin/status` in a browser must answer 403 to it. |
 | PL-3 | `npx e9core segment members --segment admin` is the full list of admins. Search the code and environment for any other list of admin emails or ids; there should be none. |
 | PL-4 | `npx e9core superadmin list` (or the `E9_SUPERADMINS` value) is the full list. Each entry is a named person's verified address. |
 | PL-5 | Query the key table and review it: `select id, name, scopes, default_role_id, active, expires_at from api_key;`. Expect few `admin` keys, none unexpected, expiry set where appropriate, nothing with `*` or empty scopes. Search built assets and the repository for `e9key_`; there should be no match (only `e9publickey_` may appear in a browser bundle). |
@@ -364,7 +379,7 @@ only way to read the production D1 database, so use it there.
 | PL-8 | Code review: privileged paths call `auth.rolesForSession` and `meetsRequiredAuth`, not the `roles` array from a token. |
 | PL-9 | Remove a test admin, then call a privileged route with a fresh token: it must be refused. |
 | PL-10 | `curl -I https://<site>/engine9.superadmins.json` returns 404, and the file is not in a public repository. |
-| PL-11 | `npx e9core status --url <site>` reports no failure, and every `upgrade.<id>` check passes (or is a skipped opt-in). |
+| PL-11 | `npx e9core status --url <site>` (or the status page, `/api/admin/status` in a browser as an admin) reports no failure, and every `upgrade.<id>` check passes (or is a skipped opt-in). |
 | PL-12 | The review output from the rows above, dated, kept with change records. The audit log's `role.grant` and `role.revoke` records show every change to a role between reviews. |
 
 A superadmin check: sign in as a listed address at Level 3 and request

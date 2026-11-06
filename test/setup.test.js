@@ -149,9 +149,92 @@ describe('setup', () => {
       assert.ok(!existsSync(path.join(cwd, 'engine9.db')), 'a remote-only run does not touch the local database');
       assert.match(result.notes.join('\n'), /Loaded \d+ tables into production D1: .*\bapi_key\b.*\bplugin\b/);
       assert.ok(!calls.some((line) => line.includes('d1 create')));
+      assert.ok(calls.some((line) => line.includes("--json --command SELECT name FROM sqlite_master")), 'it asks the target which tables exist');
       const state = JSON.parse(readFileSync(path.join(cwd, '.e9core', 'setup.json'), 'utf8'));
-      assert.equal(state.schemaRemote, true);
+      assert.equal(state.schemaRemote, undefined, 'nothing about the target is kept on this machine');
       assert.equal(state.schemaLocal, true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('--remote on a fresh runner loads nothing into a D1 database that already has the tables', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-rerun-'));
+    try {
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({
+        name: 'folio',
+        vars: { E9_ACCOUNT_ID: 'folio' },
+        d1_databases: [{ binding: 'DB', database_name: 'folio-control', database_id: DB_ID }]
+      })}\n`);
+      const calls = [];
+      const result = await setup({
+        cwd,
+        remote: true,
+        deploy: false,
+        skipKeys: true,
+        exec(args) {
+          calls.push(args.join(' '));
+          if (args.join(' ').includes('sqlite_master')) return { status: 0, stdout: JSON.stringify([{ results: [{ name: 'plugin' }, { name: 'api_key' }], success: true }]) };
+          return { status: 0, stdout: '' };
+        }
+      });
+      assert.ok(!calls.some((line) => line.includes('--file')), 'no schema load');
+      assert.ok(!calls.some((line) => line.includes('--local')), 'no local D1');
+      assert.ok(calls.every((line) => !line.includes(' engine9 ')), 'the database name comes from wrangler.jsonc');
+      assert.ok(calls.some((line) => line.includes('d1 execute folio-control --remote')));
+      assert.ok(!existsSync(path.join(cwd, 'engine9.db')));
+      assert.ok(!existsSync(path.join(cwd, '.env')));
+      assert.match(result.notes.join('\n'), /already has engine9 tables; loaded nothing/);
+      const cfg = JSON.parse(readFileSync(path.join(cwd, 'wrangler.jsonc'), 'utf8'));
+      assert.equal(cfg.d1_databases[0].database_name, 'folio-control', 'the binding keeps its database');
+      assert.equal(cfg.vars.E9_ACCOUNT_ID, 'folio');
+      assert.equal(result.pluginId, getPluginUUID('folio', 'website'));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('a new project without --name takes its account from the Worker name in wrangler.jsonc', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-name-'));
+    try {
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({ name: 'folio' })}\n`);
+      const result = await setup({
+        cwd,
+        skipInstall: true,
+        skipKeys: true,
+        exec(args) {
+          if (args.includes('create')) return { status: 0, stdout: `database_id = "${DB_ID}"\n` };
+          return { status: 0, stdout: '' };
+        }
+      });
+      const cfg = JSON.parse(readFileSync(path.join(cwd, 'wrangler.jsonc'), 'utf8'));
+      assert.equal(cfg.vars.E9_ACCOUNT_ID, 'folio');
+      assert.equal(result.pluginId, getPluginUUID('folio', 'website'));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('stops when it cannot read the target tables, rather than loading over them', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-unreadable-'));
+    try {
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({ d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: DB_ID }] })}\n`);
+      const calls = [];
+      await assert.rejects(
+        setup({
+          cwd,
+          remote: true,
+          deploy: false,
+          skipKeys: true,
+          exec(args) {
+            calls.push(args.join(' '));
+            if (args.join(' ').includes('sqlite_master')) return { status: 1, stderr: 'Authentication error [code: 10000]' };
+            return { status: 0, stdout: '' };
+          }
+        }),
+        /Authentication error/
+      );
+      assert.ok(!calls.some((line) => line.includes('--file')));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

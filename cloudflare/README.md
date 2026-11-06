@@ -133,6 +133,12 @@ one piece at a time.
    | `E9_DOMAIN` | var, optional | JWT `aud` when pages and `/api` are on different hosts |
    | `E9_ALLOWED_ORIGINS` | var, optional | Browser origins allowed to call the API (CORS) |
 
+   Deploying from GitHub Actions, with no terminal: copy
+   [`github-deploy.yml.example`](github-deploy.yml.example) to
+   `.github/workflows/deploy.yml` ([docs/no-command-line.md](../docs/no-command-line.md)).
+   It runs `e9core setup --remote`, `wrangler deploy`, and
+   `e9core upgrade --remote` on every push.
+
 ### Bundler aliases
 
 | Specifier | Target | Why |

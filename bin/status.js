@@ -10,6 +10,10 @@
                         compares the database with the deployed bundle; plus
                         a request with the public key, and the key the live
                         page sends
+    --remote            the same, with a temporary admin key written through
+                        wrangler (bin/temporaryKey.js), for a machine that
+                        holds no admin key. --url defaults to the one
+                        custom-domain route in wrangler.jsonc
     wrangler            in a Cloudflare project (wrangler.jsonc): the
                         Cloudflare account, the Worker's secrets, and the
                         keys in .env files. When --url is not given or the
@@ -24,7 +28,6 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import JSON5 from 'json5';
 import PluginWorker from '../lib/PluginWorker.js';
 import { summarize } from '../lib/status/index.js';
 import { ensureNodePluginRegistry } from './nodePluginRegistry.js';
@@ -33,6 +36,10 @@ import { readEnvValue, remoteEnvPath, ENV_SESSION_SECRET, ENV_AGENT_CREDENTIALS_
 import { signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { LEGACY_SCHEMA_FILE } from './setup.js';
 import { cliAccount } from './cliAccount.js';
+import { parseWranglerJson, wranglerProject } from './wranglerProject.js';
+import { remoteSiteUrl, withTemporaryAdminKey } from './temporaryKey.js';
+
+export { parseWranglerJson };
 
 const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
 const ENV_ADMIN_KEY = 'E9_ADMIN_API_KEY';
@@ -54,33 +61,14 @@ function readText(file) {
   return existsSync(file) ? readFileSync(file, 'utf8') : '';
 }
 
-/** JSON wrangler printed, after any banner lines. */
-export function parseWranglerJson(text) {
-  const s = String(text || '');
-  const start = s.search(/[[{]/);
-  if (start < 0) return null;
-  try {
-    return JSON.parse(s.slice(start));
-  } catch {
-    return null;
-  }
-}
-
 /** Cloudflare account ids (32 hex) in `wrangler whoami` output. */
 export function accountIdsFromWhoami(text) {
   return [...new Set(String(text || '').match(/\b[0-9a-f]{32}\b/g) || [])];
 }
 
-function wranglerProject(cwd, env) {
-  for (const name of ['wrangler.jsonc', 'wrangler.json']) {
-    const file = path.join(cwd, name);
-    if (!existsSync(file)) continue;
-    const cfg = JSON5.parse(readFileSync(file, 'utf8'));
-    const scope = env ? cfg.env?.[env] : cfg;
-    const db = scope?.d1_databases?.find((d) => d.binding === 'DB');
-    return { cfg, file: name, vars: scope?.vars || {}, databaseName: db?.database_name || 'engine9', databaseId: db?.database_id || null };
-  }
-  return null;
+function statusProject(cwd, env) {
+  const project = wranglerProject(cwd, env);
+  return project ? { ...project, databaseName: project.databaseName || 'engine9' } : null;
 }
 
 /* ---------------------------------------------------------- wrangler */
@@ -347,7 +335,10 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
   const env = args.env && args.env !== true ? String(args.env) : undefined;
   const envFlag = env ? ['--env', env] : [];
   const plugins = args.plugin && args.plugin !== true ? String(args.plugin).split(',').map((p) => p.trim()).filter(Boolean) : undefined;
-  const url = args.url && args.url !== true ? String(args.url) : undefined;
+  const remote = args.remote === true;
+  const url = remote
+    ? remoteSiteUrl({ url: args.url && args.url !== true ? String(args.url) : undefined, cwd, env })
+    : args.url && args.url !== true ? String(args.url) : undefined;
   const db = args.db && args.db !== true ? String(args.db) : process.env.ENGINE9_DATABASE_CONNECTION;
   const localEnv = readText(path.join(cwd, '.env'));
   const publicKey = readEnvValue(localEnv, ENV_PUBLIC_KEY) || '';
@@ -389,9 +380,18 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
   let siteAnswered = false;
   if (url) {
     sources.push(`site ${url}`);
-    const key = adminKey({ key: args.key && args.key !== true ? String(args.key) : undefined, target: env, url, cwd });
+    const explicit = args.key && args.key !== true ? String(args.key) : undefined;
+    const ask = (key) => callSite({ url, key, method: 'GET', route: '/admin/status', query: { plugin: plugins?.join(',') }, fetchImpl });
+    // --remote: a temporary admin key written through wrangler (bin/temporaryKey.js).
+    const run = (wranglerArgs) => {
+      const ran = exec(['wrangler', ...wranglerArgs], cwd);
+      if (!ran || ran.status !== 0) throw new Error(output(ran) || `wrangler ${wranglerArgs.join(' ')} failed`);
+      return ran.stdout || '';
+    };
     try {
-      report = await callSite({ url, key, method: 'GET', route: '/admin/status', query: { plugin: plugins?.join(',') }, fetchImpl });
+      report = remote && !explicit
+        ? await withTemporaryAdminKey({ cwd, env, run }, ask)
+        : await ask(adminKey({ key: explicit, target: env, url, cwd }));
       siteAnswered = true;
       checks.push(...report.checks);
     } catch (e) {
@@ -406,7 +406,7 @@ export async function runStatusCommand(args, { cwd = process.cwd(), exec = defau
     checks.push(...(await liveKeyChecks({ url, publicKey, fetchImpl })));
   }
 
-  const project = args.wrangler === false || args['no-wrangler'] === true ? null : wranglerProject(cwd, env);
+  const project = args.wrangler === false || args['no-wrangler'] === true ? null : statusProject(cwd, env);
   if (project) {
     sources.push(`wrangler (D1 "${project.databaseName}"${env ? `, --env ${env}` : ''})`);
     checks.push(legacyFileCheck(cwd));

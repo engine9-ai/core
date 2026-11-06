@@ -284,8 +284,6 @@ export function sessionNeedsRole(
 export function normalizeRoleRegistry(options?: {
   /** UUID-keyed map, or `'standard'` (requires accountId; see auth/roles). */
   roles?: Record<string, RoleDefinition | string> | "standard";
-  /** @deprecated Removed in 1.20. Use `roles` keyed by segment UUID. */
-  roleSegments?: Record<string, string>;
   accountId?: string;
 }): Record<string, RoleDefinition>;
 
@@ -518,11 +516,6 @@ export function createDelegateAuth(config: {
    * `@engine9/core/superadmins/node`).
    */
   superadmins?: string[] | (() => string[]);
-  /**
-   * @deprecated Removed in 1.20. Use `roles` keyed by segment UUID.
-   * Legacy map of display name -> segment id; normalized into `roleRegistry`.
-   */
-  roleSegments?: Record<string, string>;
   /**
    * When false, login() always returns session.roles = [] so the site can
    * re-prompt role selection every login. Default true.

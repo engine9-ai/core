@@ -77,11 +77,20 @@ npx e9core setup --remote                          # production D1 + secrets + d
 npx e9core setup --remote --domain www.example.com # also attach a hostname
 ```
 
-`--remote` creates the production D1 database, copies `.env` values to
-Cloudflare secrets (including `SESSION_SECRET`, which turns on login), and
-runs `wrangler deploy`. The Worker it deploys is
-[`cloudflare/worker.js`](cloudflare/worker.js): pages and `/api` on one
-hostname, wizard not included.
+`--remote` creates the production D1 database and its tables when they are
+missing. It gives production its own admin key, `SESSION_SECRET` (which
+turns on login), and `AGENT_CREDENTIALS_SECRET`, stores them as Cloudflare
+secrets, and runs `wrangler deploy`. It decides from what production already
+has, never from local files, so it is the same command on a laptop, in CI,
+or in an agent session, and a second run changes nothing. The Worker it
+deploys is [`cloudflare/worker.js`](cloudflare/worker.js): pages and `/api`
+on one hostname, wizard not included.
+
+No terminal at all, only GitHub and Cloudflare in a browser:
+[docs/no-command-line.md](docs/no-command-line.md). A GitHub Actions workflow
+([`cloudflare/github-deploy.yml.example`](cloudflare/github-deploy.yml.example))
+sets up, deploys, and upgrades on every push. Admins check the site at
+`/api/admin/status` in a browser.
 
 Do not hand-edit `wrangler.jsonc` and do not add a `.dev.vars` file (Wrangler
 prefers it and would ignore `.env`). Running `setup` again is safe; it keeps
@@ -203,7 +212,7 @@ should log in, the browser talks to **delegate** and core verifies the
 result. No OAuth client id, no callback route to write.
 
 **Server:** already done if `SESSION_SECRET` is set. `e9core setup` writes it
-to `.env`; `setup --remote` copies it to Cloudflare. The shipped Worker and
+to `.env`; `setup --remote` makes production's own and stores it in Cloudflare. The shipped Worker and
 `e9core serve` turn on `/auth/*` when they see it. Your own `createApi` call
 passes `delegate: { sessionSecret }` as above.
 
@@ -211,38 +220,50 @@ passes `delegate: { sessionSecret }` as above.
 (`www.example.com`, or `localhost:8787` while testing). `localhost:3000`–`3003`
 are pre-allowed on the public delegate.
 
-**Browser:** add [`@engine9/id`](https://github.com/engine9-ai/id) and point
-it at your API with the public key. `session: "cookie"` is the recommended
-setting: core sets its HttpOnly `e9_session` cookie, the same session its
-one-link sign-in (`/api/auth/start`) sets, so the server gate
-(`requireRole`) sees the person however they signed in. The whole
-recommended setup is [docs/sign-in.md](docs/sign-in.md).
+**Browser: add the Login button.** This is the first thing to do once the
+server side is ready, and it is the same button
+[`demo-festival`](https://github.com/engine9-ai/demo-festival) has in its
+header. One button shows **Login** or who is signed in, and one dialog logs
+in, switches the email address the site sees, changes role, and logs out.
+Put it in the header of every page:
 
 ```html
+<span data-e9-login-widget></span>
+
 <script src="https://unpkg.com/@engine9/id@1/dist/id.iife.js"></script>
 <script>
-  const id = engine9Id.mount({
+  const id = engine9Id.createEngine9Id({
     core: { apiUrl: "/api", publicApiKey: "PASTE_E9_PUBLIC_API_KEY", session: "cookie" },
   });
-  // After a visitor logs in, core checks the token and sets the e9_session cookie.
-  id.onChange(async (identity) => {
-    if (identity && identity.level >= 1) {
-      const { session } = await id.core.login();
-      console.log("person_id", session.personId, "roles", session.roles);
-    }
+  engine9Id.loginWidget({
+    id,
+    siteName: "My Site", // the name on the dialog and on Delegate's sign-in page
+    async onLogin() {
+      const { session } = await id.core.login(); // core sets the e9_session cookie
+      return { email: session.email, level: session.level };
+    },
+    onLoggedOut() {
+      location.reload();
+    },
   });
 </script>
-
-<button data-e9-login>Log in</button>
-<p data-e9-min-level="1" hidden>
-  Welcome, <span data-e9-profile="given_name">member</span>
-</p>
 ```
+
+The public key is `E9_PUBLIC_API_KEY` in `.env` (`e9publickey_…`); it is
+safe in page JavaScript. `session: "cookie"` is what makes this the
+recommended setup: core sets its HttpOnly `e9_session` cookie, the same
+session its one-link sign-in (`/api/auth/start`) sets, so the server gate
+(`requireRole`) sees the person however they signed in. Roles in the dialog,
+branding, and the rest: [docs/sign-in.md](docs/sign-in.md).
+
+Do not make the Login button a plain link to `/api/auth/start` or a bare
+`<button data-e9-login>`. Both sign in, but neither lets the person see who
+they are signed in as, switch email, or log out. The link is the no-JavaScript
+fallback and the place core's gate sends signed-out visitors.
 
 What happens: `id` asks core to begin the sign-in (`POST /api/auth/begin`
 returns a nonce bound to this browser); delegate issues an Identity Token
-for your Domain carrying that nonce; `id` verifies it in the browser and
-shows or hides `data-e9-*` content by **Identity Level** (soft, for layout);
+for your Domain carrying that nonce; `id` verifies it in the browser;
 `id.core.login()` posts the token to `/api/auth/login` with `cookie: true`;
 core checks the nonce and the page's `Origin`, verifies the signature
 against delegate's public keys, finds the `person_id` in your database by the
@@ -258,8 +279,9 @@ hostname. If the API lives on another host, set `E9_DOMAIN=www.example.com`
 (or `delegate.domain` in `createApi`).
 
 **Pages that need a role** are gated on the server with `requireRole`
-(`@engine9/core/auth/gate`). A server-rendered site signs in with a link to
-`/api/auth/start` and needs no sign-in JavaScript. What core ships, what
+(`@engine9/core/auth/gate`), whichever way the person signed in. A signed-out
+visitor who opens one is sent to `/api/auth/start` and comes back signed in;
+the Login button above is still how people sign in on purpose. What core ships, what
 `@engine9/id` is for, and what a site should not build itself:
 [docs/sign-in.md](docs/sign-in.md).
 
@@ -357,11 +379,12 @@ When a new build needs storage, decide in this order:
 | `E9_DOMAIN`          | Optional. JWT `aud` when the API host differs from the page host              |
 | `DELEGATE_URL`       | Optional. Your own delegate deployment. Default `https://delegate.network`    |
 
-`npx e9core setup --rotate` replaces the keys and secret; run `setup --remote`
-again afterwards on Cloudflare. `setup --remote` copies the two keys, the
-secret, and the setup token. The optional values are plain configuration: on
-Node they are environment variables; on Cloudflare put them under `vars` in
-`wrangler.jsonc`.
+`npx e9core setup --rotate` replaces the local keys and secrets;
+`setup --remote --rotate` replaces production's. Production has its own admin
+key and secrets (`.env.production` when this machine made them); the public
+key is the same everywhere, and the setup token stays local. The optional
+values are plain configuration: on Node they are environment variables; on
+Cloudflare put them under `vars` in `wrangler.jsonc`.
 
 ## Reference
 
@@ -372,14 +395,14 @@ Node they are environment variables; on Cloudflare put them under `vars` in
 | Command                                                      | What it does                                                                                                                                                                                                                                           |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `npx e9core setup`                                           | Local Cloudflare project: `wrangler.jsonc`, local D1 tables, `.env`                                                                                                                                                                                    |
-| `npx e9core setup --remote [--domain host]`                  | Production D1, secrets, deploy                                                                                                                                                                                                                         |
+| `npx e9core setup --remote [--domain host]`                  | Production D1, secrets, deploy. Adds only what production lacks; safe to re-run in CI                                                                                                                                                                 |
 | `npx e9core setup --node [--db url]`                         | SQLite (or MySQL) tables and `.env`, no Wrangler                                                                                                                                                                                                       |
 | `npx e9core serve [--api-only] [--setup]`                    | Local site + `/api`; `--setup` reopens the wizard                                                                                                                                                                                                      |
 | `npx e9core installDefaultPlugins --db <url>` or `--url <site>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database; `--url` uses `POST /api/admin/install-default-plugins` with the admin key, so it reaches D1 (`--stack` picks a stack)                                                                |
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once                                                                                                                                                                                                                        |
 | `npx e9core setup-keys [--remote [--env staging]]`           | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets                                                                          |
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person`     | Print one schema's SQL                                                                                                                                                                                                                                 |
-| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: the upgrades the schema plugins declare, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
+| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: the upgrades the schema plugins declare, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1; `--remote` does the same with a temporary admin key, for CI); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
 | `npx e9core upgrade --plugin <path> --url <site>`            | Run one plugin's upgrades, then reinstall it (any package; `upgrade` alone touches `@engine9/schemas` only). Plugins declare their own upgrades ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)); `--failed` retries every failed install; `--dry-run --sql` shows the statements |
 | `npx e9core status --url <site>` or `--db <url>`             | Read-only: does the database match the deployed code? Keys, account, upgrades, and every plugin's schema and last install, each with its fix. See [docs/status.md](docs/status.md) |
 | `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
@@ -397,7 +420,8 @@ and payment forms, inbound people, other HTTP APIs). Scopes decide access.
 
 ```
 Request
-  → 1. API key          (required on every route except GET /ok)
+  → 1. API key          (required on every route except GET /ok, the sign-in
+                          links, and the admin status page)
   → 2. Role             (role_id === segment_id UUID)
   → 3. Identity Level   (on the Core Session or Identity Token, when login is on)
   → handler
@@ -483,6 +507,7 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | `POST /admin/install-default-plugins` | `{ path? }` — install the default schema plugins (or a stack); the same as `e9core installDefaultPlugins`                                          | `admin`                                                           |
 | `GET /admin/segments` | Every segment with its role name and membership policy, plus standard roles with no row yet                                                              | `admin`                                                           |
 | `GET /admin/segments/:segment/members` | Members of a segment (id or role name, e.g. `admin`) with their emails                                                              | `admin`                                                           |
+| `GET /admin/status`   | Does the database match the deployed code ([docs/status.md](docs/status.md)). Opened in a browser with no key: the same report as a page                                                                  | `admin`; the page: a signed-in admin (role or superadmin, Level 3+) |
 | `POST /admin/upgrade` | `{ dry_run?, refresh?, plugins?, …upgrade options }` — run the upgrades plugins declare (`PluginWorker.upgrade`), e.g. `drop_name_columns`, against this site's database          | `admin`                                                           |
 | `POST /admin/erase`   | `{ person_ids, dry_run?, keep? }` — erase people (`PersonWorker.erasePeople`); returns rows per table                                                     | `admin`                                                           |
 

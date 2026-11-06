@@ -441,43 +441,6 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
   }
 });
 
-test('createDelegateAuth: legacy roleSegments compat maps names to UUIDs on session', async () => {
-  const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
-  try {
-    await applyStandardStack(worker);
-    const pluginId = getPluginUUID('engine9.test', 'test-delegate-legacy-roles');
-    await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
-
-    const vipSegmentId = getVersionedUUID();
-    await worker.insertArray({
-      table: 'segment',
-      array: [{ id: vipSegmentId, plugin_id: pluginId, name: 'VIP', build_type: 'list' }]
-    });
-
-    const { privateKey, publicKey } = await generateKeyPair('ES256');
-    const auth = createDelegateAuth({
-      worker,
-      delegateUrl: 'https://delegate.example.test',
-      domain: 'site.example.com',
-      sessionSecret: '0123456789abcdef'.repeat(4),
-      pluginId,
-      roleSegments: { vip: vipSegmentId },
-      fetchImpl: await jwksFetch(publicKey, 'legacy-roles-key')
-    });
-
-    const jwt = await signDelegateJwt({
-      privateKey,
-      kid: 'legacy-roles-key',
-      issuer: 'https://delegate.example.test'
-    });
-    const { session } = await auth.login(jwt);
-    const roles = await auth.grantRole(session.personId, 'vip');
-    assert.deepEqual(roles, [vipSegmentId], 'legacy name grant returns UUID role_ids');
-  } finally {
-    await worker.destroy();
-  }
-});
-
 test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {

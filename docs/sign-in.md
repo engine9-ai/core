@@ -55,12 +55,51 @@ createApi({
 That serves every route below. Nothing in this guide needs a route of your
 own.
 
-### 2. Two ways to sign in, one session
+### 2. Add the Login button
 
-Both end with core setting `e9_session`, so the gate sees the person
-whichever they used.
+**Do this first.** The `@engine9/id` Login widget is the default way to use
+Delegate, and the button in `demo-festival`'s header. One button shows
+**Login** or who is signed in; one dialog logs in, switches the email
+address the site sees, changes role, and logs out. Put it in the header of
+every page.
 
-**A link (no JavaScript).**
+With a bundler (Vite, Astro, Next, and so on):
+
+```js
+import { createEngine9Id } from '@engine9/id';
+import { loginWidget } from '@engine9/id/widget';
+
+const id = createEngine9Id({
+  core: { apiUrl: '/api', publicApiKey: 'e9publickey_…', session: 'cookie' },
+});
+loginWidget({
+  id,
+  siteName: 'My Site', // the name on the dialog and on Delegate's sign-in page
+  async onLogin() {
+    const { session } = await id.core.login(); // core sets e9_session
+    return { email: session.email, level: session.level };
+  },
+  onLoggedOut() {
+    location.reload(); // server-rendered pages follow the cookie
+  },
+});
+```
+
+The button goes in `<span data-e9-login-widget></span>` (or pass `target`).
+On a plain HTML page, load
+`https://unpkg.com/@engine9/id@1/dist/id.iife.js` and call the same two
+functions as `engine9Id.createEngine9Id` and `engine9Id.loginWidget`. The
+public key is `E9_PUBLIC_API_KEY` from `.env`.
+
+`session: 'cookie'` is what makes this the recommended path. Without it, the
+widget's session lives in the browser, and your server gate cannot see it.
+
+To offer roles in the dialog, pass `roles` and an `onRoleChange` that calls
+`id.core.changeRole(roleId)`. To brand Delegate's sign-in page, pass `brand`
+to `createEngine9Id`. Both are in `demo-festival`'s
+[`Layout.astro`](https://github.com/engine9-ai/demo-festival/blob/main/src/layouts/Layout.astro).
+
+### 3. The link: a fallback, and where the gate sends people
 
 ```html
 <a href="/api/auth/start?returnTo=/members">Log in</a>
@@ -72,31 +111,13 @@ cookie (state and nonce). `/api/auth/callback` checks both, sets
 with `?login_error=<reason>`. Build the link with `signInUrl(path)` from
 `@engine9/core/auth/signIn`.
 
-**The `@engine9/id` Login widget, with `session: 'cookie'`.**
+It sets the same `e9_session` as the button, so the gate sees the person
+whichever they used. Use it as the `href` behind the Login button for
+browsers without JavaScript, and let the gate (step 4) send signed-out
+visitors to it. Do not make it the site's only Login control: it gives the
+person no way to see who they are signed in as, switch email, or log out.
 
-```js
-import { createEngine9Id } from '@engine9/id';
-import { loginWidget } from '@engine9/id/widget';
-
-const id = createEngine9Id({
-  core: { apiUrl: '/api', publicApiKey: 'e9publickey_…', session: 'cookie' },
-});
-loginWidget({
-  id,
-  async onLogin() {
-    const { session } = await id.core.login(); // core sets e9_session
-    return { email: session.email, role: null, level: session.level };
-  },
-  onLoggedOut() {
-    location.reload(); // server-rendered pages follow the cookie
-  },
-});
-```
-
-`session: 'cookie'` is what makes this the recommended path. Without it, the
-widget's session lives in the browser, and your server gate cannot see it.
-
-### 3. Gate every private page and API route
+### 4. Gate every private page and API route
 
 ```js
 import { requireRole } from '@engine9/core/auth/gate';
@@ -129,16 +150,19 @@ your Domain did not let the person in with the address they shared. To use
 your own look for the 403, render `gate.email`, `gate.role`, `gate.reason`,
 and `gate.changeUrl` (demo-festival's `/denied` does).
 
-### 4. Change email
+### 5. Change email and log out: already in the Login button
 
-Next to Log out, link to `changeSignInUrl(path)`
-(`/api/auth/start?returnTo=…&prompt=select`), or use the widget's Switch
-email. Delegate shows its share screen so the person can pick another
-address, add one, or use a different account.
+Once someone is signed in, the Login button shows their email (and role),
+and its dialog has **Switch email** and **Log out**. Do not add a separate
+"signed in as", "Use a different email", or "Log out" to the header; that
+row of text links is what a site ends up with when it skips step 2.
 
-### 5. Log out
+Switch email opens Delegate's share screen (`prompt=select`) so the person
+can pick another address, add one, or use a different account. Without
+JavaScript, the same thing is a link to `changeSignInUrl(path)`
+(`/api/auth/start?returnTo=…&prompt=select`).
 
-With `session: 'cookie'`, `id.logout()` (and the widget's Log out) also ends
+With `session: 'cookie'`, the widget's Log out (`id.logout()`) also ends
 core's session: `POST /api/auth/logout` clears the cookie and revokes the
 session when `sessionRevocations` is set. Reload or navigate in the widget's
 `onLoggedOut`, which runs after every logout request has finished. Without
@@ -201,6 +225,7 @@ blank page. Each one has a core feature that replaces it.
 | Read `session.roles` from the cookie for an access decision | `requireRole`, or `auth.rolesForSession(session)` |
 | Answer every failure the same way | 401 for signed out, 403 for signed in without access |
 | Hide the address the person is signed in with | Show `email`. The fix is usually another address |
+| Build the header's sign-in from text links ("Log in", the email, "Use a different email", "Log out") | The Login button (step 2). It shows the email and has Switch email and Log out in its dialog |
 | Navigate away in the widget's `onLogout` | `onLoggedOut`, after the logout requests finish |
 | Auto-redirect `/login` to Delegate with no way to stop | Send people to `/api/auth/start` from a link or a gate. If `/login` auto-starts, show the change link once someone is signed in |
 
@@ -231,7 +256,9 @@ session, or its own 403 page, keep these rules:
    `auth.identityUrl({ …, prompt: 'select', reason: 'access_denied' })`.
    `requireRole` returns `reason`, `email`, `role`, and `changeUrl`, so a
    custom 403 page only has to render them.
-5. Put a change-email link (`changeSignInUrl(path)`) next to Log out.
+5. Keep the Login button (step 2) for the header even with your own flow; its
+   Switch email and Log out cover this. Without it, put a change-email link
+   (`changeSignInUrl(path)`) next to Log out.
 
 Delegate stops a silent loop on its own: a browser that gets two silent
 tokens for your Domain within two minutes sees the share screen on the

@@ -76,6 +76,7 @@ false.
 | Database | Command |
 | --- | --- |
 | Cloudflare production (D1) | `npx e9core upgrade --url https://www.example.com` |
+| Cloudflare production, from CI or any machine without the admin key | `npx e9core upgrade --remote` (`--url` when `wrangler.jsonc` has no single custom-domain route) |
 | Local `wrangler dev` (local D1) | `npx e9core upgrade --url http://localhost:8787` |
 | Local SQLite file, or a Node site's SQLite or MySQL | `npx e9core upgrade --db sqlite://./engine9.db` |
 | An account on the engine9 server | `e9 pluginworker upgrade -a <account_id>`, or MCP `plugin` with `command: upgrade` |
@@ -84,6 +85,14 @@ false.
 `--key`, the environment, or `./.env`). The upgrade runs inside the Worker
 against its own D1 binding. No process outside Cloudflare can open D1 with a
 connection string. The route needs a key with the `admin` scope.
+
+`--remote` makes that key for one run: it writes an admin key's hash to the
+site's D1 through wrangler (the `DB` binding in `wrangler.jsonc`; `--env`
+picks another environment), with an expiry 15 minutes ahead, posts the
+upgrade, and deletes the row. The key is never printed or saved. A machine
+that can write D1 through wrangler can already change anything in it, so
+this gives it nothing new. `status`, `segment`, and `installDefaultPlugins`
+take `--remote` the same way.
 
 Add `--dry-run` to see the plan first. `--no-refresh` skips step 3.
 
@@ -155,15 +164,20 @@ keeps working on a database that has not been upgraded yet: every release
 keeps the steps an old inbound snapshot names, so writes still land where they
 did until the upgrade moves them. Keep the gap between steps 4 and 6 short.
 
-In CI, run the upgrade right after the deploy, with the admin key as a secret:
+In CI, run the upgrade right after the deploy. The CI job needs a Cloudflare
+token, not the admin key:
 
 ```json
 {
   "scripts": {
-    "deploy": "wrangler deploy && e9core upgrade --url $E9_SITE_URL && e9core status --url $E9_SITE_URL"
+    "deploy": "e9core setup --remote --no-deploy && wrangler deploy && e9core upgrade --remote && e9core status --remote"
   }
 }
 ```
+
+A complete GitHub Actions workflow is
+[`cloudflare/github-deploy.yml.example`](../cloudflare/github-deploy.yml.example)
+([no-command-line.md](no-command-line.md)).
 
 ## Why not `wrangler d1 migrations`
 

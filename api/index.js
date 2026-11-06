@@ -54,6 +54,10 @@
     GET  /admin/status          -- read-only: does the database match the deployed
                                    code? (admin scope) ?plugin=<path>[,<path>]
                                    Same as PluginWorker.status / e9core status --url.
+                                   Opened in a browser with no API key: the same
+                                   report as a page, for a person signed in with
+                                   the admin role (requireRole: person_segment or
+                                   a superadmin, and the role's requiredAuth).
     GET  /admin/segments        -- every segment and its membership policy (admin scope)
     GET  /admin/segments/:id/members
                                 -- members of a segment (id or role name, e.g. admin)
@@ -63,7 +67,8 @@
                                    Same as PersonWorker.erasePeople.
 
   Auth layers (see package README):
-    1. API key (required on all routes except /ok)
+    1. API key (required on all routes except /ok, the two sign-in
+       navigations, and the read-only status page)
     2. Role (role_id = segment UUID; scopes from role registry ∩ key scopes)
     3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
 
@@ -73,7 +78,7 @@
   Usage:
     const api = createApi({
       worker,           // client PersonWorker
-      keyStore,         // SqlApiKeyStore | KVApiKeyStore
+      keyStore,         // SqlApiKeyStore
       logger,           // data log: JsonlFileLogger | BatchLogger | NullLogger
       audit,            // audit log (schema, plugins, roles); default ConsoleLogger
       environment,      // the site's env (Worker env / process.env), read by GET /admin/status
@@ -143,6 +148,9 @@ import {
 import { parseOriginList } from './origins.js';
 import { extractApiKey, hashApiKey, isEngine9ApiKeyToken, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
+import { requireRole } from '../auth/gate.js';
+import { isPageRequest } from '../auth/signIn.js';
+import { messagePage, renderStatusPage } from './statusPage.js';
 
 /*
   Layer 1 failures. `kind: 'api_key'` marks the site's own key, not the person
@@ -289,7 +297,6 @@ export function createApi({
     maxBatchSize = 500,
     maxReadLimit = 1000,
     roles: configRoles,
-    roleSegments: configRoleSegments,
     superadmins: configSuperadmins = null,
     allowedOrigins: configAllowedOrigins = [],
     signIn: configSignIn = {}
@@ -300,7 +307,7 @@ export function createApi({
   // A SESSION_SECRET a person chose can be guessed offline from any session
   // token. Login stays off with it; every other route still works.
   let loginOffMessage =
-    'login is not enabled: set SESSION_SECRET (e9core setup writes it) or pass delegateAuth to createApi';
+    'login is not enabled: SESSION_SECRET is not set. Setup makes it (npx e9core setup --remote, which the deploy workflow runs); never choose one yourself';
   const sessionSecretProblem =
     !delegateAuth && delegate?.sessionSecret ? signingSecretProblem(delegate.sessionSecret) : null;
   if (sessionSecretProblem) {
@@ -315,7 +322,6 @@ export function createApi({
       sessionRevocations: delegate.sessionRevocations || null,
       pluginId,
       roles: configRoles,
-      roleSegments: configRoleSegments,
       superadmins: configSuperadmins,
       ...(delegate.fetchImpl ? { fetchImpl: delegate.fetchImpl } : {})
     });
@@ -350,7 +356,6 @@ export function createApi({
     delegateAuth?.roleRegistry ||
     normalizeRoleRegistry({
       roles: configRoles,
-      roleSegments: configRoleSegments,
       accountId: worker?.accountHandle
     });
 
@@ -628,6 +633,9 @@ export function createApi({
     return json(200, result);
   }
 
+  const SECRETS_WEB_FIX = 'Run the deploy workflow again: its setup step (npx e9core setup --remote) adds the secrets the Worker does not have';
+  const ROTATE_WEB_FIX = 'Run the deploy workflow by hand with "rotate" checked: it replaces the value (everyone signed in signs in again)';
+
   /*
     What only the running site can see: its secrets (by name, never by value;
     the keys are checked by hash) and whether the audit log has a sink.
@@ -640,7 +648,7 @@ export function createApi({
       checks.push(
         has(name)
           ? { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
-          : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup-keys --remote' }
+          : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup --remote', fix_web: SECRETS_WEB_FIX }
       );
     // Signing secrets must also have the shape e9core setup-keys writes.
     // AGENT_CREDENTIALS_SECRET is checked only when the site sets it.
@@ -652,7 +660,7 @@ export function createApi({
       const problem = signingSecretProblem(env[name]);
       checks.push(
         problem
-          ? { id: `secrets.${name}`, area: 'secrets', status: 'fail', title: `${name} ${problem}`, detail: signingSecretMessage(name, problem), fix: 'npx e9core setup-keys --remote' }
+          ? { id: `secrets.${name}`, area: 'secrets', status: 'fail', title: `${name} ${problem}`, detail: signingSecretMessage(name, problem), fix: 'npx e9core setup-keys --remote --rotate', fix_web: ROTATE_WEB_FIX }
           : { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
       );
     };
@@ -667,7 +675,8 @@ export function createApi({
             area: 'audit',
             status: 'warn',
             title: 'No audit log sink: schema, plugin, and role changes go only to the Worker log',
-            fix: 'Bind an R2 bucket as AUDIT_BUCKET in wrangler.jsonc (Cloudflare), or pass audit to createApi (Node)'
+            fix: 'Bind an R2 bucket as AUDIT_BUCKET in wrangler.jsonc (Cloudflare), or pass audit to createApi (Node)',
+            fix_web: 'Create an R2 bucket (Cloudflare dashboard: R2, Create bucket). In wrangler.jsonc (GitHub can edit it in the browser) add "r2_buckets": [{ "binding": "AUDIT_BUCKET", "bucket_name": "<that bucket>" }] and commit; the deploy workflow does the rest'
           }
         : { id: 'audit.configured', area: 'audit', status: 'pass', title: 'The audit log has its own sink' }
     );
@@ -677,30 +686,103 @@ export function createApi({
     return { checks, keys };
   }
 
+  function siteOrigin(apiBase) {
+    try {
+      return apiBase ? new URL(apiBase).origin : '<site>';
+    } catch {
+      return '<site>';
+    }
+  }
+
+  async function siteStatusReport({ query, apiBase }) {
+    const { checks, keys } = environmentChecks();
+    return worker.status({
+      plugins: query?.plugin,
+      keys,
+      checks,
+      source: 'site',
+      sitePluginId: pluginId,
+      fixTarget: `--url ${siteOrigin(apiBase)}`,
+      webFixes: true
+    });
+  }
+
   async function getAdminStatus({ apiKey, query, session, apiBase }) {
     const ctx = authContextFor({ apiKey, query, session });
     const denied = requireScope(ctx, SCOPES.ADMIN);
     if (denied) return denied;
-    const { checks, keys } = environmentChecks();
-    let origin = '<site>';
     try {
-      if (apiBase) origin = new URL(apiBase).origin;
-    } catch {
-      origin = '<site>';
-    }
-    try {
-      const report = await worker.status({
-        plugins: query?.plugin,
-        keys,
-        checks,
-        source: 'site',
-        sitePluginId: pluginId,
-        fixTarget: `--url ${origin}`
-      });
-      return json(200, report);
+      return json(200, await siteStatusReport({ query, apiBase }));
     } catch (e) {
       debug('getAdminStatus error:', e);
       return json(500, { error: String(e.message || e) });
+    }
+  }
+
+  function htmlResult(status, body, headers = {}) {
+    return {
+      status,
+      body,
+      contentType: 'text/html; charset=utf-8',
+      headers: {
+        'cache-control': 'no-store',
+        'x-robots-tag': 'noindex',
+        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'",
+        ...headers
+      }
+    };
+  }
+
+  /* A Fetch Request for requireRole, from a Worker Request or an Express-style request. */
+  function pageRequest(req) {
+    if (req.original && typeof req.original.headers?.get === 'function' && req.original.url) return req.original;
+    const headers = new Headers();
+    for (const [name, value] of Object.entries(req.headers || {})) {
+      if (typeof value === 'string') headers.set(name, value);
+      else if (Array.isArray(value)) headers.set(name, value.join(', '));
+    }
+    const url = new URL(`${req.apiBase || 'http://localhost/api'}/admin/status`);
+    for (const [name, value] of Object.entries(req.query || {})) url.searchParams.set(name, String(value));
+    return new Request(url, { method: 'GET', headers });
+  }
+
+  /*
+    GET /admin/status opened in a browser, with no API key: the status report
+    as a page for a person signed in with the admin role. A page load cannot
+    send a key; the gate is the same requireRole a site's admin pages use
+    (person_segment or a superadmin, and the role's requiredAuth, PL-2 and
+    PL-8). Read-only: a GET that changes nothing, so a cross-site request
+    gains nothing. Every other admin route still needs the admin key.
+  */
+  async function getAdminStatusPage(req) {
+    if (!delegateAuth) {
+      return htmlResult(501, messagePage('Sign-in is off on this site', [
+        loginOffMessage,
+        'Without a sign-in, the status page cannot tell who you are. Run the deploy workflow again (docs/no-command-line.md); its setup step makes SESSION_SECRET.'
+      ]));
+    }
+    const request = pageRequest(req);
+    const base = new URL(req.apiBase || 'http://localhost/api').pathname.replace(/\/+$/, '');
+    let gate;
+    try {
+      gate = await requireRole({ auth: delegateAuth, request, role: 'admin', cookieName: sessionCookieName, startPath: `${base}/auth/start`, page: true });
+    } catch (e) {
+      debug('getAdminStatusPage gate error:', e);
+      return htmlResult(501, messagePage('This site has no admin role', [
+        "Set roles: 'standard' in createApi, or list superadmins (E9_SUPERADMINS), so the status page knows who may see it."
+      ]));
+    }
+    if (!gate.ok) {
+      const response = gate.response;
+      if (response.status === 302) return json(302, null, { headers: { location: response.headers.get('location'), 'cache-control': 'no-store' } });
+      return htmlResult(response.status, await response.text());
+    }
+    try {
+      const report = await siteStatusReport({ query: req.query || {}, apiBase: req.apiBase });
+      return htmlResult(200, renderStatusPage(report, { email: gate.session?.email || null, site: siteOrigin(req.apiBase) }));
+    } catch (e) {
+      debug('getAdminStatusPage error:', e);
+      return htmlResult(500, messagePage('Could not read the status', [String(e.message || e)]));
     }
   }
 
@@ -836,10 +918,30 @@ export function createApi({
     });
   }
 
+  /* /auth/* without login: name the missing secret and the path that makes it. */
+  function loginOffBody() {
+    // A secret that is set but malformed is kept by a plain setup run (its
+    // value cannot be read back), so the fix replaces it.
+    if (sessionSecretProblem) {
+      return {
+        error: loginOffMessage,
+        reason: 'login_off',
+        invalid: 'SESSION_SECRET',
+        fix: 'npx e9core setup --remote --rotate',
+        fix_web: 'Run the deploy workflow by hand with "rotate" checked (docs/no-command-line.md)'
+      };
+    }
+    return {
+      error: loginOffMessage,
+      reason: 'login_off',
+      missing: 'SESSION_SECRET',
+      fix: 'npx e9core setup --remote',
+      fix_web: 'Run the deploy workflow again: its setup step makes SESSION_SECRET (docs/no-command-line.md)'
+    };
+  }
+
   function notConfigured() {
-    return json(501, {
-      error: loginOffMessage
-    });
+    return json(501, loginOffBody());
   }
 
   function getAuthStart({ query, apiBase }) {
@@ -1001,9 +1103,7 @@ export function createApi({
 
   async function postAuthLogin({ body, headers, apiBase }) {
     if (!delegateAuth) {
-      return json(501, {
-        error: loginOffMessage
-      });
+      return json(501, loginOffBody());
     }
     const token = body?.delegate_token;
     if (!token) {
@@ -1385,6 +1485,17 @@ export function createApi({
     if (method === 'GET' && parts[0] === 'auth' && parts.length === 2 && (parts[1] === 'start' || parts[1] === 'callback')) {
       const route = parts[1] === 'start' ? getAuthStart : getAuthCallback;
       return route({ query: req.query || {}, headers: req.headers, apiBase: req.apiBase });
+    }
+    // The status page: a browser opening /admin/status sends no key.
+    if (
+      method === 'GET' &&
+      parts[0] === 'admin' &&
+      parts[1] === 'status' &&
+      parts.length === 2 &&
+      !extractApiKey(req.original || req) &&
+      isPageRequest(pageRequest(req))
+    ) {
+      return getAdminStatusPage(req);
     }
     // Everything else requires a valid API key (layer 1)
     const verification = await keyStore.verify(req.original || req);

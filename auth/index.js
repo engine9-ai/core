@@ -13,9 +13,7 @@
   Only the SHA-256 hash is stored in api_key — a leaked store does not reveal
   usable keys.
 
-  Two stores are provided:
-    SqlApiKeyStore -- api_key table (created via SQLWorker.createTable or migrations)
-    KVApiKeyStore  -- Cloudflare Workers KV namespace binding (deprecated, removed in 1.20)
+  Keys live in the api_key table (SqlApiKeyStore).
 
   Policy helpers (resolveAuthContext, hasScope, ADMIN_SCOPE) live in ./policy.js.
   HMAC helpers for Delegate tokens live in ./hmac.js.
@@ -476,76 +474,6 @@ export class SqlApiKeyStore {
   }
 }
 
-/* Cloudflare KV-backed store.  `kv` is a KVNamespace binding.
-   Stored under key `apikey:<sha256>` with a JSON record.
-   @deprecated Removed in 1.20. Use SqlApiKeyStore (the api_key table). */
-let warnedKvStore = false;
-export class KVApiKeyStore {
-  constructor({ kv }) {
-    if (!kv) throw new Error('KVApiKeyStore requires a kv namespace binding');
-    if (!warnedKvStore) {
-      warnedKvStore = true;
-      console.warn(
-        'engine9: KVApiKeyStore (the API_KEYS KV binding) is deprecated and is removed in @engine9/core 1.20. Keep keys in the api_key table (SqlApiKeyStore): run npx e9core setup-keys --remote, then remove the API_KEYS binding.'
-      );
-    }
-    this.kv = kv;
-  }
-  async create({ name = '', scopes = [], defaultRoleId = null, expiresAt = null, key: existingKey = null } = {}) {
-    const normalizedScopes = assertValidKeyScopes(scopes);
-    const key = existingKey || generateApiKey({ scopes: normalizedScopes });
-    if (existingKey && !isEngine9ApiKeyToken(existingKey)) {
-      throw new Error(`API key must start with ${API_KEY_PREFIX} or ${PUBLIC_API_KEY_PREFIX}`);
-    }
-    const id = crypto.randomUUID();
-    const record = {
-      id,
-      name,
-      scopes: normalizedScopes,
-      default_role_id: defaultRoleId,
-      active: true,
-      expires_at: expiresAt
-    };
-    await this.kv.put(`apikey:${hashApiKey(key)}`, JSON.stringify(record));
-    return createResult(key, record);
-  }
-  async lookup(key) {
-    const raw = await this.kv.get(`apikey:${hashApiKey(key)}`);
-    if (!raw) return null;
-    return normalizeRecord(JSON.parse(raw));
-  }
-  async revoke({ keyHash }) {
-    const raw = await this.kv.get(`apikey:${keyHash}`);
-    if (!raw) return null;
-    const record = JSON.parse(raw);
-    record.active = false;
-    await this.kv.put(`apikey:${keyHash}`, JSON.stringify(record));
-    return record;
-  }
-  /**
-   * Cycle a key: create a new key, then revoke the old by keyHash.
-   * Pass prior metadata explicitly, or they default to empty.
-   */
-  async rotate({ keyHash, name, scopes, defaultRoleId, expiresAt } = {}) {
-    if (!keyHash) throw new Error('KVApiKeyStore.rotate requires keyHash of the key to revoke');
-    const raw = await this.kv.get(`apikey:${keyHash}`);
-    const old = raw ? normalizeRecord(JSON.parse(raw)) : null;
-    const created = await this.create({
-      name: name !== undefined ? name : old?.name || '',
-      scopes: scopes !== undefined ? scopes : old?.scopes || [],
-      defaultRoleId: defaultRoleId !== undefined ? defaultRoleId : old?.default_role_id || null,
-      expiresAt: expiresAt !== undefined ? expiresAt : old?.expires_at || null
-    });
-    await this.revoke({ keyHash });
-    return { ...created, revokedKeyHash: keyHash };
-  }
-  async verify(requestOrKey) {
-    const key = extractApiKey(requestOrKey);
-    if (!key) return { valid: false, reason: 'missing_key' };
-    return checkUsable(await this.lookup(key));
-  }
-}
-
 export default {
   API_KEY_PREFIX,
   PUBLIC_API_KEY_PREFIX,
@@ -558,7 +486,6 @@ export default {
   extractApiKey,
   isEngine9ApiKeyToken,
   SqlApiKeyStore,
-  KVApiKeyStore,
   resolveAuthContext,
   hasScope,
   intersectScopes,

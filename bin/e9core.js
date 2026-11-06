@@ -21,7 +21,10 @@
         Writes wrangler.jsonc (Cloudflare path), the engine9 database, and .env
         (API keys, SESSION_SECRET, AGENT_CREDENTIALS_SECRET, E9_SETUP_TOKEN).
         Keys are part of setup.
-        --remote also loads production D1, saves Cloudflare secrets, and deploys.
+        --remote works on production only (no local database, no .env): it
+        loads production D1 when it has no engine9 tables, adds the Cloudflare
+        secrets the Worker does not have yet, and deploys. It decides from the
+        target, so it is safe to re-run anywhere (a laptop, CI, an agent).
         Production gets its own admin key and signing secrets (.env.production).
         --env targets that wrangler environment instead (.env.<env>); it must
         already be in wrangler.jsonc with a DB binding.
@@ -60,7 +63,7 @@
         you pass that --stack (or set the warehouse default_stack setting).
 
     e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--<upgrade option> …]
-    e9core upgrade --url https://www.example.com [--key e9key_... | --env staging] [--dry-run] [--no-refresh] [--<upgrade option> …]
+    e9core upgrade --url https://www.example.com [--key e9key_... | --remote] [--env staging] [--dry-run] [--no-refresh] [--<upgrade option> …]
         Run after every deploy that changes @engine9/core or @engine9/schemas
         (PluginWorker.upgrade, docs/upgrading.md). Runs the upgrades the
         @engine9/schemas plugins declare (each one's shouldUpgrade looks at
@@ -73,6 +76,10 @@
         environment, then .env.<--env> (or .env.production for a non-local
         URL), then ./.env. Deploy the new code first.
         Safe to re-run. Exits 1 when an upgrade is blocked or a plugin fails.
+        --remote (with --url, or the one custom-domain route in wrangler.jsonc)
+        uses a temporary admin key written to the site's D1 through wrangler
+        and deleted afterwards, for a machine with no admin key (CI). The
+        same --remote works on status, segment, and installDefaultPlugins.
         Any other flag is an option of the plugins' upgrades, such as an
         opt-in removal: --drop-name-columns is drop_name_columns. A dry run
         lists each opt-in upgrade and its option; unused_options names a
@@ -175,6 +182,7 @@ import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
 import { adminKey, callSite, installDefaultPluginsSite, upgradeSite } from './upgrade.js';
+import { remoteSiteUrl, withTemporaryAdminKey } from './temporaryKey.js';
 import { renderStatus, runStatusCommand } from './status.js';
 import { ConsoleLogger, JsonlFileLogger } from '../logging/index.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
@@ -242,14 +250,34 @@ function printSegmentList({ account_id: accountId, segments, missing_roles: miss
   }
 }
 
+function envArg(args) {
+  return args.env && args.env !== true ? String(args.env) : undefined;
+}
+
+/* The deployed site a --url (or --remote) command talks to, or undefined. */
+function siteUrlArg(args) {
+  const url = args.url && args.url !== true ? String(args.url) : undefined;
+  if (args.remote !== true) return url;
+  return remoteSiteUrl({ url, cwd: process.cwd(), env: envArg(args) });
+}
+
+/*
+  Runs fn(key) with the admin key for a deployed site: --key; with --remote,
+  a temporary key written through wrangler (bin/temporaryKey.js); otherwise
+  the files adminKey reads (.env.production, .env).
+*/
+async function withSiteAdminKey(args, url, fn) {
+  const explicit = args.key && args.key !== true ? String(args.key) : undefined;
+  if (args.remote === true && !explicit) return withTemporaryAdminKey({ cwd: process.cwd(), env: envArg(args) }, fn);
+  return fn(adminKey({ key: explicit, target: envArg(args), url }));
+}
+
 /** `e9core segment … --url`: the same actions through a deployed site's API (D1 included). */
-async function remoteSegmentCommand(args, action) {
-  const url = String(args.url);
-  const key = adminKey({
-    key: args.key && args.key !== true ? String(args.key) : undefined,
-    target: args.env && args.env !== true ? String(args.env) : undefined,
-    url
-  });
+async function remoteSegmentCommand(args, action, url) {
+  return withSiteAdminKey(args, url, (key) => remoteSegmentWithKey(args, action, url, key));
+}
+
+async function remoteSegmentWithKey(args, action, url, key) {
   const call = (method, route, body) => callSite({ url, key, method, route, body });
   const segment = args.segment ?? args.role;
   const segmentValue = segment && segment !== true ? String(segment).trim() : '';
@@ -291,9 +319,16 @@ async function remoteSegmentCommand(args, action) {
 
 async function segmentCommand(args) {
   const [, action] = args._;
-  if (args.url && args.url !== true) {
+  let url;
+  try {
+    url = siteUrlArg(args);
+  } catch (e) {
+    console.error(String(e.message || e));
+    process.exit(1);
+  }
+  if (url) {
     try {
-      await remoteSegmentCommand(args, action);
+      await remoteSegmentCommand(args, action, url);
     } catch (e) {
       console.error(String(e.message || e));
       process.exit(1);
@@ -512,7 +547,7 @@ function getPluginWorker(args) {
 }
 
 /* Flags `e9core upgrade` reads itself; the rest go to the plugins' upgrades. */
-const UPGRADE_CLI_FLAGS = new Set(['url', 'key', 'env', 'db', 'account', 'handle', 'stack', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
+const UPGRADE_CLI_FLAGS = new Set(['url', 'remote', 'key', 'env', 'db', 'account', 'handle', 'stack', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
 
 function listArg(value) {
   if (!value || value === true) return undefined;
@@ -706,13 +741,9 @@ async function main() {
     }
     case 'installDefaultPlugins': {
       const path = args.stack && args.stack !== true ? args.stack : args.path && args.path !== true ? args.path : undefined;
-      if (args.url && args.url !== true) {
-        const key = adminKey({
-          key: args.key && args.key !== true ? String(args.key) : undefined,
-          target: args.env && args.env !== true ? String(args.env) : undefined,
-          url: String(args.url)
-        });
-        const result = await installDefaultPluginsSite({ url: String(args.url), key, path });
+      const siteUrl = siteUrlArg(args);
+      if (siteUrl) {
+        const result = await withSiteAdminKey(args, siteUrl, (key) => installDefaultPluginsSite({ url: siteUrl, key, path }));
         console.log(JSON.stringify(result, null, 2));
         break;
       }
@@ -741,13 +772,9 @@ async function main() {
         ...(args.sql === true ? { sql: true } : {})
       };
       let result;
-      if (args.url && args.url !== true) {
-        const key = adminKey({
-          key: args.key && args.key !== true ? String(args.key) : undefined,
-          target: args.env && args.env !== true ? String(args.env) : undefined,
-          url: String(args.url)
-        });
-        result = await upgradeSite({ url: String(args.url), key, options });
+      const siteUrl = siteUrlArg(args);
+      if (siteUrl) {
+        result = await withSiteAdminKey(args, siteUrl, (key) => upgradeSite({ url: siteUrl, key, options }));
       } else {
         const worker = getPluginWorker(args);
         try {
