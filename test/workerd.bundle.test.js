@@ -361,6 +361,16 @@ test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run o
     assert.equal(stale.checks.find((c) => c.id === 'plugin.inbound_snapshot').status, 'warn');
     assert.equal(stale.checks.find((c) => c.id === 'plugin.inbound_snapshot').fix, 'npx e9core upgrade --url https://www.example.test');
 
+    // The two no-key routes, with login on: the status page and the Login button.
+    const withLogin = { ...env, SESSION_SECRET: '0123456789abcdef'.repeat(4) };
+    const page = await fetch(new Request('https://www.example.test/api/admin/status', { headers: { accept: 'text/html' } }), withLogin);
+    assert.equal(page.status, 302, await page.clone().text());
+    assert.equal(page.headers.get('location'), '/api/auth/start?returnTo=%2Fapi%2Fadmin%2Fstatus');
+    const button = await fetch(new Request('https://www.example.test/api/auth/login.js'), withLogin);
+    assert.equal(button.status, 200);
+    assert.match(button.headers.get('content-type'), /javascript/);
+    assert.ok((await button.text()).includes(publicKey), 'the Worker serves the button with E9_PUBLIC_API_KEY');
+
     const upgraded = await call('POST', '/admin/upgrade', { drop_plugin_history: true });
     const body = await upgraded.json();
     assert.equal(upgraded.status, 200, JSON.stringify(body));

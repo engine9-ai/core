@@ -84,7 +84,9 @@ afterwards.
 ### What host code should do
 
 Sign-in, the session, and access checks are core's. Use them before writing
-your own: [docs/sign-in.md](../docs/sign-in.md).
+your own. With Delegate login, the default is core's Login button (two lines
+in the page header, `GET /api/auth/login.js`), not a sign-in flow of the
+site's own: [docs/sign-in.md](../docs/sign-in.md).
 
 Use the session's `roles` to decide what to show: the Admin link, which page
 to land on after login (`sessionHasRole`, `sessionPrimaryRole`). Reading the
@@ -170,7 +172,7 @@ person.
    The Domain UNID is not stored on that person.
 2. **With no confirmed email, the Domain UNID is the key**
    (`person_id_delegate`). This covers Level 0 visitors, an unconfirmed
-   address (Facebook addresses are never confirmed), and a Grant that does not
+   address (Facebook and Microsoft addresses are never confirmed), and a Grant that does not
    share `email`. `merged_from` links the browser's earlier Domain UNID to the
    same person.
 3. **Only core joins people.** Two addresses are one person when core's data

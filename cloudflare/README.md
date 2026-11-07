@@ -133,6 +133,12 @@ one piece at a time.
    | `E9_DOMAIN` | var, optional | JWT `aud` when pages and `/api` are on different hosts |
    | `E9_ALLOWED_ORIGINS` | var, optional | Browser origins allowed to call the API (CORS) |
 
+   With `SESSION_SECRET` set, the Worker also serves the Delegate Login
+   button at `/api/auth/login.js`. A page adds
+   `<span data-e9-login-widget></span>` and
+   `<script src="/api/auth/login.js" defer></script>`. Use it rather than a
+   sign-in of the site's own ([docs/sign-in.md](../docs/sign-in.md)).
+
    Deploying from GitHub Actions, with no terminal: copy
    [`github-deploy.yml.example`](github-deploy.yml.example) to
    `.github/workflows/deploy.yml` ([docs/no-command-line.md](../docs/no-command-line.md)).

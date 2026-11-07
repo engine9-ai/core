@@ -14,8 +14,11 @@ those is a signed-in person who lacks access and is sent back to sign in.
 Delegate remembers the address they shared, returns the same one at once,
 and they go round with nothing on screen.
 
-You may still build your own sign-in on top of core. If you do, follow
-[If you build your own](#if-you-build-your-own).
+**If the site uses Delegate login, use the default Login button**
+([step 2](#2-add-the-login-button)): two lines in the page header, served by
+core with the site's own key. It is what `demo-festival` ships, and every
+case below is already handled in it. Build your own only for a need the button
+cannot meet. If you do, follow [If you build your own](#if-you-build-your-own).
 
 ## Who does what
 
@@ -266,8 +269,10 @@ invisible to a server gate.
 
 ## If you build your own
 
-Core does not forbid it. If your site needs its own sign-in flow, a custom
-session, or its own 403 page, keep these rules:
+Try the default Login button first. Most sites that roll their own sign-in
+rebuild part of it, and get the loop above wrong. Core does not forbid
+it. If your site needs its own sign-in flow, a custom session, or its own
+403 page, keep these rules:
 
 1. Start sign-in with `auth.beginLogin()` (a redirect) or
    `auth.beginLoginRequest()` (page JavaScript), and finish it with

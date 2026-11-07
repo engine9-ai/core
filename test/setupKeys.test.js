@@ -326,7 +326,8 @@ describe('setupKeys --remote decides from the target', () => {
       const local = await setupKeys({ cwd, applySql: async (sql) => inserted.push(sql) });
       assert.equal(readEnvValue(readFileSync(path.join(cwd, '.env'), 'utf8'), 'E9_PUBLIC_API_KEY'), prodPublic);
       assert.equal(local.created.public, false);
-      assert.ok(inserted.some((sql) => /INSERT OR IGNORE INTO api_key .*'site-public'/.test(sql)), 'its hash goes into the local database');
+      assert.ok(inserted.some((sql) => /^INSERT INTO api_key .*'site-public'/.test(sql)), 'its hash goes into the local database');
+      assert.ok(inserted.every((sql) => !/OR IGNORE/.test(sql)), 'SQL MySQL accepts too');
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

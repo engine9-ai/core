@@ -56,7 +56,7 @@ test('status page: a signed-in superadmin sees the report as a page, with fixes 
     assert.match(html, /signed in as ops@example\.com/);
     assert.match(html, /SESSION_SECRET is not set/);
     assert.match(html, /Run the deploy workflow again/);
-    assert.match(html, /or, with a terminal: npx e9core setup --remote/);
+    assert.match(html, /or, with a terminal: npx e9core setup-keys --remote/);
     assert.doesNotMatch(html, /<script/i);
   } finally {
     await ctx.worker.destroy();
@@ -154,7 +154,7 @@ test('without SESSION_SECRET, the status page and /auth/* say which secret is mi
     assert.equal(login.status, 501);
     assert.equal(login.body.reason, 'login_off');
     assert.equal(login.body.missing, 'SESSION_SECRET');
-    assert.equal(login.body.fix, 'npx e9core setup --remote');
+    assert.equal(login.body.fix, 'npx e9core setup-keys --remote');
     assert.match(login.body.fix_web, /deploy workflow/);
   } finally {
     await ctx.worker.destroy();

@@ -598,10 +598,11 @@ async function installDefaultSchema(worker, { pluginId, name }) {
   await worker.installDefaultPlugins();
   const { SqlApiKeyStore } = await import('../auth/index.js');
   await new SqlApiKeyStore({ worker }).deploy();
-  await worker.query({
-    sql: 'INSERT OR IGNORE INTO plugin (id, path, name) VALUES (?, ?, ?)',
-    values: [pluginId, 'website', name]
-  });
+  // Plain select-then-insert: the same SQL on SQLite, D1, and MySQL.
+  const { data } = await worker.query({ sql: 'select id from plugin where id=?', values: [pluginId] });
+  if (!data?.[0]) {
+    await worker.insertArray({ table: 'plugin', array: [{ id: pluginId, path: 'website', name, table_prefix: '' }] });
+  }
 }
 
 async function installLocalDatabase({ cwd, db, pluginId, name, account }) {

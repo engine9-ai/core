@@ -372,7 +372,7 @@ When a new build needs storage, decide in this order:
 | `DELEGATE_URL`       | Optional. Your own delegate deployment. Default `https://delegate.network`    |
 
 `npx e9core setup --rotate` replaces the local keys and secrets;
-`setup --remote --rotate` replaces production's. Production has its own admin
+`setup-keys --remote --rotate` replaces production's. Production has its own admin
 key and secrets (`.env.production` when this machine made them); the public
 key is the same everywhere, and the setup token stays local. The optional
 values are plain configuration: on Node they are environment variables; on
@@ -594,7 +594,66 @@ Errors carry a `code` from `@engine9/core/pluginRegistry`:
 Absolute paths and `install({ source })` are not supported anywhere. Put the
 plugin in a package the project lists.
 
+### Package entry points
+
+Import `@engine9/core` only through the names below, the ones in
+`package.json` `exports`. Each is supported: a release that removes one
+deprecates it first, says so in [CHANGELOG.md](CHANGELOG.md), and removes it
+no sooner than the next minor release. Any other file in the package
+(`bin/`, `lib/`, a `node_modules/@engine9/core/...` path or URL) is internal
+and can change in any release. When you need one of those, use the
+`e9core` command that does the job, or ask for an entry point.
+
+| Import | What it is |
+| --- | --- |
+| `@engine9/core` | The root: workers, the pipeline, SQL and schema helpers, API keys (`SqlApiKeyStore`), and most of the names below |
+| `@engine9/core/api` | `createApi`: the HTTP endpoints, served with its `handleFetch` or `expressHandler` |
+| `@engine9/core/auth` | API keys (`SqlApiKeyStore`, `generateApiKey`), scopes, and key verification ([auth/README.md](auth/README.md)) |
+| `@engine9/core/auth/delegate` | The default identity provider (`createDelegateAuth`) ([delegate.md](docs/identityProviders/delegate.md)) |
+| `@engine9/core/auth/gate` | `requireRole`: the page gate for a site's own Worker ([docs/sign-in.md](docs/sign-in.md)) |
+| `@engine9/core/auth/signIn` | Cookie names, return paths, and the Core Session cookie used by sign-in |
+| `@engine9/core/auth/loginButton` | The Login button script that `GET /api/auth/login.js` serves |
+| `@engine9/core/auth/policy` | Identity Level checks (`meetsRequiredAuth`) |
+| `@engine9/core/auth/roles` | Role registries and role-segment membership (`addPeopleToSegment`, `removePeopleFromSegment`) |
+| `@engine9/core/auth/segmentAccess` | Who may add or remove people in a segment |
+| `@engine9/core/auth/superadmins` | Reading a superadmins list (`superadminsFromText`, `isSuperadmin`) |
+| `@engine9/core/superadmins/node` | The superadmins file on Node |
+| `@engine9/core/auth/hmac` | HMAC-signed token helpers |
+| `@engine9/core/PersonWorker` | The person worker: `processPeople` and the people tables |
+| `@engine9/core/PluginWorker` | Plugin rows, installs, `installDefaultPlugins` |
+| `@engine9/core/SchemaWorker` | Standardize, diff, and deploy plugin schemas |
+| `@engine9/core/SQLWorker` | Queries and upserts over D1, SQLite, or MySQL |
+| `@engine9/core/peoplePipeline` | The inbound people pipeline ([lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)) |
+| `@engine9/core/id` | Person identifier stores, and `PersonIdentifierDO` for a Worker that binds `PERSON_IDS` |
+| `@engine9/core/logging` | The data log and the audit log: file, batch, R2, and S3 loggers |
+| `@engine9/core/pluginRegistry` | The registry interface and its error codes ([How plugins are loaded](#how-plugins-are-loaded)) |
+| `@engine9/core/plugins/site` | The plugins compiled into a Cloudflare bundle (aliased to `engine9.plugins.js`) |
+| `@engine9/core/plugins/node` | The Node plugin registry (`createNodePluginRegistry`) |
+| `@engine9/core/plugins/build` | What `e9core build-plugins` runs |
+| `@engine9/core/pluginPaths` | Plugin identities ([Plugin paths](#plugin-paths)) |
+| `@engine9/core/pluginSettings` | Plugin settings and their forms |
+| `@engine9/core/stackMetadata` | A plugin's or stack's include and exclude lists |
+| `@engine9/core/utilities` | Shared helpers with no platform dependency, including `getPluginUUID` (plugin ids) |
+| `@engine9/core/sql/shared` | The table upsert logic every dialect shares |
+| `@engine9/core/sql/sqlIndexName` | Index names that fit MySQL's 64-character limit |
+| `@engine9/core/sql/dialects/SQLite`, `@engine9/core/sql/dialects/MySQL` | The SQL dialects (SQLite serves D1) |
+| `@engine9/core/cloudflare/worker` | The Worker core ships ([cloudflare/README.md](cloudflare/README.md)) |
+| `@engine9/core/cloudflare/input-tools-shim`, `@engine9/core/cloudflare/unavailable-module` | Bundler aliases for a Worker build |
+
+Jobs that only a file inside the package used to do have commands:
+
+| Job | Command |
+| --- | --- |
+| The SQL for an API key row | `npx e9core create-api-key --print-sql --name <name> --scopes <scopes>` |
+| A deployed environment's keys and signing secrets | `npx e9core setup-keys --remote [--env <name>]` |
+| The engine9 tables in a new D1 database | `npx e9core setup` (local) or `npx e9core setup --remote [--env <name>]` |
+| One schema plugin's SQLite DDL | `npx e9core sqlite-ddl --schema @engine9/schemas/<name>` |
+| Schema changes in an existing database | `npx e9core upgrade` ([docs/upgrading.md](docs/upgrading.md)) |
+
 ### Package layout
+
+Where the code lives, for reading it. These are not import paths: import
+through the [entry points](#package-entry-points).
 
 - `lib/utilities.js` — shared environment-agnostic utilities
 - `lib/sql/shared.js` — canonical table upsert logic

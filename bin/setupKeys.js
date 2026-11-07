@@ -303,9 +303,12 @@ async function localKeys({ cwd, d1Name, env, accountId: projectAccountId, rotate
       scopes: ['public'],
       key: adopted || generateApiKey({ scopes: ['public'] })
     };
-    row.sql = apiKeyInsertSql({ ...row, orIgnore: Boolean(adopted) });
+    row.sql = apiKeyInsertSql(row);
     publicKey = row.key;
     created.public = !adopted;
+    // An adopted key may already have a row here. Plain SQL, not INSERT OR
+    // IGNORE: --db may be MySQL.
+    if (adopted) inserts.push(`DELETE FROM api_key WHERE key_hash = '${hashApiKey(row.key)}';`);
     inserts.push(row.sql);
     state.publicId = row.id;
     state.localApplied = false;

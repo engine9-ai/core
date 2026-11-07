@@ -359,8 +359,9 @@ not in setup docs.
   never chosen by a person or by you: `npx e9core setup` / `setup-keys`
   (and `--remote`) on Cloudflare, `openssl rand -hex 32` on own servers. Do
   not ask someone for a value, invent one, or have someone paste one into a
-  CI secret. Missing: `npx e9core setup --remote` (the deploy workflow runs
-  it). Set but malformed, or leaked: `setup --remote --rotate`. Core accepts only 64 hex characters
+  CI secret. Missing: `npx e9core setup-keys --remote` (never deploys; the
+  deploy workflow's setup step does the same). Set but malformed, or leaked:
+  `setup-keys --remote --rotate`. Core accepts only 64 hex characters
   (`signingSecretProblem` in [auth/hmac.js](auth/hmac.js)); do not loosen it.
 - Roles may set `requiredAuth.minLevel`; that is authorization policy, not
   an identity level itself.

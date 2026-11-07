@@ -275,7 +275,8 @@ recorded reason.
 7. **Host decisions.** Gate admin pages and admin routes with `requireRole`
    (`@engine9/core/auth/gate`), or use `auth.rolesForSession(session)` for
    admin actions. Sign-in, the session cookie, and the 401/403 answers are
-   core's: [docs/sign-in.md](docs/sign-in.md).
+   core's. People sign in with core's Login button (`GET /api/auth/login.js`)
+   rather than a flow the site writes: [docs/sign-in.md](docs/sign-in.md).
 8. **Verify** with [Verifying a site](#verifying-a-site).
 
 ## Converting an existing site

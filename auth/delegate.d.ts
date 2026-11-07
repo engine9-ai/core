@@ -98,7 +98,7 @@ export interface DelegateSession {
 }
 
 /** A sign-in provider Delegate can offer (`login_providers`). */
-export type DelegateLoginProvider = "google" | "facebook";
+export type DelegateLoginProvider = "google" | "facebook" | "microsoft";
 
 /**
  * Delegate sign-in branding (`brand_name`, `brand_color`, `brand_logo`,

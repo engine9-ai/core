@@ -76,7 +76,8 @@ workflow again", "run it by hand with these options", or a line to add to
 under it.
 
 Upgrades, segment changes, and every other admin route still need the admin
-key. CI covers upgrades; the rest is work for a server or a script.
+key. The workflow covers upgrades. The rest takes `--remote` from any machine
+with a Cloudflare token (below).
 
 ## The production admin key
 
@@ -91,6 +92,16 @@ holds it. That is intended:
   the site's `wrangler.jsonc` and a Cloudflare token.
 
 To replace the key, run the workflow with `rotate`.
+
+## A laptop on the same site
+
+A developer can still work on a site the workflow deploys. `npx e9core setup`
+makes the local project. When the site commits `public/engine9-config.js`,
+setup uses the public key in it, so that page works locally too (the Login
+button needs nothing: it takes the key from the environment). Keep the workflow as the only thing that deploys: push to deploy,
+and do not run `setup --remote` without `--no-deploy`. Key and secret fixes
+are `npx e9core setup-keys --remote`, which never deploys. Upgrades, status,
+and segment changes from the laptop take `--remote`.
 
 ## Agents
 

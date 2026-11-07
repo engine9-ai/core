@@ -320,7 +320,7 @@ export function createApi({
   // A SESSION_SECRET a person chose can be guessed offline from any session
   // token. Login stays off with it; every other route still works.
   let loginOffMessage =
-    'login is not enabled: SESSION_SECRET is not set. Setup makes it (npx e9core setup --remote, which the deploy workflow runs); never choose one yourself';
+    'login is not enabled: SESSION_SECRET is not set. Setup makes it (npx e9core setup-keys --remote; the deploy workflow runs setup); never choose one yourself';
   const sessionSecretProblem =
     !delegateAuth && delegate?.sessionSecret ? signingSecretProblem(delegate.sessionSecret) : null;
   if (sessionSecretProblem) {
@@ -646,7 +646,7 @@ export function createApi({
     return json(200, result);
   }
 
-  const SECRETS_WEB_FIX = 'Run the deploy workflow again: its setup step (npx e9core setup --remote) adds the secrets the Worker does not have';
+  const SECRETS_WEB_FIX = 'Run the deploy workflow again: its setup step adds the secrets the Worker does not have';
   const ROTATE_WEB_FIX = 'Run the deploy workflow by hand with "rotate" checked: it replaces the value (everyone signed in signs in again)';
 
   /*
@@ -661,7 +661,7 @@ export function createApi({
       checks.push(
         has(name)
           ? { id: `secrets.${name}`, area: 'secrets', status: 'pass', title: `${name} is set` }
-          : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup --remote', fix_web: SECRETS_WEB_FIX }
+          : { id: `secrets.${name}`, area: 'secrets', status: 'warn', title: `${name} is not set`, detail: why, fix: 'npx e9core setup-keys --remote', fix_web: SECRETS_WEB_FIX }
       );
     // Signing secrets must also have the shape e9core setup-keys writes.
     // AGENT_CREDENTIALS_SECRET is checked only when the site sets it.
@@ -940,7 +940,7 @@ export function createApi({
         error: loginOffMessage,
         reason: 'login_off',
         invalid: 'SESSION_SECRET',
-        fix: 'npx e9core setup --remote --rotate',
+        fix: 'npx e9core setup-keys --remote --rotate',
         fix_web: 'Run the deploy workflow by hand with "rotate" checked (docs/no-command-line.md)'
       };
     }
@@ -948,7 +948,7 @@ export function createApi({
       error: loginOffMessage,
       reason: 'login_off',
       missing: 'SESSION_SECRET',
-      fix: 'npx e9core setup --remote',
+      fix: 'npx e9core setup-keys --remote',
       fix_web: 'Run the deploy workflow again: its setup step makes SESSION_SECRET (docs/no-command-line.md)'
     };
   }
@@ -979,7 +979,7 @@ export function createApi({
       return script(
         200,
         loginButtonUnavailable(
-          'This site has no E9_PUBLIC_API_KEY in its environment, so the Login button cannot sign in. Fix: npx e9core setup --remote (or run the deploy workflow again). A site that calls createApi itself passes its env as `environment`.'
+          'This site has no E9_PUBLIC_API_KEY in its environment, so the Login button cannot sign in. Fix: npx e9core setup-keys --remote (or run the deploy workflow again). A site that calls createApi itself passes its env as `environment`.'
         ),
         'no-store'
       );
