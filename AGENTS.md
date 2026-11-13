@@ -248,11 +248,25 @@ bundle when it deploys.
 - `lib/pluginRegistry.js` is the registry interface and the error codes
   (`PLUGIN_CONFIG_INVALID`, `PLUGIN_PACKAGE_NOT_DECLARED`, `PLUGIN_NOT_FOUND`,
   `PLUGIN_IMPORT_FAILED`). Nothing under `lib/` reads plugin code from disk.
+  `compileRegistryPlugin` attaches `settings` and `credentials` from the
+  module onto the compiled plugin object.
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) is the Node
   registry. `dynamicPluginPackages` (re-read on every use) is Node only.
 - `bin/buildPlugins.js` (`e9core build-plugins`) serializes the same discovery
   for a bundle. `e9core setup` puts it in wrangler's `build.command`; do not
   tell people to run it by hand, and do not commit `engine9.plugins.js`.
+- `lib/pluginCatalog.js` (`@engine9/core/pluginCatalog`) is the published
+  surface of one plugin (name, publisher, credentials, settings, methods):
+  build, validate, bundle, and the secrets definition derived from
+  `credentials`. The standard is [docs/plugin-catalog.md](docs/plugin-catalog.md);
+  the JSON Schema is [docs/plugin-catalog.schema.json](docs/plugin-catalog.schema.json)
+  (`@engine9/core/pluginCatalog.schema.json`). `e9core catalog build` /
+  `catalog validate` produce and check entries the same way install discovers
+  plugins. Core has no catalog of its own; a host may supply entries through
+  `PluginWorker.getPluginCatalogEntry`.
+- Settings are not credentials. Credentials belong in the entry's
+  `credentials` (or a package `credentials` export); settings are warehouse
+  `setting` rows. See `lib/pluginSettings.js`.
 - No `install({ source })`, no absolute plugin paths, no second loader. A
   plugin that is not in a listed package is an error with one of the codes
   above. In this

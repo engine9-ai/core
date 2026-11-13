@@ -398,6 +398,7 @@ Cloudflare put them under `vars` in `wrangler.jsonc`.
 | `npx e9core upgrade --plugin <path> --url <site>`            | Run one plugin's upgrades, then reinstall it (any package; `upgrade` alone touches `@engine9/schemas` only). Plugins declare their own upgrades ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)); `--failed` retries every failed install; `--dry-run --sql` shows the statements |
 | `npx e9core status --url <site>` or `--db <url>`             | Read-only: does the database match the deployed code? Keys, account, upgrades, and every plugin's schema and last install, each with its fix. See [docs/status.md](docs/status.md) |
 | `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
+| `npx e9core catalog build --package <name> --out <dir>`      | Each plugin's catalog entry, its published surface for market.engine9.ai, secrets, and task callers; `catalog validate <file>` checks one. See [docs/plugin-catalog.md](docs/plugin-catalog.md) |
 | `npx e9core segment list\|members\|add\|remove --url <site>` or `--db <url>` | Segment membership, including the first admin (`add --segment admin --email …`). `--url` uses the site's API with the admin key, so it reaches D1. See [docs/segments.md](docs/segments.md) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
@@ -594,6 +595,14 @@ Errors carry a `code` from `@engine9/core/pluginRegistry`:
 Absolute paths and `install({ source })` are not supported anywhere. Put the
 plugin in a package the project lists.
 
+The **registry** answers "which module is this plugin path?" The **catalog
+entry** is what the plugin publishes about itself for other tools (name,
+publisher, credentials, settings, the methods callers may run):
+[docs/plugin-catalog.md](docs/plugin-catalog.md). Build and check entries with
+`e9core catalog build` / `catalog validate`, or import
+`@engine9/core/pluginCatalog`. A site that only installs and runs plugins does
+not need either command.
+
 ### Package entry points
 
 Import `@engine9/core` only through the names below, the ones in
@@ -632,6 +641,7 @@ and can change in any release. When you need one of those, use the
 | `@engine9/core/plugins/build` | What `e9core build-plugins` runs |
 | `@engine9/core/pluginPaths` | Plugin identities ([Plugin paths](#plugin-paths)) |
 | `@engine9/core/pluginSettings` | Plugin settings and their forms |
+| `@engine9/core/pluginCatalog` | Build, check, and bundle plugin catalog entries ([docs/plugin-catalog.md](docs/plugin-catalog.md)); the JSON Schema is `@engine9/core/pluginCatalog.schema.json` |
 | `@engine9/core/stackMetadata` | A plugin's or stack's include and exclude lists |
 | `@engine9/core/utilities` | Shared helpers with no platform dependency, including `getPluginUUID` (plugin ids) |
 | `@engine9/core/sql/shared` | The table upsert logic every dialect shares |
@@ -663,7 +673,9 @@ through the [entry points](#package-entry-points).
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy plugin schemas
 - `lib/PluginWorker.js` — plugin rows, stack install, `installDefaultPlugins`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
-- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem)
+- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem); compile attaches `settings` and `credentials`
+- `lib/pluginCatalog.js` — build, validate, and bundle a plugin's published catalog entry ([docs/plugin-catalog.md](docs/plugin-catalog.md)); `bin/catalog.js` is `e9core catalog`
+- `lib/pluginSettings.js` — settings declarations from the catalog entry and the package
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use
 - `bin/buildPlugins.js` (`e9core build-plugins`) — the same discovery serialized for a Cloudflare bundle
 - `lib/PersonWorker.js`, `lib/peoplePipeline/` — inbound person pipeline. See [lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)

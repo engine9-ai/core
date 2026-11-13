@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://market.engine9.ai/schemas/plugin/v1.json",
+  "title": "engine9 plugin catalog entry, version 1",
+  "description": "The published surface of one plugin. See docs/plugin-catalog.md in @engine9/core. validatePluginCatalogEntry in @engine9/core/pluginCatalog also checks the rules a schema cannot (path starts with package.name, setting names unique across the plugin, a secret field has no default).",
+  "type": "object",
+  "required": ["catalog_version", "path", "package", "name", "publisher"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "catalog_version": { "const": 1 },
+    "path": {
+      "type": "string",
+      "maxLength": 214,
+      "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+    },
+    "package": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$" }
+      },
+      "additionalProperties": false
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "alias": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+    "description": { "type": "string" },
+    "categories": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "logo": { "$ref": "#/$defs/link" },
+    "homepage": { "$ref": "#/$defs/link" },
+    "publisher": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url": { "$ref": "#/$defs/link" },
+        "email": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "bot_path": { "type": "string", "minLength": 1 },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "credentials": {
+      "type": "object",
+      "required": ["fields"],
+      "properties": {
+        "fields": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/namedField" } },
+        "sections": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["label"],
+            "properties": { "label": { "type": "string" }, "description": { "type": "string" } }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "settings": { "$ref": "#/$defs/settings" },
+    "methods": { "$ref": "#/$defs/methods" },
+    "submodules": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "settings": { "$ref": "#/$defs/settings" },
+          "methods": { "$ref": "#/$defs/methods" }
+        },
+        "patternProperties": { "^x-": {} },
+        "additionalProperties": false
+      }
+    }
+  },
+  "patternProperties": { "^x-": {} },
+  "additionalProperties": false,
+  "$defs": {
+    "link": {
+      "type": "string",
+      "anyOf": [{ "pattern": "^https://" }, { "pattern": "^/[^/]" }]
+    },
+    "field": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "string",
+            "text",
+            "password",
+            "secret_text",
+            "email",
+            "url",
+            "number",
+            "integer",
+            "boolean",
+            "select",
+            "json",
+            "array",
+            "date",
+            "datetime"
+          ]
+        },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "help": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "section": { "type": "string" },
+        "required": { "type": "boolean" },
+        "hidden": { "type": "boolean" },
+        "secret": { "type": "boolean" },
+        "deprecated": { "type": ["boolean", "string"] },
+        "default": {},
+        "values": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "number" },
+              {
+                "type": "object",
+                "required": ["value"],
+                "properties": { "value": {}, "label": { "type": "string" } }
+              }
+            ]
+          }
+        },
+        "pattern": { "type": "string" },
+        "min": { "type": "number" },
+        "max": { "type": "number" }
+      },
+      "patternProperties": { "^x-": {} }
+    },
+    "namedField": {
+      "allOf": [{ "$ref": "#/$defs/field" }],
+      "required": ["name"],
+      "properties": { "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$" } },
+      "unevaluatedProperties": false
+    },
+    "option": {
+      "allOf": [{ "$ref": "#/$defs/field" }],
+      "unevaluatedProperties": false
+    },
+    "settings": { "type": "array", "items": { "$ref": "#/$defs/namedField" } },
+    "methods": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "deprecated": { "type": ["boolean", "string"] },
+          "options": {
+            "type": "object",
+            "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,63}$" },
+            "additionalProperties": { "$ref": "#/$defs/option" }
+          }
+        },
+        "patternProperties": { "^x-": {} },
+        "additionalProperties": false
+      }
+    }
+  }
+}

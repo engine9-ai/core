@@ -7,6 +7,32 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.20.1: standard plugin catalog entries; registry attaches credentials
+
+No site needs to change anything for this release.
+
+A plugin's **catalog entry** is now a documented, versioned published surface:
+name, publisher, credentials, settings, and the methods callers may run.
+Secrets tools, task callers, settings UIs, and [market.engine9.ai](https://market.engine9.ai)
+read that entry; they do not read the plugin's code to find these things out.
+Tables, transforms, upgrades, and install rules stay in the package.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | **New: the catalog entry standard.** Top-level `credentials`, `settings`, `methods`, and `submodules.<Name>.{settings,methods}` (no longer nested under `metadata`). JSON Schema at `@engine9/core/pluginCatalog.schema.json`; prose in [docs/plugin-catalog.md](docs/plugin-catalog.md) | Plugin authors, market publishers, hosts that build or validate entries | No. Hosts still read the older nested shape during the move |
+| 2 | **New: `@engine9/core/pluginCatalog`.** `buildPluginCatalogEntry`, `validatePluginCatalogEntry`, `bundlePluginCatalog`, `pluginCredentialsDefinition` (secrets definition derived from `credentials`) | Packages and hosts that produce or check entries | No |
+| 3 | **New: `e9core catalog build` and `e9core catalog validate`.** Build reads plugins through `package.json` `"engine9"`, the same way install does, and writes one entry per plugin path | Plugin package maintainers | No |
+| 4 | **Registry compile attaches `credentials`.** `compileRegistryPlugin` sets `plugin.credentials` from the module when the plugin object does not already have it, the same way it attaches `settings` | Packages that export `credentials` beside the plugin | No |
+| 5 | **Settings read the new entry shape.** `catalogSettingDefinitions` takes `settings` and `submodules.<Name>.settings`, and still accepts `metadata.settings` / `submodules.<Name>.metadata.settings` | Hosts that supply `PluginWorker.getPluginCatalogEntry` | No |
+
+Producers write only the new shape (`e9core catalog build`). Consumers that already load entries through `ENGINE9_PLUGIN_METADATA_PATH` keep working with either shape.
+
+| What a site changes | |
+| --- | --- |
+| Every site | Nothing |
+| A plugin package that publishes a catalog entry | Prefer the new shape; run `npx e9core catalog build --package <name> --out catalog` and `npx e9core catalog validate` before publishing. Declare connect fields under `credentials`, not as settings |
+| Code that built entries with `metadata.auth_fields` / `metadata.settings` | Write `credentials` and top-level `settings` instead ([docs/plugin-catalog.md](docs/plugin-catalog.md#from-the-older-shape)). Hosts still accept the old keys |
+
 ## 1.20.0: setup with no command line; the 1.19.0 deprecations are removed
 
 A site changes something only if it still uses one of the items 1.19.0

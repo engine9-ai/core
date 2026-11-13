@@ -112,6 +112,14 @@
         Reads "engine9.pluginPackages" (or legacy "engine9.plugins") from package.json.
         --check exits non-zero when the file is out of date (for CI).
 
+    e9core catalog build (--plugin <path>[,<path>] | --package <name>) [--out <dir>]
+    e9core catalog validate <file.json> [...]
+        A plugin's catalog entry: its published surface (name, publisher,
+        credentials, settings, methods) for market.engine9.ai, secrets, and
+        task callers (docs/plugin-catalog.md). build reads the plugins
+        through package.json "engine9", as install does. Both exit 1 when an
+        entry does not meet the standard.
+
     e9core segment list    [--db ...] [--account <id>] [--handle <handle>]
     e9core segment members --segment <role name | segment id>
     e9core segment add     --segment admin --email a@x.org[,b@y.org] [--emails file.txt] [--person-id 12]
@@ -184,6 +192,7 @@ import { runSetupStep } from './setupFlow.js';
 import { adminKey, callSite, installDefaultPluginsSite, upgradeSite } from './upgrade.js';
 import { remoteSiteUrl, withTemporaryAdminKey } from './temporaryKey.js';
 import { renderStatus, runStatusCommand } from './status.js';
+import { catalogCommand } from './catalog.js';
 import { ConsoleLogger, JsonlFileLogger } from '../logging/index.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
 import PersonWorker from '../lib/PersonWorker.js';
@@ -823,10 +832,14 @@ async function main() {
       else console.log(`${result.changed ? 'Wrote' : 'Unchanged'} ${rel} (${result.count} plugins).`);
       break;
     }
+    case 'catalog': {
+      if (!(await catalogCommand(args))) process.exitCode = 1;
+      break;
+    }
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|upgrade|status|build-plugins>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|upgrade|status|build-plugins|catalog>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

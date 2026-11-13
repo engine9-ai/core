@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.20.0",
+  "version": "1.20.1",
   "publishConfig": {
     "access": "public"
   },
@@ -19,6 +19,8 @@
     "./SchemaWorker": "./lib/SchemaWorker.js",
     "./PluginWorker": "./lib/PluginWorker.js",
     "./pluginSettings": "./lib/pluginSettings.js",
+    "./pluginCatalog": "./lib/pluginCatalog.js",
+    "./pluginCatalog.schema.json": "./docs/plugin-catalog.schema.json",
     "./pluginPaths": "./lib/pluginPaths.js",
     "./pluginRegistry": "./lib/pluginRegistry.js",
     "./plugins/site": "./lib/plugins/site.js",
@@ -74,7 +76,7 @@
   "author": "engine9",
   "license": "MIT",
   "dependencies": {
-    "@engine9/input-tools": "^2.7.0",
+    "@engine9/input-tools": "^2.7.1",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
