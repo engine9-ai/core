@@ -29,6 +29,9 @@
  */
 
 import { loginButtonSnippet } from '../auth/loginButton.js';
+import { REQUIRED_PLUGINS } from '../lib/requiredPlugins.js';
+import { readEngine9Config } from './buildPlugins.js';
+import { CONTACT_EDITION } from '../api/setupSteps.js';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -429,7 +432,8 @@ export async function setup(options = {}) {
       const installed = await ensureDatabaseDrivers(cwd, db);
       if (installed.length) notes.push(`Installed ${installed.join(' ')}.`);
       await installLocalDatabase({ cwd, db, pluginId, name, account });
-      notes.push('Created tables in the database.');
+      notes.push('Created the required plugins\' tables in the database.');
+      notes.push(pluginsNote(`--db ${db}`, setupInstallList(cwd)));
     }
     if (!options.skipKeys) {
       await withDatabase(cwd, db, account, async (worker) => {
@@ -523,7 +527,7 @@ export async function setup(options = {}) {
     await installLocalDatabase({ cwd, db: dbUrl, pluginId, name, account });
   }
   if (needLocal || needRemote) {
-    // D1 gets a fresh default install every time, never a copy of engine9.db
+    // D1 gets a fresh install of the required plugins every time, never a copy of engine9.db
     // (which may hold test people). Nothing is kept: rerun setup to load again.
     const tables = await withFreshSchemaSql({ cwd, pluginId, name, account }, (sqlPath) => {
       if (needLocal) {
@@ -538,6 +542,7 @@ export async function setup(options = {}) {
     });
     const where = [needLocal && 'local D1', needRemote && `${envName || 'production'} D1`].filter(Boolean).join(' and ');
     notes.push(`Loaded ${tables.length} tables into ${where}: ${tables.join(', ')}.`);
+    notes.push(pluginsNote(needRemote ? '--remote' : `--db ${options.db || 'sqlite://./engine9.db'}`, setupInstallList(cwd)));
     if (needLocal) state.schemaLocal = true;
   }
 
@@ -569,6 +574,18 @@ export async function setup(options = {}) {
   page that should let people log in adds these two lines. No key to copy;
   core serves the button with the site's public key (auth/loginButton.js).
 */
+/** What setup installed, and the recommended next step when the site chose nothing yet. */
+export function pluginsNote(target, install = []) {
+  const required = `the required plugins (${REQUIRED_PLUGINS.join(', ')})`;
+  if (install.length) return `Installed ${required} and ${install.join(', ')} (package.json "engine9.install").`;
+  return [
+    `Installed ${required}. Nothing else is installed yet.`,
+    `  Next, install the contact edition (recommended: names, email, phone, address; what signup, login, and adding admins by email expect):`,
+    `    npx e9core install --plugin ${CONTACT_EDITION} ${target}`,
+    '  Advanced: another edition, or none, changes what the site can do. Read the @engine9/schemas README before choosing one.'
+  ].join('\n');
+}
+
 export function loginButtonNote() {
   return [
     'Optional, when visitors should log in: put the Delegate Login button in your page header.',
@@ -594,10 +611,16 @@ async function withDatabase(cwd, db, { accountId, accountHandle }, fn) {
   }
 }
 
-async function installDefaultSchema(worker, { pluginId, name }) {
-  await worker.installDefaultPlugins();
-  const { SqlApiKeyStore } = await import('../auth/index.js');
-  await new SqlApiKeyStore({ worker }).deploy();
+/* package.json "engine9.install": what setup installs after the required plugins. */
+export function setupInstallList(cwd) {
+  return readEngine9Config(cwd).install;
+}
+
+async function installRequiredSchema(worker, { pluginId, name, install = [] }) {
+  // The required plugins and the api_key table, then the plugins the site
+  // chose (package.json "engine9.install", written by the wizard's plugins step).
+  await worker.installRequiredPlugins();
+  for (const path of install) await worker.install({ path });
   // Plain select-then-insert: the same SQL on SQLite, D1, and MySQL.
   const { data } = await worker.query({ sql: 'select id from plugin where id=?', values: [pluginId] });
   if (!data?.[0]) {
@@ -606,7 +629,8 @@ async function installDefaultSchema(worker, { pluginId, name }) {
 }
 
 async function installLocalDatabase({ cwd, db, pluginId, name, account }) {
-  await withDatabase(cwd, db, account, (worker) => installDefaultSchema(worker, { pluginId, name }));
+  const install = setupInstallList(cwd);
+  await withDatabase(cwd, db, account, (worker) => installRequiredSchema(worker, { pluginId, name, install }));
 }
 
 async function installSchema({ cwd, d1, pluginId, name, account }) {
@@ -619,7 +643,7 @@ async function installSchema({ cwd, d1, pluginId, name, account }) {
     plugins: createNodePluginRegistry({ cwd })
   });
   try {
-    await installDefaultSchema(worker, { pluginId, name });
+    await installRequiredSchema(worker, { pluginId, name, install: setupInstallList(cwd) });
   } finally {
     await worker.destroy();
   }

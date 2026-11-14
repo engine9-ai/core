@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.20.1",
+  "version": "1.21.0",
   "publishConfig": {
     "access": "public"
   },
@@ -26,7 +26,8 @@
     "./plugins/site": "./lib/plugins/site.js",
     "./plugins/build": "./bin/buildPlugins.js",
     "./plugins/node": "./bin/nodePluginRegistry.js",
-    "./stackMetadata": "./lib/stackMetadata.js",
+    "./pluginIncludes": "./lib/pluginIncludes.js",
+    "./requiredPlugins": "./lib/requiredPlugins.js",
     "./PersonWorker": "./lib/PersonWorker.js",
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
     "./auth": "./auth/index.js",
@@ -87,7 +88,7 @@
     "uuid": "^14.0.1"
   },
   "peerDependencies": {
-    "@engine9/schemas": "^1.13.0",
+    "@engine9/schemas": "^1.14.0",
     "better-sqlite3": ">=11",
     "knex": ">=3",
     "mysql2": ">=3"

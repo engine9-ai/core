@@ -48,7 +48,7 @@ describe('SQLWorker.describe on MySQL and MariaDB', () => {
 describe('setup on MySQL', () => {
   it('the local install writes no SQLite-only SQL (INSERT OR IGNORE)', () => {
     const source = readFileSync(new URL('../bin/setup.js', import.meta.url), 'utf8');
-    const install = source.slice(source.indexOf('async function installDefaultSchema'), source.indexOf('async function installLocalDatabase'));
+    const install = source.slice(source.indexOf('async function installRequiredSchema'), source.indexOf('async function installLocalDatabase'));
     assert.ok(install.length > 0);
     assert.doesNotMatch(install, /OR IGNORE/i);
   });

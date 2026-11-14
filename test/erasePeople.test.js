@@ -4,7 +4,7 @@ import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 
 const unid = (n) => `site.example.com:${n.toString(16).padStart(64, '0')}`;
 
@@ -24,7 +24,7 @@ async function personRows(worker, personId) {
 test('erasePeople removes one person from every person_id table and leaves others', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'erase');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const { personIds: [alexId] } = await worker.processPeople({
@@ -77,7 +77,7 @@ test('erasePeople removes one person from every person_id table and leaves other
 test('POST /admin/erase needs admin and logs only ids and counts', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'erase-api');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const keyStore = new SqlApiKeyStore({ worker });

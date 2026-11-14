@@ -89,12 +89,6 @@ export async function upgradeSite({ url, key, options = {}, fetchImpl = fetch })
   return callSite({ url, key, route: '/admin/upgrade', body: options, fetchImpl });
 }
 
-export async function installDefaultPluginsSite({ url, key, path, fetchImpl = fetch }) {
-  return callSite({
-    url,
-    key,
-    route: '/admin/install-default-plugins',
-    body: path ? { path } : {},
-    fetchImpl
-  });
+export async function installSite({ url, key, path, fetchImpl = fetch }) {
+  return callSite({ url, key, route: '/admin/install', body: { path }, fetchImpl });
 }

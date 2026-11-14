@@ -3,8 +3,8 @@
 A catalog entry is the published surface of one plugin: what it is, who
 publishes it, what a person configures (credentials and settings), and what a
 caller can run (methods). Secrets tools, task callers, settings screens, and
-[market.engine9.ai](https://market.engine9.ai) read the entry. None of them
-reads the plugin's code to find these things out.
+plugin catalogs such as [market.engine9.ai](https://market.engine9.ai) read the
+entry. None of them reads the plugin's code to find these things out.
 
 An entry does not list everything a plugin does. Tables, transforms, upgrades,
 install rules, and anything a plugin keeps to itself stay in the package. A
@@ -12,8 +12,9 @@ method that is not in the entry can still exist; it just is not offered to
 callers.
 
 - JSON Schema: [plugin-catalog.schema.json](plugin-catalog.schema.json),
-  served at `https://market.engine9.ai/schemas/plugin/v1.json`, and exported
-  as `@engine9/core/pluginCatalog.schema.json`.
+  exported as `@engine9/core/pluginCatalog.schema.json`. Its `$id`,
+  `https://market.engine9.ai/schemas/plugin/v1.json`, names the standard;
+  `PLUGIN_CATALOG_SCHEMA_URL` is read from that file.
 - Build and check entries: `@engine9/core/pluginCatalog`
   (`buildPluginCatalogEntry`, `validatePluginCatalogEntry`) and
   `e9core catalog build` / `e9core catalog validate`.
@@ -25,11 +26,11 @@ path is the entry's identity, the same path install uses
 (`acme-plugins/loyalty`, `@engine9/plugins/e9email`,
 `@frakture-com/channelbots/ActBlueBot`).
 
-| URL | |
-| --- | --- |
-| `https://market.engine9.ai/plugins/<path>.json` | The newest published entry for the path |
-| `https://market.engine9.ai/plugins/<path>@<version>.json` | The entry published with that package version. Never changes once published |
-| `https://plugins.engine9.ai/definitions/<path>.json` | The secrets definition for the plugin's credentials (below). Unversioned: secrets follows it |
+A catalog publishes the newest entry for each path and the entry for each
+package version, which never changes once published. Where a catalog serves
+them is the catalog's own business; a host finds entries and definitions
+through the catalog it is configured to use, never through an address in
+core.
 
 The version is the npm package version (`package.json` `"version"`), the
 only version a plugin has. A task caller that knows which package version a
@@ -134,11 +135,14 @@ tokens, logins, account ids. Every credentials field says `secret`: `true`
 for anything that grants access, `false` for an id or a region a person may
 read back. `credentials.sections` gives section keys a label and description.
 
-Credentials are kept in secrets, never in settings. The secrets definition at
-`https://plugins.engine9.ai/definitions/<path>.json` is derived from
-`credentials` (`pluginCredentialsDefinition`) and republished with each
-entry. Secrets saved for a plugin follow that URL, so a new field reaches
-every connection without rewriting it. A field that was ever secret stays
+Credentials are kept in secrets, never in settings. A catalog derives the
+secrets definition from the newest entry's `credentials` with
+`pluginCredentialsDefinition`, so every catalog derives the same one. The
+host (secrets, the server) looks it up through its own configured catalog. A
+plugin with no `credentials` has no definition, so a plugin whose secrets
+need a definition declares at least one field. Secrets saved for a plugin
+follow its newest definition, so a new field reaches every connection without
+rewriting it. A field that was ever secret stays
 secret in secrets, whatever a later entry says.
 
 A field the plugin writes for itself, such as an OAuth refresh token, need
@@ -216,19 +220,21 @@ engine9's `Engine9Workers.registerPluginCatalog` and Frakture's
 
 ## Publishing
 
-Entries reach market.engine9.ai through its publish API. Draft, to be
-confirmed by the market service:
+How entries are published is up to each catalog: its API, keys, and
+addresses are in its own guide (market's is
+[market.engine9.ai/docs](https://market.engine9.ai/docs)). Any catalog:
 
-| Request | |
-| --- | --- |
-| `PUT /v1/plugins/<path>` with the entry as the body | Publish. `Authorization: Bearer <publisher key>`. The key is issued by market and may publish only paths under the package names it was issued for. Refused with 422 and the validator's errors when the entry does not meet the standard |
-| | The first publish of a `package.version` stores `<path>@<version>.json` for good. Publishing the same version again with different content is refused with 409; publish a new version |
-| | Each publish replaces `<path>.json` when its version is the newest for the path, and republishes the secrets definition |
-| `GET /plugins/<path>.json`, `GET /plugins/<path>@<version>.json` | Read, as above |
-| `GET /plugins/index.json` | Every published path with its newest version, name, alias, and publisher |
+- **Validates every entry** with `validatePluginCatalogEntry`, the same check
+  `e9core catalog validate` runs, and refuses one that does not meet the
+  standard.
+- **Stores each version once.** A published `path` and `package.version`
+  never change. The same content again is not an error; different content for
+  a published version is refused.
+- **Derives secrets definitions with `pluginCredentialsDefinition`.**
 
-Market validates each entry with `validatePluginCatalogEntry`, the same check
-`e9core catalog validate` runs.
+A published version never changes, so anything that changes an entry needs a
+new `package.version`, and two builds of the same code must produce the same
+entry (no timestamps or hostnames).
 
 ## Bundles
 

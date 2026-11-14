@@ -81,7 +81,7 @@ test('a plugin outside @engine9/schemas: shouldUpgrade gates run, status reports
   const { calls, upgrade } = trimTitles();
   const worker = memory(registry({ upgrades: [upgrade, never] }));
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: BLOG });
     await post(worker, ' Hello');
     const pluginId = (await worker.list()).find((r) => r.path === BLOG).id;
@@ -146,7 +146,7 @@ test('a plugin that only carries upgrades for other plugins runs by name without
   ];
   const worker = memory(registry({ cleanup }));
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: BLOG });
     await post(worker, '');
     await post(worker, 'Kept');
@@ -174,7 +174,7 @@ test('plugin upgrade window: a row installed from before upgradeFrom is refused 
   const { calls, upgrade } = trimTitles();
   const worker = memory(registry({ version: '1.0.0' }));
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: BLOG });
     worker.plugins = registry({ version: '2.0.0', upgrades: [upgrade], upgradeFrom: '1.1.0' });
 
@@ -201,7 +201,7 @@ test('plugin upgrade window: a row installed from before upgradeFrom is refused 
 test('core upgrade window: too old is refused before anything runs; no install records is a warning', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.query("update plugin set last_install=json_set(last_install, '$.core', '1.8.0') where path like '@engine9/schemas/%'");
 
     const refused = await worker.upgrade();
@@ -227,7 +227,7 @@ test('core upgrade window: too old is refused before anything runs; no install r
 test('a malformed declaration fails status and the named upgrade; a misspelled option is reported', async () => {
   const worker = memory(registry({ upgrades: [{ id: 'broken', run: () => ({}) }] }));
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: BLOG });
     const [declaration] = byId(await worker.status(), 'upgrades.declaration', BLOG);
     assert.equal(declaration.status, 'fail');

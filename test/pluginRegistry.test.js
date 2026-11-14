@@ -133,9 +133,23 @@ function makeSite(engine9Config) {
   return { site, pkg, write, setConfig, cleanup: () => rmSync(site, { recursive: true, force: true }) };
 }
 
-test('build-plugins selects configured plugins, stack includes, and core schema plugins', async () => {
+test('build-plugins bundles what package.json "engine9.install" names, with what it includes', async () => {
+  const { site, cleanup } = makeSite({ plugins: ['acme-plugins/crm'], install: ['@engine9/schemas/editions/contact'] });
+  try {
+    const built = buildPlugins({ cwd: site });
+    const { default: entries, packageVersions } = await import(pathToFileURL(built.out).href);
+    const paths = await createPluginRegistry(entries, { packageVersions }).paths();
+    for (const p of ['@engine9/schemas/editions/contact', '@engine9/schemas/person_email', '@engine9/schemas/person']) {
+      assert.ok(paths.includes(p), `${p} in build`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('build-plugins selects configured plugins, their includes, and the required plugins', async () => {
   const { site, setConfig, cleanup } = makeSite({
-    plugins: ['acme-plugins/crm', 'acme-plugins/exports/gifts.plugin.js', '@engine9/schemas/stacks/standard']
+    plugins: ['acme-plugins/crm', 'acme-plugins/exports/gifts.plugin.js', '@engine9/schemas/editions/contact']
   });
   try {
     const first = buildPlugins({ cwd: site });
@@ -154,9 +168,11 @@ test('build-plugins selects configured plugins, stack includes, and core schema 
     for (const p of [
       'acme-plugins/crm',
       'acme-plugins/exports/gifts.plugin.js',
-      '@engine9/schemas/stacks/standard',
+      '@engine9/schemas/editions/contact',
       '@engine9/schemas/transaction/core',
-      '@engine9/schemas/segment'
+      '@engine9/schemas/person_email',
+      '@engine9/schemas/segment',
+      '@engine9/schemas/source_code'
     ]) {
       assert.ok(paths.includes(p), `${p} in build`);
     }

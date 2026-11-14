@@ -295,17 +295,24 @@ Roles gate on `level` through `requiredAuth.minLevel`.
 
 The visitor waits on your server between Delegate's last screen and the
 logged-in page. Do not install or migrate anything in that request.
-`installDefaultPlugins` diffs every table of every schema plugin, which is
+An install diffs every table of every schema plugin, which is
 dozens of round trips on D1, and a cold Worker would pay it on the first
 login of every isolate. A site's database is installed once and upgraded with
 `e9core upgrade`, so the login only needs to ask whether it is already set up:
 
 ```js
+import { REQUIRED_PLUGINS } from '@engine9/core/requiredPlugins';
+
+const EDITION = '@engine9/schemas/editions/contact'; // what this site installs
+const paths = [...REQUIRED_PLUGINS, EDITION];
 const { data } = await worker.query({
   sql: `select path from plugin where path in (${paths.map(() => '?').join(',')})`,
-  values: paths // DEFAULT_CORE_SCHEMAS from '@engine9/core/stackMetadata'
+  values: paths
 });
-if (!paths.every((p) => data.some((row) => row.path === p))) await worker.installDefaultPlugins();
+if (!paths.every((p) => data.some((row) => row.path === p))) {
+  await worker.installRequiredPlugins();
+  await worker.install({ path: EDITION });
+}
 ```
 
 One query when installed; a full install only for a database that is not.

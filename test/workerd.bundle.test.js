@@ -16,7 +16,7 @@ import { buildPlugins } from '../bin/buildPlugins.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import { makeLegacyPersonNames } from './helpers/legacyPersonNames.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -308,7 +308,7 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
   }
 });
 
-test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run on D1 inside the bundle', async () => {
+test('Cloudflare worker: GET /api/admin/status, the plugin_history drop, and retire_stacks run on D1 inside the bundle', async () => {
   const siteDir = await mkdtemp(path.join(tmpdir(), 'e9-site-status-'));
   const registryFile = path.join(siteDir, 'engine9.plugins.js');
   const dbFile = path.join(siteDir, 'engine9.db');
@@ -318,7 +318,7 @@ test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run o
   let adminKey;
   let publicKey;
   try {
-    await setupWorker.installDefaultPlugins();
+    await applyContactEdition(setupWorker);
     await setupWorker.query('create table plugin_history (id char(36) primary key, plugin_id char(36), path varchar(255))');
     const keyStore = new SqlApiKeyStore({ worker: setupWorker });
     await keyStore.deploy();
@@ -371,10 +371,15 @@ test('Cloudflare worker: GET /api/admin/status and the plugin_history drop run o
     assert.match(button.headers.get('content-type'), /javascript/);
     assert.ok((await button.text()).includes(publicKey), 'the Worker serves the button with E9_PUBLIC_API_KEY');
 
+    // A database from before editions: the contact edition's row under its old stacks/ path.
+    d1.db.exec("update plugin set path='@engine9/schemas/stacks/standard', name='@engine9/schemas/stacks/standard' where path='@engine9/schemas/editions/contact'");
     const upgraded = await call('POST', '/admin/upgrade', { drop_plugin_history: true });
     const body = await upgraded.json();
     assert.equal(upgraded.status, 200, JSON.stringify(body));
     assert.deepEqual(body.upgrades.find((u) => u.id === 'plugin_history').dropped, ['plugin_history']);
+    assert.deepEqual(body.upgrades.find((u) => u.id === 'retire_stacks').renamed, ['@engine9/schemas/editions/contact']);
+    assert.ok(d1.db.prepare("select id from plugin where path='@engine9/schemas/editions/contact'").get());
+    assert.ok(!d1.db.prepare("select id from plugin where path like '@engine9/schemas/stacks/%'").get());
     assert.ok(!d1.db.prepare("select name from sqlite_master where name='plugin_history'").get());
     const records = audited.map((line) => JSON.parse(line)).filter((r) => r.engine9_audit);
     assert.ok(records.some((r) => r.action === 'upgrade'), 'with no AUDIT_BUCKET the upgrade is in the Worker log');
@@ -397,7 +402,7 @@ test('Cloudflare worker: a site that pins the deprecated E9_PLUGIN_ID writes peo
   const setupWorker = new PersonWorker({ accountId, auth: { database_connection: `sqlite://${dbFile}` } });
   let publicKey;
   try {
-    await applyStandardStack(setupWorker);
+    await applyContactEdition(setupWorker);
     await ensurePluginRow(setupWorker, { id: pinned, path: 'website', name: 'Website' });
     const keyStore = new SqlApiKeyStore({ worker: setupWorker });
     await keyStore.deploy();

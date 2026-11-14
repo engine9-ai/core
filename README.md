@@ -19,7 +19,7 @@ Other libraries that speak it:
 
 | Library                                                        | What it is                                                                                                               |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| [`@engine9/schemas`](https://github.com/engine9-ai/schemas)    | Published schemas and inbound transforms, installed beside core. `installDefaultPlugins` deploys them into your database |
+| [`@engine9/schemas`](https://github.com/engine9-ai/schemas)    | Published schemas and inbound transforms, installed beside core. Setup installs the required ones; `e9core install` adds the rest |
 | [`@engine9/id`](https://github.com/engine9-ai/id)              | Browser library: login button, Identity Levels, content gates. Posts Identity Tokens to core's `/auth/login`             |
 | [`demo-festival`](https://github.com/engine9-ai/demo-festival) | Astro site using core and id together (SQLite locally, D1 in production)                                                 |
 | [`demo-id`](https://github.com/engine9-ai/demo-id)             | Browser-only demo of id, no core                                                                                         |
@@ -59,16 +59,31 @@ In your project folder:
 
 ```bash
 npm install @engine9/core @engine9/schemas
+npx e9core setup --step plugins   # start with the contact edition (recommended)
 npx e9core setup
 npx e9core serve
 ```
 
+- `setup --step plugins` records which plugins the site starts with (below).
 - `setup` writes `wrangler.jsonc` (Worker entry, D1 binding, database id),
   creates the tables in local D1, and writes `.env` with API keys,
   `SESSION_SECRET`, and a one-time setup token.
 - `serve` starts a local site and prints a `/setup?token=…` URL. Open it. The
   wizard checks your Cloudflare login, starts a local preview, lets you try a
   signup, and can deploy production.
+
+**Which plugins?** `setup --step plugins` records the **contact edition** in
+`package.json` (`"engine9": { "install": [...] }`), and setup installs it in
+every database it creates, production included: people's names, email,
+phone, and postal address, plus `timeline` and transactions. That is what
+signup, login, and adding admins by email expect, so start there. The setup
+wizard asks the same question.
+
+Advanced: another edition, or only the [required plugins](#the-required-plugins),
+changes what the site can do. Without the contact edition the site keeps no
+names or email addresses: it cannot email people, signups keep less, and
+admins cannot be added by email. Read the `@engine9/schemas` README and
+understand what you give up before you choose.
 
 Deploy production from the wizard, or:
 
@@ -103,12 +118,15 @@ Technical notes (bundler aliases, KV caches, R2 logs):
 
 ```bash
 npm install @engine9/core @engine9/schemas
+npx e9core setup --step plugins   # start with the contact edition (recommended)
 npx e9core setup --node
 npx e9core serve
 ```
 
 - `setup --node` creates `engine9.db` (SQLite) and `.env` with API keys and
   `SESSION_SECRET`. Nothing Cloudflare-related is touched.
+- `setup --step plugins` records the contact edition, the recommended start
+  (see **Which plugins?** under [Install on Cloudflare](#install-on-cloudflare)).
 - `serve` serves your HTML from `./public` (or safe files in the project
   folder) and the API at `/api` on one port (default 8787), and prints the
   `/setup?token=…` wizard URL.
@@ -116,6 +134,7 @@ npx e9core serve
 MySQL instead of SQLite:
 
 ```bash
+npx e9core setup --step plugins
 npx e9core setup --node --db mysql://user:pass@host/dbname
 ```
 
@@ -170,10 +189,13 @@ app.listen(8787);
 `api.handleFetch(request)` is the same thing for any `fetch`-style runtime.
 Keep `.env` out of git; `setup` adds it to `.gitignore`.
 
-Already have a database? Install only the tables:
+Already have a database? Install only the tables. `upgrade` installs the
+[required plugins](#the-required-plugins) into a database that does not have
+them, and `install` adds the plugins the site needs on top:
 
 ```bash
-npx e9core installDefaultPlugins --db mysql://user:pass@host/dbname
+npx e9core upgrade --db mysql://user:pass@host/dbname
+npx e9core install --plugin @engine9/schemas/editions/contact --db mysql://user:pass@host/dbname
 ```
 
 ## Try it
@@ -304,15 +326,6 @@ tables and the rest of the project's tables. Application code (an Astro site,
 a Next.js app, another schema) reads and writes that same database.
 
 **Table names are the engine9 standard, and they are immutable.**
-`installDefaultPlugins` creates the core person tables (`person`,
-`person_name`, `person_email`, `person_phone`, `person_address`, `segment`,
-`person_segment`, …). `person` holds only the id and timestamps; names and
-contact details are in their own tables so a PII-free account
-(`exclude_pii` on `@engine9/schemas/utilities/limited-pii`, which steers
-`installDefaultPlugins` to `@engine9/schemas/stacks/limited-pii`) can leave
-them out. Opt-in stacks such as `@engine9/schemas/stacks/standard` also install
-`timeline`, `transaction`, and related schema plugins. Pass `--stack` / `path`, or
-set the warehouse `default_stack` setting on `@engine9/schemas/plugin`.
 Those published names are the contract. `person` stays `person`. `event` stays
 `event`. Columns on those tables stay as published. Other engine9 libraries
 join on these names.
@@ -322,8 +335,56 @@ People are matched by identifier: an email hash, a phone hash, a plugin's
 its own lookup table, `person_id_<id_type>` (`person_id_email_hash_v1`,
 `person_id_phone_hash_v1`, `person_id_remote_person_id`,
 `person_id_delegate`), holding a 16-byte hash of the value and the
-`person_id`. This is the same on SQLite, D1, and MySQL. `installDefaultPlugins`
-records it as the core setting `identifier_store_kind=compact`.
+`person_id`. This is the same on SQLite, D1, and MySQL. Installing the
+required plugins records it as the core setting `identifier_store_kind=compact`.
+
+### The required plugins
+
+Every engine9 database has the required plugins, whatever else it installs.
+Core reads and writes their tables itself:
+
+| Plugin | Tables | Why core needs it |
+| --- | --- | --- |
+| `@engine9/schemas/plugin` | `plugin`, `setting` | Every install records itself here |
+| `@engine9/schemas/person` | `person` | The id and timestamps of a person; the first step of the people pipeline |
+| `@engine9/schemas/segment` | `segment`, `person_segment` | Admins and site roles ([PERMISSIONS.md](PERMISSIONS.md)) |
+| `@engine9/schemas/source_code` | `source_code_dictionary` | The people pipeline adds a `source_code_id` to every load |
+
+`REQUIRED_PLUGINS` (`@engine9/core/requiredPlugins`) is that list, and
+`PluginWorker.installRequiredPlugins()` installs it with the `api_key` table.
+`e9core setup` runs it, and `e9core upgrade` installs any that a database is
+missing. Nothing else is installed by default.
+
+The list stays slim. `person` holds only the id and timestamps; names and
+contact details are in their own plugins (`person_name`, `person_email`,
+`person_phone`, `person_address`), so an account that must not store them
+leaves them out. Those plugins are never required.
+
+A site installs the rest after setup, one plugin at a time or as an
+**edition** from `@engine9/schemas`: a plugin whose `include` list names the
+plugins a kind of site adds to the required ones.
+
+- **Start with the contact edition** (`@engine9/schemas/editions/contact`).
+  It adds names, email, phone, postal address, `timeline`, and
+  `transaction`: what signup, login, and adding admins by email expect. The
+  setup wizard's plugins step and `setup --step plugins` choose it, and record
+  it in `package.json` `"engine9": { "install": [...] }` so setup installs it
+  in every database it creates.
+- **Advanced: other editions have real costs.** The pii-free edition
+  (`@engine9/schemas/editions/pii-free`) stores hashed email and phone
+  instead of plaintext. It is not a free upgrade in privacy: the site keeps
+  no names or email addresses, so it cannot email people or show them their
+  details, and admins cannot be added by email. Choose it, or plugins one at
+  a time, only when the site must not hold contact details and you have
+  checked what it gives up. The `@engine9/schemas` README lists the editions.
+
+```bash
+npx e9core install --plugin @engine9/schemas/editions/contact --url https://www.example.com
+```
+
+`exclude_pii` on `@engine9/schemas/utilities/limited-pii` makes an account
+PII-free: core refuses the plaintext contact plugins, and any plugin that
+includes one. It installs nothing by itself.
 
 A local schema may live in the same database. Its table names must differ
 from every published engine9 table (`person`, `event`, `message`,
@@ -337,9 +398,9 @@ When a new build needs storage, decide in this order:
 1. **Use a published schema plugin.** Look through `@engine9/schemas` for a
    schema plugin that already describes the thing. An event is
    `@engine9/schemas/event` (`event`, `person_event`). It is not part of
-   the default stack, so install that schema when the project needs it
-   (`e9core sqlite-ddl --schema @engine9/schemas/event`, or add the package
-   to the stack). Keep the published table names.
+   any edition, so install it when the project needs it
+   (`e9core install --plugin @engine9/schemas/event`). Keep the published
+   table names.
 
 2. **Build an engine9 package when the feature is a primary extension of
    engine9.** If no schema plugin matches, and other engine9 projects should
@@ -390,15 +451,15 @@ Cloudflare put them under `vars` in `wrangler.jsonc`.
 | `npx e9core setup --remote [--domain host]`                  | Production D1, secrets, deploy. Adds only what production lacks; safe to re-run in CI                                                                                                                                                                 |
 | `npx e9core setup --node [--db url]`                         | SQLite (or MySQL) tables and `.env`, no Wrangler                                                                                                                                                                                                       |
 | `npx e9core serve [--api-only] [--setup]`                    | Local site + `/api`; `--setup` reopens the wizard                                                                                                                                                                                                      |
-| `npx e9core installDefaultPlugins --db <url>` or `--url <site>` | Tables and plugin rows into any SQLite, D1 file, or MySQL database; `--url` uses `POST /api/admin/install-default-plugins` with the admin key, so it reaches D1 (`--stack` picks a stack)                                                                |
+| `npx e9core install --plugin <path> --db <url>` or `--url <site>` | One plugin (and the plugins it includes) into any SQLite, D1 file, or MySQL database: plugin row, then tables; `--url` uses `POST /api/admin/install` with the admin key, so it reaches D1 |
 | `npx e9core create-api-key --db <url> --name n --scopes a,b` | One key; plaintext printed once                                                                                                                                                                                                                        |
 | `npx e9core setup-keys [--remote [--env staging]]`           | Regenerate `.env` keys; `--remote` gives that Cloudflare environment its own admin key and `SESSION_SECRET` (in `.env.production` or `.env.<env>`) and stores them as secrets                                                                          |
 | `npx e9core sqlite-ddl --schema @engine9/schemas/person`     | Print one schema's SQL                                                                                                                                                                                                                                 |
-| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: the upgrades the schema plugins declare, then a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1; `--remote` does the same with a temporary admin key, for CI); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
+| `npx e9core upgrade --url <site>` or `--db <url>`            | Run after every deploy of a new core or schemas: the upgrades the schema plugins declare, then any missing required plugin and a reinstall of the installed schema plugins (`--url` uses `POST /api/admin/upgrade`, so it reaches D1; `--remote` does the same with a temporary admin key, for CI); `--dry-run` shows the plan. See [docs/upgrading.md](docs/upgrading.md) |
 | `npx e9core upgrade --plugin <path> --url <site>`            | Run one plugin's upgrades, then reinstall it (any package; `upgrade` alone touches `@engine9/schemas` only). Plugins declare their own upgrades ([docs/plugin-upgrades.md](docs/plugin-upgrades.md)); `--failed` retries every failed install; `--dry-run --sql` shows the statements |
 | `npx e9core status --url <site>` or `--db <url>`             | Read-only: does the database match the deployed code? Keys, account, upgrades, and every plugin's schema and last install, each with its fix. See [docs/status.md](docs/status.md) |
 | `npx e9core build-plugins [--check]`                         | Write the Cloudflare plugin registry; wrangler runs this in its build step (see below)                                                                                                                                                                 |
-| `npx e9core catalog build --package <name> --out <dir>`      | Each plugin's catalog entry, its published surface for market.engine9.ai, secrets, and task callers; `catalog validate <file>` checks one. See [docs/plugin-catalog.md](docs/plugin-catalog.md) |
+| `npx e9core catalog build --package <name> --out <dir>`      | Each plugin's catalog entry, its published surface for plugin catalogs, secrets, and task callers; `catalog validate <file>` checks one. See [docs/plugin-catalog.md](docs/plugin-catalog.md) |
 | `npx e9core segment list\|members\|add\|remove --url <site>` or `--db <url>` | Segment membership, including the first admin (`add --segment admin --email …`). `--url` uses the site's API with the admin key, so it reaches D1. See [docs/segments.md](docs/segments.md) |
 
 Commands take a database URL (`--db` or `ENGINE9_DATABASE_CONNECTION`).
@@ -497,7 +558,7 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | `POST /auth/logout`   | `{ loggedOut, revoked }` (clears the `e9_session` cookie; `revoked` with `delegate.sessionRevocations`)                                                        | API key                                                           |
 | `POST /auth/role`     | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments`                      | API key + session/token matching `person_id`, or `admin`          |
 | `POST /auth/segments` | `{ add?, remove? }` — an entry is a segment id (yourself) or `{ segment_id, person_id \| email }` (someone else); `segment_id` may be a role name, and an `admin` key creates a missing standard role row. See [docs/segments.md](docs/segments.md) | API key; session for yourself; manager role or `admin` for others |
-| `POST /admin/install-default-plugins` | `{ path? }` — install the default schema plugins (or a stack); the same as `e9core installDefaultPlugins`                                          | `admin`                                                           |
+| `POST /admin/install` | `{ path }` — install one plugin and the plugins it includes; the same as `e9core install` | `admin` |
 | `GET /admin/segments` | Every segment with its role name and membership policy, plus standard roles with no row yet                                                              | `admin`                                                           |
 | `GET /admin/segments/:segment/members` | Members of a segment (id or role name, e.g. `admin`) with their emails                                                              | `admin`                                                           |
 | `GET /admin/status`   | Does the database match the deployed code ([docs/status.md](docs/status.md)). Opened in a browser with no key: the same report as a page                                                                  | `admin`; the page: a signed-in admin (role or superadmin, Level 3+) |
@@ -524,7 +585,7 @@ there.
 
 ### Plugin paths
 
-`@engine9/core/pluginPaths` treats plugin rows and stack `include` / `exclude`
+`@engine9/core/pluginPaths` treats plugin rows and `include` / `exclude`
 lists as **package identity only** (`@engine9/schemas/person`).
 The plugin registry maps that identity to a module. Paths match exactly.
 
@@ -543,9 +604,10 @@ bundle when it deploys.
 }
 ```
 
-With no `engine9` setting, that list is `["@engine9/schemas"]`. The legacy
-`engine9.plugins` list of exact identities still works (stack includes and the
-core person schema plugins are added).
+With no `engine9` setting, that list is `["@engine9/schemas"]`. An
+`engine9.plugins` list of exact identities bundles only those, plus the
+required plugins and every plugin they include. List the edition the site
+installs there too.
 
 Which plugins _run_ is still decided per account at run time: the inbound
 weaver reads the `plugin` rows, picks the steps, and looks each plugin up in
@@ -629,7 +691,7 @@ and can change in any release. When you need one of those, use the
 | `@engine9/core/superadmins/node` | The superadmins file on Node |
 | `@engine9/core/auth/hmac` | HMAC-signed token helpers |
 | `@engine9/core/PersonWorker` | The person worker: `processPeople` and the people tables |
-| `@engine9/core/PluginWorker` | Plugin rows, installs, `installDefaultPlugins` |
+| `@engine9/core/PluginWorker` | Plugin rows, installs, `installRequiredPlugins` |
 | `@engine9/core/SchemaWorker` | Standardize, diff, and deploy plugin schemas |
 | `@engine9/core/SQLWorker` | Queries and upserts over D1, SQLite, or MySQL |
 | `@engine9/core/peoplePipeline` | The inbound people pipeline ([lib/peoplePipeline/README.md](lib/peoplePipeline/README.md)) |
@@ -642,7 +704,8 @@ and can change in any release. When you need one of those, use the
 | `@engine9/core/pluginPaths` | Plugin identities ([Plugin paths](#plugin-paths)) |
 | `@engine9/core/pluginSettings` | Plugin settings and their forms |
 | `@engine9/core/pluginCatalog` | Build, check, and bundle plugin catalog entries ([docs/plugin-catalog.md](docs/plugin-catalog.md)); the JSON Schema is `@engine9/core/pluginCatalog.schema.json` |
-| `@engine9/core/stackMetadata` | A plugin's or stack's include and exclude lists |
+| `@engine9/core/requiredPlugins` | `REQUIRED_PLUGINS`: what every engine9 database has |
+| `@engine9/core/pluginIncludes` | A plugin's include and exclude lists |
 | `@engine9/core/utilities` | Shared helpers with no platform dependency, including `getPluginUUID` (plugin ids) |
 | `@engine9/core/sql/shared` | The table upsert logic every dialect shares |
 | `@engine9/core/sql/sqlIndexName` | Index names that fit MySQL's 64-character limit |
@@ -672,8 +735,9 @@ through the [entry points](#package-entry-points).
 - `lib/sql/standardizeSchema.js` — dialect-aware column standardization
 - `lib/SQLWorker.js` — query, upsert, DDL over D1, better-sqlite3, or mysql2; API-key helpers
 - `lib/SchemaWorker.js` — standardize / diff / deploy plugin schemas
-- `lib/PluginWorker.js` — plugin rows, stack install, `installDefaultPlugins`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
-- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/stackMetadata.js` — plugin identity, the registry interface and error codes (no filesystem); compile attaches `settings` and `credentials`
+- `lib/PluginWorker.js` — plugin rows, install (following include lists), `installRequiredPlugins`, `bootstrapAccount`; optional `metadata.prefix` hex allocator (third-party plugins should self-scope table names instead)
+- `lib/requiredPlugins.js` — `REQUIRED_PLUGINS`, the one list of plugins core keeps
+- `lib/pluginPaths.js`, `lib/pluginRegistry.js`, `lib/pluginIncludes.js` — plugin identity, the registry interface and error codes (no filesystem); compile attaches `settings` and `credentials`
 - `lib/pluginCatalog.js` — build, validate, and bundle a plugin's published catalog entry ([docs/plugin-catalog.md](docs/plugin-catalog.md)); `bin/catalog.js` is `e9core catalog`
 - `lib/pluginSettings.js` — settings declarations from the catalog entry and the package
 - `bin/nodePluginRegistry.js` (`@engine9/core/plugins/node`) — Node registry: static packages at start, dynamic packages per use

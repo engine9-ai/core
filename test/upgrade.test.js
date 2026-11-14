@@ -12,8 +12,8 @@ import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { installDefaultPluginsSite, upgradeEndpoint, upgradeSite } from '../bin/upgrade.js';
-import { ensurePluginRow } from './helpers/applySchemas.js';
+import { installSite, upgradeEndpoint, upgradeSite } from '../bin/upgrade.js';
+import { ensurePluginRow, installEdition } from './helpers/applySchemas.js';
 import { enableExcludePii, makeLegacyPersonNames, personColumns } from './helpers/legacyPersonNames.js';
 import appendName from '@engine9/schemas/person_name/transforms/outbound/appendName.js';
 
@@ -52,7 +52,7 @@ test('upgrade copies person names into person_name, keeps the person columns, an
     const dry = plan.upgrades.find((u) => u.id === 'person_name');
     assert.equal(dry.status, 'pending');
     assert.equal(dry.since, '1.10.1');
-    assert.ok(plan.refresh.plugins.includes('@engine9/schemas/stacks/standard'));
+    assert.ok(plan.refresh.plugins.includes('@engine9/schemas/editions/contact'));
     assert.equal(dry.pii_free, false);
     assert.equal(dry.people_with_names, 2);
     assert.deepEqual(dry.person_columns, ['given_name', 'family_name']);
@@ -169,7 +169,7 @@ test('upgrade finishes a partial run without overwriting newer person_name rows'
 test('PII-free account: dropping the columns refuses to discard names unless asked, never installs person_name', async () => {
   const worker = newWorker();
   try {
-    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii', excludePii: true });
+    await makeLegacyPersonNames(worker, { edition: '@engine9/schemas/editions/pii-free', excludePii: true });
     const pluginId = await addSite(worker, 'pii-free-site');
     await signup(worker, pluginId, [{ email: 'ada@example.com', given_name: 'Ada' }]);
 
@@ -208,14 +208,14 @@ test('PII-free account: dropping the columns refuses to discard names unless ask
   }
 });
 
-test('limited-pii stack without exclude_pii is not PII-free for upgrade', async () => {
+test('the pii-free edition without exclude_pii is not PII-free for upgrade', async () => {
   const worker = newWorker();
   try {
-    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii' });
+    await makeLegacyPersonNames(worker, { edition: '@engine9/schemas/editions/pii-free' });
     const dry = (await worker.upgrade({ dry_run: true, drop_name_columns: true })).upgrades.find(
       (u) => u.id === 'person_name_columns'
     );
-    assert.equal(dry.pii_free, false, 'stack alone does not set pii_free');
+    assert.equal(dry.pii_free, false, 'an edition alone does not set pii_free');
     await enableExcludePii(worker);
     const after = (await worker.upgrade({ dry_run: true, drop_name_columns: true })).upgrades.find(
       (u) => u.id === 'person_name_columns'
@@ -229,7 +229,7 @@ test('limited-pii stack without exclude_pii is not PII-free for upgrade', async 
 test('PII-free account with empty name columns: drop_name_columns drops them without discard_names', async () => {
   const worker = newWorker();
   try {
-    await makeLegacyPersonNames(worker, { stack: '@engine9/schemas/stacks/limited-pii', excludePii: true });
+    await makeLegacyPersonNames(worker, { edition: '@engine9/schemas/editions/pii-free', excludePii: true });
     const done = (await worker.upgrade({ drop_name_columns: true })).upgrades.find((u) => u.id === 'person_name_columns');
     assert.deepEqual(done.dropped, ['person.given_name', 'person.family_name']);
   } finally {
@@ -277,12 +277,12 @@ test('person as a view over an older table: upgrade is blocked and changes nothi
   }
 });
 
-test('upgrade refresh deploys new columns, new stack includes, and inbound snapshots on a current account', async () => {
+test('upgrade refresh deploys new columns, new includes, and inbound snapshots on a current account', async () => {
   const worker = newWorker();
   try {
-    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
+    await installEdition(worker, '@engine9/schemas/editions/contact');
     // Stand-ins for an older @engine9/schemas: a column the new schema adds,
-    // a plugin the stack now includes, and a stale snapshot.
+    // a plugin the edition now includes, and a stale snapshot.
     await worker.query('alter table person_email drop column subscription_status');
     await worker.query("delete from plugin where path='@engine9/schemas/person_phone'");
     await worker.query("update plugin set transforms='{}' where path='@engine9/schemas/person_address'");
@@ -300,6 +300,141 @@ test('upgrade refresh deploys new columns, new stack includes, and inbound snaps
 
     const skipped = await worker.upgrade({ refresh: false });
     assert.equal(skipped.refresh.skipped, true);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('upgrade installs a required plugin the database does not have, before the others', async () => {
+  const worker = newWorker();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/contact');
+    // A database from before source_code was required (or one that lost it).
+    await worker.query("delete from plugin where path='@engine9/schemas/source_code'");
+    await worker.drop({ table: 'source_code_dictionary' });
+    const status = await worker.status();
+    const required = status.checks.find((c) => c.id === 'core.required_plugins');
+    assert.equal(required.status, 'fail');
+    assert.deepEqual(required.data.missing, ['@engine9/schemas/source_code']);
+    assert.match(required.fix, /e9core upgrade/);
+
+    const dry = await worker.upgrade({ dry_run: true });
+    assert.deepEqual(dry.refresh.required_missing, ['@engine9/schemas/source_code']);
+    const order = dry.refresh.plugins;
+    assert.equal(order[0], '@engine9/schemas/plugin');
+    assert.ok(order.indexOf('@engine9/schemas/source_code') < order.indexOf('@engine9/schemas/editions/contact'));
+    assert.ok(order.indexOf('@engine9/schemas/editions/contact') < order.indexOf('@engine9/schemas/person_email'), 'an edition before what it includes');
+    assert.ok(!(await worker.tables()).tables.includes('source_code_dictionary'), 'a dry run installs nothing');
+
+    const done = await worker.upgrade();
+    assert.equal(done.ok, true, JSON.stringify(done.refresh.failed));
+    assert.ok((await worker.tables()).tables.includes('source_code_dictionary'));
+    assert.equal((await worker.status()).checks.find((c) => c.id === 'core.required_plugins').status, 'pass');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('upgrade on an empty database installs the required plugins and the api_key table', async () => {
+  const worker = newWorker();
+  try {
+    const done = await worker.upgrade();
+    assert.equal(done.ok, true, JSON.stringify(done));
+    const { tables } = await worker.tables();
+    for (const t of ['plugin', 'setting', 'person', 'person_segment', 'source_code_dictionary', 'api_key']) assert.ok(tables.includes(t), t);
+    assert.ok(!tables.includes('person_email'), 'nothing beyond the required plugins');
+    const { data } = await worker.query("select value from setting where name='identifier_store_kind'");
+    assert.equal(data[0]?.value, 'compact', 'a new database gets the compact identifier store, as setup gives it');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+async function coreSetting(worker, name, value) {
+  const { data } = await worker.query("select id from plugin where path='@engine9/schemas/plugin'");
+  await worker.setSetting({ pluginId: data[0].id, name, value });
+}
+
+async function asStack(worker, edition, stack) {
+  await worker.query({ sql: 'update plugin set path=?, name=? where path=?', values: [stack, stack, edition] });
+}
+
+test('retire_stacks: stacks/ rows become editions, default_stack is retired, and a re-run does nothing', async () => {
+  const worker = newWorker();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/contact');
+    await asStack(worker, '@engine9/schemas/editions/contact', '@engine9/schemas/stacks/standard');
+    await coreSetting(worker, 'default_stack', '@engine9/schemas/stacks/standard');
+    const status = await worker.status();
+    assert.equal(status.checks.find((c) => c.id === 'upgrade.retire_stacks')?.status, 'warn');
+
+    const dry = (await worker.upgrade({ dry_run: true })).upgrades.find((u) => u.id === 'retire_stacks');
+    assert.equal(dry.status, 'pending');
+    assert.ok(dry.plan.includes('rename the @engine9/schemas/stacks/standard row to @engine9/schemas/editions/contact'));
+    assert.ok((await worker.list()).some((r) => r.path === '@engine9/schemas/stacks/standard'), 'a dry run changes nothing');
+
+    const done = await worker.upgrade();
+    assert.equal(done.ok, true, JSON.stringify(done.refresh.failed));
+    const applied = done.upgrades.find((u) => u.id === 'retire_stacks');
+    assert.deepEqual(applied.renamed, ['@engine9/schemas/editions/contact']);
+    assert.deepEqual(applied.installed, []);
+    const rows = await worker.list();
+    assert.ok(!rows.some((r) => r.path.startsWith('@engine9/schemas/stacks/')));
+    const contact = rows.filter((r) => r.path === '@engine9/schemas/editions/contact');
+    assert.equal(contact.length, 1);
+    assert.equal(contact[0].name, '@engine9/schemas/editions/contact');
+    const { data: settings } = await worker.query("select id from setting where name='default_stack'");
+    assert.equal(settings.length, 0);
+
+    const again = (await worker.upgrade({ dry_run: true })).upgrades.find((u) => u.id === 'retire_stacks');
+    assert.equal(again.status, 'current', 'shouldUpgrade is false once retired');
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('retire_stacks keeps the default an owner recorded, unless exclude_pii refuses it', async () => {
+  const worker = newWorker();
+  try {
+    await worker.installRequiredPlugins();
+    await coreSetting(worker, 'default_stack', '@engine9/schemas/stacks/limited-pii');
+    const done = (await worker.upgrade()).upgrades.find((u) => u.id === 'retire_stacks');
+    assert.deepEqual(done.installed, ['@engine9/schemas/editions/pii-free']);
+    assert.ok((await worker.tables()).tables.includes('person_hash_email'));
+  } finally {
+    await worker.destroy();
+  }
+
+  const piiFree = newWorker();
+  try {
+    await piiFree.installRequiredPlugins();
+    await enableExcludePii(piiFree);
+    await coreSetting(piiFree, 'default_stack', '@engine9/schemas/stacks/standard');
+    const done = await piiFree.upgrade();
+    assert.equal(done.ok, true);
+    const retired = done.upgrades.find((u) => u.id === 'retire_stacks');
+    assert.deepEqual(retired.installed, [], 'exclude_pii refuses the contact edition, so it is not installed');
+    assert.ok(!(await piiFree.tables()).tables.includes('person_email'));
+    assert.equal((await piiFree.query("select id from setting where name='default_stack'")).data.length, 0);
+  } finally {
+    await piiFree.destroy();
+  }
+});
+
+test('retire_stacks drops a stack row whose edition is already installed, and reports another default', async () => {
+  const worker = newWorker();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/pii-free');
+    await ensurePluginRow(worker, { path: '@engine9/schemas/stacks/limited-pii' });
+    await coreSetting(worker, 'default_stack', '@engine9/schemas/event');
+    const done = (await worker.upgrade()).upgrades.find((u) => u.id === 'retire_stacks');
+    assert.deepEqual(done.renamed, []);
+    assert.deepEqual(done.dropped_default, ['@engine9/schemas/event']);
+    assert.ok(done.plan.includes('delete the @engine9/schemas/stacks/limited-pii row (@engine9/schemas/editions/pii-free is installed)'));
+    const rows = await worker.list();
+    assert.equal(rows.filter((r) => r.path === '@engine9/schemas/editions/pii-free').length, 1);
+    assert.ok(!rows.some((r) => r.path.startsWith('@engine9/schemas/stacks/')));
+    assert.ok(!rows.some((r) => r.path === '@engine9/schemas/event'), 'core installs nothing by default');
   } finally {
     await worker.destroy();
   }
@@ -457,9 +592,10 @@ test('POST /admin/upgrade needs admin scope; e9core upgrade --url posts to it', 
   }
 });
 
-test('POST /admin/install-default-plugins needs admin scope and installs over --url', async () => {
+test('POST /admin/install needs admin scope and installs over --url', async () => {
   const worker = newWorker();
   try {
+    await worker.installRequiredPlugins();
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     const { key: adminKey } = await keyStore.create({ name: 'admin', scopes: ['admin'] });
@@ -476,21 +612,25 @@ test('POST /admin/install-default-plugins needs admin scope and installs over --
     const fetchImpl = (url, init) => api.handleFetch(new Request(url, init));
 
     await assert.rejects(
-      installDefaultPluginsSite({ url: 'https://www.example.com', key: writeKey, fetchImpl }),
+      installSite({ url: 'https://www.example.com', key: writeKey, path: '@engine9/schemas/editions/contact', fetchImpl }),
       /answered 403/
     );
-    const result = await installDefaultPluginsSite({
+    await assert.rejects(installSite({ url: 'https://www.example.com', key: adminKey, path: '', fetchImpl }), /answered 400/);
+    audited.length = 0;
+    const result = await installSite({
       url: 'https://www.example.com',
       key: adminKey,
-      path: '@engine9/schemas/stacks/standard',
+      path: '@engine9/schemas/editions/contact',
       fetchImpl
     });
-    assert.equal(result.complete, true);
-    assert.equal(result.path, '@engine9/schemas/stacks/standard');
+    assert.equal(result.path, '@engine9/schemas/editions/contact');
+    assert.ok(result.included.includes('@engine9/schemas/person_email'));
     assert.ok((await worker.tables()).tables.includes('person_email'));
-    assert.deepEqual(audited.filter((e) => e.action === 'plugins.install_default').length, 1);
+    const recorded = audited.filter((e) => e.action === 'plugins.install');
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].meta.path, '@engine9/schemas/editions/contact');
     const installs = audited.filter((e) => e.action === 'plugin.install');
-    assert.ok(installs.length > 0 && installs.every((e) => e.meta.trigger === 'install_default' && e.meta.status === 'ok'));
+    assert.ok(installs.length > 0 && installs.every((e) => e.meta.trigger === 'install' && e.meta.status === 'ok'));
     assert.deepEqual(logged, [], 'admin actions never go to the data log');
   } finally {
     await worker.destroy();
@@ -500,7 +640,7 @@ test('POST /admin/install-default-plugins needs admin scope and installs over --
 test('drop_plugin_history: opt-in, drops an empty plugin_history, refuses while it has rows', async () => {
   const worker = newWorker();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     const tables = async () => (await worker.tables()).tables;
     assert.ok(!(await tables()).includes('plugin_history'), '@engine9/schemas no longer creates it');
     await worker.query('create table plugin_history (id char(36) primary key, plugin_id char(36), path varchar(255))');
@@ -533,7 +673,7 @@ test('each real upgrade run is one audit record naming the plugin and upgrade it
   const worker = newWorker();
   worker.audit = { log: async (r) => audited.push(r), flush: async () => {} };
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.query('create table plugin_history (id char(36) primary key, plugin_id char(36), path varchar(255))');
     await worker.upgrade({ dry_run: true, drop_plugin_history: true });
     assert.equal(audited.filter((r) => r.action === 'upgrade').length, 0, 'a dry run is not audited');

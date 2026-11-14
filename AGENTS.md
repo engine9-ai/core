@@ -44,6 +44,7 @@ Ask, then run:
 | `choose` | Where will the production site run? **Cloudflare** or **Your own servers** | `npx e9core setup --step choose --host cloudflare` or `--host node` |
 | `whoami` | Which Cloudflare account is logged in on this development machine? | `npx e9core setup --step whoami` |
 | `login` | Log in to Cloudflare on this development machine? | `npx e9core setup --step login` |
+| `plugins` | Which plugins should this site start with? The contact edition is recommended. | `npx e9core setup --step plugins` (the contact edition), `--plugin <path>`, or `--none` |
 | `setup-cloudflare` | Create the local Cloudflare project? This does not deploy production. | `npx e9core setup --step setup-cloudflare` |
 | `setup-node` | Create the local development database? This does not deploy production. | `npx e9core setup --step setup-node` |
 | `preview` | Start a local Cloudflare preview on this development machine? | `npx e9core setup --step preview` |
@@ -54,7 +55,7 @@ Ask, then run:
 | `rotate-public` | Replace the public key? | `npx e9core setup --step rotate-public` |
 | `finish` | Finish setup and close the wizard on this development machine? | `npx e9core setup --step finish` |
 
-`choose` is where the **production** site will run. The wizard itself always runs on this development machine. `setup-cloudflare` and `setup-node` create the local project only. `deploy` is the production Cloudflare deploy. `whoami`, `login`, `setup-cloudflare`, `preview`, and `deploy` follow a Cloudflare answer. `setup-node` follows your own servers. `try-signup` needs `npx e9core serve` already running.
+`choose` is where the **production** site will run. The wizard itself always runs on this development machine. `setup-cloudflare` and `setup-node` create the local project only. `deploy` is the production Cloudflare deploy. `whoami`, `login`, `setup-cloudflare`, `preview`, and `deploy` follow a Cloudflare answer. `setup-node` follows your own servers. `plugins` comes before `setup-cloudflare` or `setup-node`, so every database setup creates gets the chosen plugins. `try-signup` needs `npx e9core serve` already running.
 
 `--host cloudflare` or `--host node` without `--step` records that choice and
 then runs the matching create step (`setup` or `setup --node`).
@@ -171,15 +172,48 @@ npx e9core upgrade --url https://www.example.com
 Leave `@engine9/core`'s version alone when only `@engine9/schemas` changed,
 including when it ships a new upgrade: upgrades live in the schema plugins.
 
+## Required plugins and editions
+
+`REQUIRED_PLUGINS` ([lib/requiredPlugins.js](lib/requiredPlugins.js)) is the
+one list of plugins core keeps: `@engine9/schemas/plugin`, `person`,
+`segment`, and `source_code`, whose tables core reads and writes itself.
+Every database gets them (`installRequiredPlugins`, from setup and from
+`e9core upgrade`). Keep it slim. Never add a plugin that stores contact
+details (`person_name`, `person_email`, `person_phone`, `person_address`):
+a PII-free account cannot install it.
+
+Core installs nothing else by default. There is no default set, no
+`installDefaultPlugins`, and no setting that picks one. A site installs what
+it needs after setup with `e9core install --plugin <path>`. An **edition** is
+a plugin in `@engine9/schemas` (`editions/contact`, `editions/pii-free`) whose
+`include` list adds to the required plugins. Core's logic never names an
+edition and never treats a plugin with an `include` list as special: install,
+build-plugins, status, and upgrade follow `include` the same way for any
+plugin. Do not bring back the word "stack".
+
+New sites start with the **contact edition**, so a first install just
+works: signup, login, and adding admins by email expect it. The wizard's
+`plugins` step (before `setup-cloudflare`/`setup-node`) recommends it and
+records the choice in `package.json` `"engine9": { "install": [...] }`; setup
+installs those plugins after the required ones in every database it creates.
+When you walk someone through setup, recommend the contact edition. Do not
+offer the pii-free edition to a new user. If they ask for something else, say
+first that another edition, or none, changes what the site can do (no names
+or email addresses: no email to people, no admins added by email), and only
+then take `--plugin <path>` or `--none`.
+
+`exclude_pii` only refuses plaintext contact plugins, and any plugin that
+includes one. It never chooses what to install.
+
 ## Upgrades
 
 Install, deploy, then `e9core upgrade`, for every release and every database.
 A deploy never changes the database. Full process: [docs/upgrading.md](docs/upgrading.md).
 
 `e9core upgrade` runs `PluginWorker.upgrade` (`lib/upgrades`): the upgrade
-window, then the upgrades the `@engine9/schemas` plugins declare, then a
-reinstall of the installed `@engine9/schemas` plugins
-(`@engine9/schemas/plugin` first). Each real run writes one `upgrade` record
+window, then the upgrades the `@engine9/schemas` plugins declare, then any
+missing required plugin and a reinstall of the installed `@engine9/schemas`
+plugins (`@engine9/schemas/plugin` first). Each real run writes one `upgrade` record
 to the audit log; there is no ledger in the database, because every run
 asks every upgrade again. Each install records itself in the
 `last_install*` columns of its `plugin` row. Do not keep upgrade or install

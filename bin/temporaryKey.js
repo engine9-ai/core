@@ -1,6 +1,6 @@
 /*
   `--remote` on `e9core upgrade`, `status`, `segment`, and
-  `installDefaultPlugins`: a short-lived admin key for one command against
+  `install`: a short-lived admin key for one command against
   the deployed site, for a machine that holds no admin key (a CI runner, an
   agent session, a laptop whose .env.production is gone).
 

@@ -17,9 +17,10 @@ export async function enableExcludePii(worker) {
 
 export async function makeLegacyPersonNames(
   worker,
-  { stack = '@engine9/schemas/stacks/standard', excludePii = false } = {}
+  { edition = '@engine9/schemas/editions/contact', excludePii = false } = {}
 ) {
-  await worker.installDefaultPlugins({ path: stack });
+  await worker.installRequiredPlugins();
+  await worker.install({ path: edition });
   if (excludePii) await enableExcludePii(worker);
   await worker.query('alter table person add column given_name varchar(255)');
   await worker.query('alter table person add column family_name varchar(255)');

@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import { createDelegateAuth, normalizeRoleRegistry } from '../auth/delegate.js';
 import {
   ROLE_NAMES,
@@ -27,7 +27,7 @@ const ACCOUNT_ID = 'test-roles';
 
 async function setupWorker() {
   const worker = new PersonWorker({ accountId: ACCOUNT_ID, auth: { database_connection: 'sqlite://:memory:' } });
-  await applyStandardStack(worker);
+  await applyContactEdition(worker);
   const pluginId = getPluginUUID(ACCOUNT_ID, 'website');
   await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Test Roles Site' });
   return { worker, pluginId };

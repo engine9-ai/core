@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ENV_PUBLIC_KEY, readEnvValue } from './setupKeys.js';
 import { parseOriginList } from '../api/origins.js';
-import { readWizardState, runSetupStep } from './setupFlow.js';
+import { readInstallChoice, readWizardState, runSetupStep } from './setupFlow.js';
 
 function readEnvFile(cwd) {
   const file = path.join(cwd, '.env');
@@ -48,6 +48,7 @@ export function createWizard(ctx) {
     const wrangler = existsSync(path.join(cwd, 'wrangler.jsonc'));
     return {
       host: state.host || '',
+      install: readInstallChoice(cwd),
       publicKey,
       apiOk,
       origins,

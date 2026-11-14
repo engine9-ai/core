@@ -21,6 +21,8 @@ export function timingSafeEqualString(a, b) {
 export function renderWizardHtml({ token }) {
   const choose = setupStep('choose');
   const prompt = (id) => setupStep(id)?.prompt || id;
+  const plugins = setupStep('plugins');
+  const recommended = plugins?.choices?.[0];
   const choices = (choose?.choices || []).map((choice) => (
     `<button class="choice" type="button" data-host="${choice.id}"><strong>${choice.label}</strong>${choice.detail}</button>`
   )).join('\n    ');
@@ -55,6 +57,21 @@ export function renderWizardHtml({ token }) {
   <div id="choose" class="choices">
     ${choices}
   </div>
+
+  <section id="plugins" hidden>
+    <h2>Plugins</h2>
+    <p class="note">${escapeHtml(plugins?.prompt || '')}</p>
+    <button class="choice" type="button" id="plugins-recommended" data-plugin="${escapeHtml(recommended?.id || '')}"><strong>${escapeHtml(recommended?.label || '')}</strong>${escapeHtml(recommended?.detail || '')}</button>
+    <p class="note" id="plugins-msg"></p>
+    <details>
+      <summary>Advanced</summary>
+      <p class="note">${escapeHtml(plugins?.advancedNote || '')}</p>
+      <label for="plugins-path">Another plugin or edition</label>
+      <input id="plugins-path" type="text" placeholder="@engine9/schemas/…" />
+      <button type="button" id="plugins-other">Start with this instead</button>
+      <button type="button" id="plugins-none">Start with only the required plugins</button>
+    </details>
+  </section>
 
   <section id="cloudflare" hidden>
     <h2>Cloudflare</h2>
@@ -106,6 +123,7 @@ export function renderWizardHtml({ token }) {
     const cf = document.getElementById('cloudflare');
     const node = document.getElementById('node');
     const after = document.getElementById('after');
+    const pluginsSection = document.getElementById('plugins');
     function showMsg(id, text, ok) {
       const el = document.getElementById(id);
       el.textContent = text || '';
@@ -125,8 +143,22 @@ export function renderWizardHtml({ token }) {
       choose.hidden = true;
       cf.hidden = host !== 'cloudflare';
       node.hidden = host !== 'node';
+      pluginsSection.hidden = false;
       after.hidden = false;
     }
+    function showInstall(install) {
+      if (!install) return;
+      showMsg('plugins-msg', install.length ? ('This site starts with: ' + install.join(', ')) : 'This site starts with only the required plugins.', true);
+    }
+    async function choosePlugins(extra) {
+      try {
+        const data = await post('plugins', extra);
+        showMsg('plugins-msg', (data.notes || []).join(' '), true);
+      } catch (err) { showMsg('plugins-msg', err.message); }
+    }
+    document.getElementById('plugins-recommended').onclick = () => choosePlugins({ plugin: document.getElementById('plugins-recommended').getAttribute('data-plugin') });
+    document.getElementById('plugins-other').onclick = () => choosePlugins({ plugin: document.getElementById('plugins-path').value.trim() });
+    document.getElementById('plugins-none').onclick = () => choosePlugins({ none: true });
     document.querySelectorAll('[data-host]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const host = btn.getAttribute('data-host');
@@ -233,6 +265,7 @@ export function renderWizardHtml({ token }) {
     };
     post('status').then((data) => {
       if (data.host) showHost(data.host);
+      showInstall(data.install);
       if (data.host === 'cloudflare') refreshAccount();
       if (data.host === 'node') refreshNode();
     }).catch(() => {});

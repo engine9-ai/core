@@ -1,12 +1,12 @@
 /*
   Test helper: live-install @engine9/schemas plugins via PluginWorker.
-  Stack include/exclude is loaded at install time, not a static list.
+  A plugin's include list is loaded at install time, not a static list.
 */
 import PluginWorker from '../../lib/PluginWorker.js';
 import { getVersionedUUID } from '../../lib/utilities.js';
 
 function asPluginWorker(worker) {
-  if (typeof worker.installDefaultPlugins === 'function' && typeof worker.install === 'function') return worker;
+  if (typeof worker.installRequiredPlugins === 'function' && typeof worker.install === 'function') return worker;
   return new PluginWorker(worker);
 }
 
@@ -57,7 +57,19 @@ export async function deployLegacyIdentifierTable(worker) {
   });
 }
 
-export async function applyStandardStack(worker) {
+export const CONTACT_EDITION = '@engine9/schemas/editions/contact';
+export const PII_FREE_EDITION = '@engine9/schemas/editions/pii-free';
+
+/** The required plugins, then one more plugin (an edition, usually). */
+export async function installEdition(worker, path) {
   const plugins = asPluginWorker(worker);
-  return plugins.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
+  await plugins.installRequiredPlugins();
+  return plugins.install({ path });
+}
+
+/** The required plugins, then the contact edition: what most tests need. */
+export async function applyContactEdition(worker) {
+  const plugins = asPluginWorker(worker);
+  await plugins.installRequiredPlugins();
+  return plugins.install({ path: CONTACT_EDITION });
 }

@@ -8,10 +8,10 @@ import assert from 'node:assert/strict';
 import PersonWorker from '../lib/PersonWorker.js';
 import { describeInboundTransforms, normalizeInboundSpec } from '../lib/peoplePipeline/getInboundTransforms.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow, installEdition } from './helpers/applySchemas.js';
 
 const I = '@engine9/schemas';
-const LIMITED_PII = `${I}/stacks/limited-pii`;
+const LIMITED_PII = `${I}/editions/pii-free`;
 
 function newWorker() {
   return new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
@@ -21,7 +21,7 @@ const paths = (steps) => steps.map((s) => s.path);
 test('standard stack weaves every person plugin, names into person_name', async () => {
   const worker = newWorker();
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const steps = await worker.getInboundTransforms({ pluginId: 'p1' });
     assert.deepEqual(paths(steps), [
       `${I}/person:transforms:normalizeFieldNames`,
@@ -60,7 +60,7 @@ test('standard stack weaves every person plugin, names into person_name', async 
 test('limited-pii stack weaves person_hash and no plaintext contact plugin', async () => {
   const worker = newWorker();
   try {
-    await worker.installDefaultPlugins({ path: LIMITED_PII });
+    await installEdition(worker, LIMITED_PII);
     const pluginId = getPluginUUID('engine9.test', 'pii-free-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'pii-free-site', name: 'PII free site' });
 
@@ -96,7 +96,7 @@ test('limited-pii stack weaves person_hash and no plaintext contact plugin', asy
 test('exclude_pii skips leftover plaintext plugin rows in the inbound weave', async () => {
   const worker = newWorker();
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     await worker.install({ path: `${I}/person_hash`, unique: true });
     await worker.install({ path: `${I}/utilities/limited-pii`, unique: true });
     const { data } = await worker.query({
@@ -117,7 +117,7 @@ test('exclude_pii skips leftover plaintext plugin rows in the inbound weave', as
 test('omitTransforms drops a woven step for one job; extraTransforms append by slot', async () => {
   const worker = newWorker();
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'omit-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'omit-site', name: 'Omit site' });
     const emailUpsert = `${I}/person_email:transforms:upsertPersonEmail`;

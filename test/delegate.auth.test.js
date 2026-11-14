@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import {
   createSessionToken,
   verifySessionToken,
@@ -58,7 +58,7 @@ const UNID_B = domainUnidOf('site.example.com', 'b');
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
 
@@ -155,7 +155,7 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
 test('one Delegate User with two confirmed emails: two people unless core joined them', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
     const login = (email) =>
@@ -277,7 +277,7 @@ async function jwksFetch(publicKey, kid = 'test-key') {
 test('createDelegateAuth: login -> person -> roles-as-segments -> signed session', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
@@ -444,7 +444,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
 test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site-session-roles');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
@@ -511,7 +511,7 @@ test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
 test('createDelegateAuth: login() with JWT creates session with level and shared fields', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-jwt');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-jwt', name: 'Test Delegate JWT' });
 

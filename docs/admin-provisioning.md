@@ -119,14 +119,16 @@ npx e9core segment add --segment admin --url https://www.example.com \
   --email a@example.org,b@example.org
 ```
 
-A fresh Cloudflare database needs its tables first. `installDefaultPlugins` takes
-the same `--url`, so no SQL has to be replayed by hand:
+A fresh Cloudflare database needs its tables first. `upgrade` installs the
+[required plugins](../README.md#the-required-plugins) and `install` adds the
+rest; both take the same `--url`, so no SQL has to be replayed by hand.
+Adding someone by email reads `person_email`, so the site needs a plugin
+that stores email (the contact edition includes it):
 
 ```bash
-npx e9core installDefaultPlugins --url https://www.example.com   # POST /api/admin/install-default-plugins
+npx e9core upgrade --url https://www.example.com
+npx e9core install --plugin @engine9/schemas/editions/contact --url https://www.example.com   # POST /api/admin/install
 ```
-
-(`--stack @engine9/schemas/stacks/standard` installs a stack instead.)
 
 `segment add` posts to the site's `POST /api/auth/segments`. The site resolves `admin`
 with its own account id and, for an admin key, creates the `roles` plugin row

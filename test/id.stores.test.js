@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import crypto from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
-import { applyStandardStack, deployLegacyIdentifierTable } from './helpers/applySchemas.js';
+import { applyContactEdition, deployLegacyIdentifierTable } from './helpers/applySchemas.js';
 import { insertPersons } from '../lib/id/sqlStore.js';
 import { contiguousInsertIds } from '../lib/id/sqlHelpers.js';
 import {
@@ -174,7 +174,7 @@ describe('insertPersons id assignment', () => {
   test('SQLite assigns contiguous person ids 1..n', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await applyStandardStack(worker);
+      await applyContactEdition(worker);
       const ids = await insertPersons(worker, [{}, {}, {}]);
       assert.deepEqual(ids, [1, 2, 3]);
       const { data } = await worker.query('select id from person order by id');
@@ -254,7 +254,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('creates per-type tables with hashed value + person_id', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await applyStandardStack(worker);
+      await applyContactEdition(worker);
       const store = createCompactSqlIdentifierStore(worker);
       await store.insertIdentifiers([
         { id_type: 'email_hash_v1', id_value: 'same', person_id: 1 },
@@ -299,7 +299,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('assignPersonIds on SQLite defaults to compact tables', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await applyStandardStack(worker);
+      await applyContactEdition(worker);
       const inputId = '00000000-0000-0000-0000-000000000013';
       const batch = await assignPersonIds({
         worker,
@@ -324,7 +324,7 @@ describe('compact SQL person_id_<id_type> store', () => {
   test('person_identifier store still writes the full table', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await applyStandardStack(worker);
+      await applyContactEdition(worker);
       await deployLegacyIdentifierTable(worker);
       const store = createPersonIdentifierSqlStore(worker);
       const inputId = '00000000-0000-0000-0000-000000000012';
@@ -352,7 +352,7 @@ describe('assignPersonIds with injectable store', () => {
   test('assignPersonIds uses injectable store for lookup and insert', async () => {
     const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
     try {
-      await applyStandardStack(worker);
+      await applyContactEdition(worker);
       const store = createMemoryIdentifierStore();
       const inputId = '00000000-0000-0000-0000-000000000010';
 

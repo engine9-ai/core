@@ -12,7 +12,7 @@ import { createApi } from '../api/index.js';
 import { ConsoleLogger } from '../logging/index.js';
 import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
 import { renderStatus, runStatusCommand } from '../bin/status.js';
-import { ensurePluginRow } from './helpers/applySchemas.js';
+import { ensurePluginRow, installEdition, applyContactEdition } from './helpers/applySchemas.js';
 
 const memory = (opts = {}) => new PersonWorker({ accountId: 'status', auth: { database_connection: 'sqlite://:memory:' }, ...opts });
 const byId = (report, id, plugin) => report.checks.filter((c) => c.id === id && (!plugin || c.plugin === plugin));
@@ -39,10 +39,10 @@ function acmeRegistry({ version = '1.0.0', columns = { id: 'id_uuid', title: 'st
   );
 }
 
-test('a freshly installed stack reports no failures and no warnings, in a few queries', async () => {
+test('a fresh install (required plugins and an edition) reports no failures and no warnings, in a few queries', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
+    await installEdition(worker, '@engine9/schemas/editions/contact');
     let queries = 0;
     const query = worker.query.bind(worker);
     worker.query = (...args) => {
@@ -55,7 +55,7 @@ test('a freshly installed stack reports no failures and no warnings, in a few qu
     const report = await worker.status();
     assert.equal(report.ok, true);
     assert.deepEqual(bad(report), []);
-    assert.ok(byId(report, 'plugin.last_install').every((c) => c.data.status === 'ok' && c.data.trigger === 'install_default'));
+    assert.ok(byId(report, 'plugin.last_install').every((c) => c.data.status === 'ok' && ['install_required', 'install'].includes(c.data.trigger)));
   } finally {
     await worker.destroy();
   }
@@ -64,7 +64,7 @@ test('a freshly installed stack reports no failures and no warnings, in a few qu
 test('the batched snapshot and the per-table fallback diff the same', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.query('alter table person_email drop column created_at').catch(() => {});
     const batched = await createSchemaSnapshot(worker);
     const query = worker.query.bind(worker);
@@ -84,7 +84,7 @@ test('the batched snapshot and the per-table fallback diff the same', async () =
 test('status finds what a failed deploy leaves behind', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins({ path: '@engine9/schemas/stacks/standard' });
+    await installEdition(worker, '@engine9/schemas/editions/contact');
     await worker.query('drop table person_phone');
     await worker.query('alter table person_address drop column created_at').catch(() => {});
     await worker.query('drop trigger person_email_modified_at_auto_update');
@@ -135,7 +135,7 @@ test('status finds what a failed deploy leaves behind', async () => {
 test('site keys are checked by hash: missing, turned off, active', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     const store = new SqlApiKeyStore({ worker });
     await store.deploy();
     const { key: active } = await store.create({ name: 'site-public', scopes: ['public'] });
@@ -160,7 +160,7 @@ test('site keys are checked by hash: missing, turned off, active', async () => {
 test('a plugin outside @engine9/schemas: upgrade leaves it, status says so, upgrade --plugin applies it', async () => {
   const worker = memory({ plugins: acmeRegistry() });
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: '@acme/plugins/blog' });
     worker.plugins = acmeRegistry({ version: '1.1.0', columns: { id: 'id_uuid', title: 'string', body: 'text' } });
 
@@ -196,7 +196,7 @@ test('a failed install is recorded, audited, and retried with upgrade --failed',
   const audited = [];
   const worker = memory({ audit: { log: async (r) => audited.push(r), flush: async () => {} } });
   try {
-    await worker.installDefaultPlugins();
+    await applyContactEdition(worker);
     const deploy = worker.deploy.bind(worker);
     worker.deploy = async () => {
       throw new Error('D1_ERROR: no');
@@ -229,7 +229,7 @@ test('a plugin table without the last_install columns: installs skip the record,
   const warn = console.warn;
   console.warn = (...a) => warnings.push(a.join(' '));
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     for (const c of ['last_install', 'last_install_status', 'last_install_at']) await worker.query(`alter table plugin drop column ${c}`);
     await worker.install({ path: '@engine9/schemas/person_email' });
     assert.deepEqual(warnings, []);
@@ -254,7 +254,7 @@ test("a plugin's status hook adds checks; a hook that throws is a failure, not a
     })
   });
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await worker.install({ path: '@acme/plugins/blog' });
     const [hook] = byId(await worker.status(), 'plugin.custom.webhook');
     assert.equal(hook.status, 'warn');
@@ -275,7 +275,7 @@ test("a plugin's status hook adds checks; a hook that throws is a failure, not a
 test('GET /admin/status: admin only, checks the secrets by hash, warns without an audit sink', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     const { key: adminKey } = await keyStore.create({ name: 'site-admin', scopes: ['admin'] });
@@ -319,7 +319,8 @@ test('GET /admin/status: admin only, checks the secrets by hash, warns without a
 test('role grants go to the audit log; other segment changes go to the data log', async () => {
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    // Role grants by email read person_email.
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('status', 'website');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const keyStore = new SqlApiKeyStore({ worker });
@@ -394,7 +395,7 @@ test('e9core status in a Cloudflare project: account, secrets, legacy file, and 
   const dbFile = path.join(cwd, 'remote.db');
   const worker = new PersonWorker({ accountId: 'site', auth: { database_connection: `sqlite://${dbFile}` } });
   try {
-    await worker.installDefaultPlugins();
+    await applyContactEdition(worker);
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     const { key: publicKey, id: publicId } = await keyStore.create({ name: 'site-public', scopes: ['public'] });
@@ -442,7 +443,7 @@ test('e9core status --url uses the site report when the admin key works, and ski
   const cwd = mkdtempSync(path.join(tmpdir(), 'e9-status-cli-'));
   const worker = memory();
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     const { key: adminKey } = await keyStore.create({ name: 'site-admin', scopes: ['admin'] });
@@ -467,7 +468,7 @@ test('e9core status (D1 copy) checks handles with the site\'s own E9_ACCOUNT_ID 
   const pinned = '6e1f8877-0000-5000-8000-000000000003';
   const worker = new PersonWorker({ accountId: 'sirens', auth: { database_connection: `sqlite://${dbFile}` } });
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await ensurePluginRow(worker, { id: pinned, path: 'website', name: 'Website' });
     const vars = { E9_ACCOUNT_ID: 'sirens', E9_PLUGIN_ID: pinned };
     writeFileSync(path.join(cwd, 'wrangler.jsonc'), JSON.stringify({ vars, d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: 'x' }] }));
@@ -491,7 +492,7 @@ test('e9core status --db with no account id skips the handle checks instead of g
   const saved = process.env.E9_ACCOUNT_ID;
   delete process.env.E9_ACCOUNT_ID;
   try {
-    await worker.installDefaultPlugins();
+    await worker.installRequiredPlugins();
     await ensurePluginRow(worker, { id: getPluginUUID('sirens', 'website'), path: 'website', name: 'Website' });
     const report = await runStatusCommand({ db: `sqlite://${dbFile}` }, { cwd });
     assert.equal(report.checks.some((c) => c.id.startsWith('handle.')), false);

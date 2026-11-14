@@ -5,7 +5,7 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import {
   ROLE_NAMES,
   STANDARD_ROLES,
@@ -104,7 +104,7 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
   const accountId = 'seg-http';
   const worker = new PersonWorker({ accountId, auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID(accountId, 'website');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 

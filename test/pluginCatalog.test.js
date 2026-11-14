@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
   ENTRY_KEYS,
   FIELD_KEYS,
@@ -166,4 +166,19 @@ test('the JSON Schema names the same keys and types as the validator', () => {
     ['name', ...Object.keys(schema.$defs.field.properties)].sort(),
     [...FIELD_KEYS].sort()
   );
+});
+
+test('core\'s code names no engine9 service host; the schema URL is data in the schema file', () => {
+  const root = new URL('..', import.meta.url);
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(new URL(dir, root), { withFileTypes: true })) {
+      const rel = `${dir}${entry.name}`;
+      if (entry.isDirectory()) walk(`${rel}/`);
+      else if (rel.endsWith('.js')) files.push(rel);
+    }
+  };
+  for (const dir of ['lib/', 'bin/', 'auth/', 'api/', 'cloudflare/']) walk(dir);
+  const named = files.filter((f) => /[a-z0-9-]+\.engine9\.ai/i.test(readFileSync(new URL(f, root), 'utf8')));
+  assert.deepEqual(named, []);
 });

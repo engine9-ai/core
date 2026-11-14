@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import PersonWorker from '../lib/PersonWorker.js';
-import { applyStandardStack } from './helpers/applySchemas.js';
+import { applyContactEdition } from './helpers/applySchemas.js';
 import {
   ROLE_NAMES,
   addPeopleToSegment,
@@ -29,7 +29,7 @@ test('admin provisioning: creates the role, the people and the membership, and i
   const accountId = 'acme';
   const worker = new PersonWorker({ accountId, auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const roleId = roleSegmentId(accountId, ROLE_NAMES.ADMIN);
 
     const listed = ['  Owner@Example.com ', 'sam@example.com', 'not an email', 'OWNER@example.com'];

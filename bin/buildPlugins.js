@@ -14,16 +14,19 @@
     "engine9": {
       "pluginPackages":        ["@engine9/schemas", "@engine9/plugins"],
       "dynamicPluginPackages": ["engine9-accounts"],   // Node only; a bundle refuses it
-      "plugins": ["@engine9/schemas/event"]            // legacy: only these identities
-                                                       // (plus the core schemas and
-                                                       // stack includes)
+      "plugins": ["@engine9/schemas/event"],           // only these identities (plus
+                                                       // the required plugins, install,
+                                                       // and every plugin they include)
+      "install": ["@engine9/schemas/editions/contact"] // what setup installs after the
+                                                       // required plugins
     }
 
   With none of these, every plugin in @engine9/schemas is included.
 
   A plugin is a directory with index.js (identity: <package>/<dir>) or a
   file named *.plugin.js (identity: <package>/<dir>/<file>). Next to index.js,
-  schema.js and settings.js are imported and ui.console.json5 is inlined.
+  schema.js and settings.js are imported, ui.console.json5 is inlined, and the
+  include list of plugin.json is read so the plugins it names are bundled.
 
   The bundler resolves each specifier through the package's "exports", so only
   exported paths are written: <dir>/index.js, else <dir> when that is what the
@@ -34,7 +37,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import JSON5 from 'json5';
-import { DEFAULT_CORE_SCHEMAS } from '../lib/stackMetadata.js';
+import { REQUIRED_PLUGINS } from '../lib/requiredPlugins.js';
 import { SCHEMAS_PACKAGE, packageNameOf } from '../lib/pluginPaths.js';
 import { PLUGIN_CONFIG_INVALID, PluginLoadError } from '../lib/pluginRegistry.js';
 
@@ -67,10 +70,14 @@ export function readEngine9Config(cwd) {
       `package.json "engine9": ${both.join(', ')} listed in both pluginPackages and dynamicPluginPackages. A package is one or the other.`
     );
   }
+  // Plugins setup installs after the required ones when it creates a database
+  // (the setup wizard's plugins step writes it). They are always bundled.
+  const install = asList(config.install, 'install');
   return {
     plugins,
     pluginPackages,
     dynamicPluginPackages,
+    install,
     configured: Boolean(plugins || pluginPackages.length || dynamicPluginPackages.length)
   };
 }
@@ -213,10 +220,10 @@ function entryFor(pkg, rel, fsPath, isFile) {
   }
   const consoleFile = path.join(fsPath, 'ui.console.json5');
   if (existsSync(consoleFile)) entry.console = JSON5.parse(readFileSync(consoleFile, 'utf8'));
-  const stackFile = path.join(fsPath, 'stack.json');
-  if (existsSync(stackFile)) {
-    const stack = JSON5.parse(readFileSync(stackFile, 'utf8'));
-    entry.include = Array.isArray(stack.include) ? stack.include : [];
+  const pluginFile = path.join(fsPath, 'plugin.json');
+  if (existsSync(pluginFile)) {
+    const declared = JSON5.parse(readFileSync(pluginFile, 'utf8'));
+    entry.include = Array.isArray(declared.include) ? declared.include : [];
   }
   return entry;
 }
@@ -283,7 +290,7 @@ export function collectPluginEntries(options = {}) {
   const config = readEngine9Config(cwd);
   const requested = options.plugins || config.plugins || null;
   if (requested) {
-    const all = [...DEFAULT_CORE_SCHEMAS, ...requested];
+    const all = [...REQUIRED_PLUGINS, ...config.install, ...requested];
     const packages = [...new Set([...(options.packages || config.pluginPackages), ...all.map(packageNameOf)])];
     const discovered = packages.flatMap((name) => discoverPackagePlugins(cwd, name, resolveOptions));
     return {

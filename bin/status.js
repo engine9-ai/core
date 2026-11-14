@@ -176,7 +176,7 @@ const COPY_QUERIES = [
   ['plugin', 'select * from plugin'],
   [
     'setting',
-    "select id, plugin_id, name, case when name in ('default_stack', 'exclude_pii', 'identifier_store_kind') then value else null end as value from setting"
+    "select id, plugin_id, name, case when name in ('exclude_pii', 'identifier_store_kind') then value else null end as value from setting"
   ],
   ['api_key', 'select id, name, key_hash, scopes, default_role_id, active, expires_at from api_key']
 ];

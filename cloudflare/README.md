@@ -13,8 +13,10 @@ are the standard. How to choose a table:
 installs come from the public
 [`@engine9/schemas`](https://github.com/engine9-ai/schemas) package.
 
-Call `PersonWorker.installDefaultPlugins()` (or `e9core installDefaultPlugins` from
-[`bin/e9core.js`](../bin/e9core.js)) to deploy plugin rows and tables, or
+Call `PersonWorker.installRequiredPlugins()` (or `e9core upgrade` from
+[`bin/e9core.js`](../bin/e9core.js)) to deploy the
+[required plugins](../README.md#the-required-plugins)' rows and tables, then
+`install` (`e9core install --plugin <path>`) for anything else, or
 generate SQL for one schema plugin with `e9core sqlite-ddl --schema …` and load
 it with `wrangler d1 execute --file`. Then serve the people, upsert, and read
 API from a Worker.
@@ -68,7 +70,8 @@ one piece at a time.
    Live plugin install deploys plugin rows and tables:
 
    ```bash
-   npx e9core installDefaultPlugins --db sqlite://./engine9.db
+   npx e9core upgrade --db sqlite://./engine9.db
+   npx e9core install --plugin @engine9/schemas/editions/contact --db sqlite://./engine9.db
    ```
 
    Or print SQLite DDL for one schema plugin and load it with D1's import API.
@@ -84,7 +87,7 @@ one piece at a time.
    ```
 
    > The people pipeline is woven from the `plugin` rows. DDL-only migrations
-   > create tables but no rows, so `installDefaultPlugins` (which writes the rows and
+   > create tables but no rows, so an install (which writes the rows and
    > their `transforms.inbound` snapshot) is required before people writes.
    > A deploy does not change D1. After upgrading `@engine9/core` or
    > `@engine9/schemas`, deploy, then run `npx e9core upgrade --url https://<site>`.
@@ -96,7 +99,7 @@ one piece at a time.
 4. **Create the plugin row and an API key**
 
    Every people write is attributed to a plugin (your website). Insert a site
-   plugin row after `installDefaultPlugins` (or after applying plugin-table DDL),
+   plugin row after installing the required plugins (or after applying plugin-table DDL),
    then create an API key:
 
    ```bash

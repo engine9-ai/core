@@ -26,7 +26,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack } from './helpers/applySchemas.js';
+import { applyContactEdition } from './helpers/applySchemas.js';
 import { ROLE_NAMES, roleSegmentId, rolesPluginId } from '../auth/roles.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
@@ -125,7 +125,7 @@ test('createApi: the default pluginId and the "standard" role registry read acco
     auth: { database_connection: 'sqlite://:memory:' }
   });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     const delegateAuth = createDelegateAuth({
@@ -159,7 +159,7 @@ test('createApi default pluginId: getPluginUUID(accountHandle, "website")', asyn
     auth: { database_connection: 'sqlite://:memory:' }
   });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const keyStore = new SqlApiKeyStore({ worker });
     await keyStore.deploy();
     await worker.insertArray({
@@ -207,7 +207,7 @@ test('the Durable Object identifier store is keyed by accountHandle, not account
 test('status: a core default account id is reported as a pass, never a warning', async () => {
   const worker = new PersonWorker({ accountId: 'cloudflare', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const result = await worker.status();
     const found = result.checks.find((c) => c.id === 'handle.default');
     assert.ok(found, 'handle.default check is present');
@@ -221,7 +221,7 @@ test('status: a core default account id is reported as a pass, never a warning',
 test('status: does not warn once an account id (or handle) is explicitly set', async () => {
   const worker = new PersonWorker({ accountId: 'mrss_peta', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const result = await worker.status();
     assert.equal(result.checks.find((c) => c.id === 'handle.default'), undefined);
   } finally {
@@ -242,7 +242,7 @@ test('status: catches an account id changed with no handle set -- the mistake th
   }
   const setup = new PersonWorker({ accountId: 'mrss_peta', auth: { database_connection: dbFile } });
   try {
-    await applyStandardStack(setup);
+    await applyContactEdition(setup);
     const delegateAuth = createDelegateAuth({
       worker: setup,
       sessionSecret: '0123456789abcdef'.repeat(4),
@@ -280,7 +280,7 @@ const PINNED_SITE_PLUGIN = '6e1f8877-0000-5000-8000-000000000001';
 test('status: a website row under a pinned E9_PLUGIN_ID matches when the pin is passed, warns when it is not', async () => {
   const worker = new PersonWorker({ accountId: 'sirens', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     await worker.insertArray({
       table: 'plugin',
       array: [{ id: PINNED_SITE_PLUGIN, path: 'website', name: 'Sirens', table_prefix: '' }]
@@ -300,7 +300,7 @@ test('status: a website row under a pinned E9_PLUGIN_ID matches when the pin is 
 test('status: handleChecks: false leaves out both handle checks', async () => {
   const worker = new PersonWorker({ accountId: 'cloudflare', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const result = await worker.status({ handleChecks: false });
     assert.equal(result.checks.some((c) => c.id.startsWith('handle.')), false);
   } finally {

@@ -36,11 +36,13 @@ It calls `PluginWorker.upgrade` ([lib/upgrades](../lib/upgrades/index.js)):
    `person_name`. Each upgrade's `shouldUpgrade` looks at the schema first;
    only an upgrade that applies reads the data, and it does nothing when the
    account is already current. A re-run finishes a partial run.
-3. **Refresh.** It reinstalls every installed `@engine9/schemas` plugin from
-   the deployed package. That adds new tables and columns (never drops) and
-   refreshes each plugin's inbound pipeline snapshot. `@engine9/schemas/plugin`
-   goes first, then stacks, so a stack that now includes a new plugin
-   installs it. Only `@engine9/schemas`
+3. **Refresh.** It installs any [required plugin](../README.md#the-required-plugins)
+   the database does not have, then reinstalls every installed
+   `@engine9/schemas` plugin from the deployed package. That adds new tables
+   and columns (never drops) and refreshes each plugin's inbound pipeline
+   snapshot. `@engine9/schemas/plugin` goes first, then the other required
+   plugins, then plugins with an `include` list, so an edition that now
+   includes a new plugin installs it. Only `@engine9/schemas`
    plugins are refreshed. Any other plugin is upgraded by naming it
    ([Upgrading one plugin](#upgrading-one-plugin)).
 4. **Record.** A real run writes one `upgrade` record to the audit log: the
@@ -91,7 +93,7 @@ site's D1 through wrangler (the `DB` binding in `wrangler.jsonc`; `--env`
 picks another environment), with an expiry 15 minutes ahead, posts the
 upgrade, and deletes the row. The key is never printed or saved. A machine
 that can write D1 through wrangler can already change anything in it, so
-this gives it nothing new. `status`, `segment`, and `installDefaultPlugins`
+this gives it nothing new. `status`, `segment`, and `install`
 take `--remote` the same way.
 
 Add `--dry-run` to see the plan first. `--no-refresh` skips step 3.
@@ -229,7 +231,7 @@ On MySQL, restore the backup, then deploy the old version.
 A release of a plugin package that removes, renames, or moves a column,
 changes a column's type, changes what a table means, or changes an inbound
 step that old snapshots name ships an upgrade in that plugin. An additive
-change (new table, new column, new plugin in a stack) does not; the refresh
+change (new table, new column, new plugin in an edition) does not; the refresh
 deploys it. Core never carries a plugin's upgrade. The contract, the rules,
 and how to retire an upgrade are in [plugin-upgrades.md](plugin-upgrades.md).
 

@@ -8,7 +8,7 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import { ROLE_NAMES, roleSegmentId } from '../auth/roles.js';
 import {
   isSuperadmin,
@@ -69,7 +69,7 @@ test('superadmins file: add, remove, reload on change, invalid file is an error'
 test('superadmin acts as this account admin role without any database row', async () => {
   const worker = new PersonWorker({ accountId: ACCOUNT_ID, auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID(ACCOUNT_ID, 'website');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 

@@ -14,13 +14,14 @@ import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { roleSegmentId, rolesPluginId } from '../auth/roles.js';
 import { callSite, siteEndpoint } from '../bin/upgrade.js';
-import { ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 
 const ACCOUNT = 'my-site';
 
 async function newSite() {
   const worker = new PersonWorker({ accountId: ACCOUNT, auth: { database_connection: 'sqlite://:memory:' } });
-  await worker.installDefaultPlugins();
+  // Adding someone by email reads person_email.
+  await applyContactEdition(worker);
   const pluginId = getPluginUUID(ACCOUNT, 'website');
   await ensurePluginRow(worker, { id: pluginId, path: 'website', name: ACCOUNT });
   const keyStore = new SqlApiKeyStore({ worker });

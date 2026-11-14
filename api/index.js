@@ -50,9 +50,8 @@
                                    segment_id may be a role name. With admin
                                    scope a missing standard role row (admin)
                                    is created first. See docs/segments.md.
-    POST /admin/install-default-plugins
-                                -- install the default schema plugins (admin scope)
-                                   body: { path? }  Same as installDefaultPlugins.
+    POST /admin/install         -- install one plugin, and the plugins it includes (admin scope)
+                                   body: { path }  Same as PluginWorker.install / e9core install.
     POST /admin/upgrade         -- run the upgrades plugins declare (admin scope)
                                    body: { dry_run?, refresh?, plugins?, failed?, sql?,
                                            …the upgrades' own options (drop_name_columns) }
@@ -609,24 +608,24 @@ export function createApi({
     return json(200, { person_ids: result.personIds, dry_run: result.dryRun, tables: result.tables });
   }
 
-  async function postAdminInstallDefaultPlugins({ body, apiKey, query, session }) {
+  async function postAdminInstall({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
     const denied = requireScope(ctx, SCOPES.ADMIN);
     if (denied) return denied;
-    const path = body?.path ?? body?.stack;
-    if (path != null && typeof path !== 'string') return json(400, { error: 'body.path must be a string' });
+    const path = typeof body?.path === 'string' ? body.path.trim() : '';
+    if (!path) return json(400, { error: 'body.path is required: the plugin to install' });
     let result;
     try {
-      result = await worker.installDefaultPlugins(path ? { path } : {});
+      result = await worker.install({ path });
     } catch (e) {
-      debug('postAdminInstallDefaultPlugins error:', e);
+      debug('postAdminInstall error:', e);
       return json(422, { error: String(e.message || e) });
     }
     await logAudit({
-      action: 'plugins.install_default',
+      action: 'plugins.install',
       apiKeyId: apiKey?.id,
       roleId: ctx.roleId,
-      meta: { path: path || null }
+      meta: { path, included: result?.included || [] }
     });
     return json(200, result ?? { ok: true });
   }
@@ -1636,8 +1635,8 @@ export function createApi({
       });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'erase') {
       result = await postAdminErase({ body: req.body, apiKey, query: req.query || {}, session });
-    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'install-default-plugins') {
-      result = await postAdminInstallDefaultPlugins({ body: req.body, apiKey, query: req.query || {}, session });
+    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'install') {
+      result = await postAdminInstall({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'upgrade') {
       result = await postAdminUpgrade({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'admin' && parts[1] === 'status' && parts.length === 2) {

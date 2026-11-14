@@ -12,7 +12,7 @@ import {
   changeSignInUrl,
   isPageRequest
 } from '../auth/signIn.js';
-import { installDefaultPluginsSite } from '../bin/upgrade.js';
+import { installSite } from '../bin/upgrade.js';
 
 const DELEGATE_URL = 'https://delegate.network';
 const HOST = 'site.example.com';
@@ -522,20 +522,20 @@ test('requireRole takes several roles: any one held is enough', async () => {
   assert.equal(allowed.ok, true);
 });
 
-test('installDefaultPluginsSite posts to /admin/install-default-plugins', async () => {
+test('installSite posts to /admin/install', async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     return new Response(JSON.stringify({ complete: true }), { status: 200 });
   };
-  const result = await installDefaultPluginsSite({
+  const result = await installSite({
     url: 'https://www.example.com',
     key: 'e9key_x',
-    path: '@engine9/schemas/stacks/standard',
+    path: '@engine9/schemas/editions/contact',
     fetchImpl
   });
   assert.equal(result.complete, true);
-  assert.equal(calls[0].url, 'https://www.example.com/api/admin/install-default-plugins');
+  assert.equal(calls[0].url, 'https://www.example.com/api/admin/install');
   assert.equal(calls[0].init.headers.authorization, 'Bearer e9key_x');
-  assert.deepEqual(JSON.parse(calls[0].init.body), { path: '@engine9/schemas/stacks/standard' });
+  assert.deepEqual(JSON.parse(calls[0].init.body), { path: '@engine9/schemas/editions/contact' });
 });

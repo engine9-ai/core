@@ -6,6 +6,12 @@
  * AGENTS.md lists these prompts. If you change a prompt here, change it there.
  */
 
+/**
+ * What a new site should start with. Recommended, never installed by default:
+ * the plugins step records it in package.json "engine9.install".
+ */
+export const CONTACT_EDITION = '@engine9/schemas/editions/contact';
+
 export const SETUP_STEPS = [
   {
     id: 'choose',
@@ -32,6 +38,20 @@ export const SETUP_STEPS = [
     id: 'login',
     prompt: 'Log in to Cloudflare on this development machine?',
     when: 'cloudflare'
+  },
+  {
+    id: 'plugins',
+    prompt: 'Which plugins should this site start with? The contact edition is recommended.',
+    choices: [
+      {
+        id: CONTACT_EDITION,
+        label: 'Contact edition (recommended)',
+        detail:
+          "People's names, email, phone, and postal address, plus timeline and transactions. Signup, login, and adding admins by email work with it."
+      }
+    ],
+    advancedNote:
+      'Another edition, or only the required plugins, changes what the site can do. Without the contact edition the site keeps no names or email addresses: it cannot email people, signups keep less, and admins cannot be added by email. Read the @engine9/schemas README and understand what you give up before you choose.'
   },
   {
     id: 'setup-cloudflare',

@@ -46,13 +46,32 @@ to `.github/workflows/deploy.yml` (GitHub can create the file in the browser:
 
 A deploy never changes the database by itself. Step 3 does that, every time.
 
+**Start with the contact edition.** Before the first push, add one line to
+`package.json` in GitHub (edit the file in the browser):
+
+```json
+"engine9": { "install": ["@engine9/schemas/editions/contact"] }
+```
+
+(Keep any other keys already in `"engine9"`.) Step 1 then installs it with
+the tables: names, email, phone, postal address, timeline, and transactions,
+which is what signup, login, and adding admins by email expect. A site whose
+database already exists runs the workflow by hand (below) once, with command
+`install` and options `--plugin @engine9/schemas/editions/contact`.
+
+Advanced: another edition, or only the required plugins, changes what the
+site can do. Without the contact edition the site keeps no names or email
+addresses: it cannot email people, signups keep less, and admins cannot be
+added by email. Read the `@engine9/schemas` README and understand what you
+give up before you choose.
+
 Run by hand (**Actions**, **Deploy**, **Run workflow**), it takes three
 inputs:
 
 | Input | Use |
 | --- | --- |
-| `command` | `upgrade` (default), or `installDefaultPlugins` when the status page asks for it |
-| `options` | Extra flags for that command: `--dry-run`, `--plugin <path>`, or an opt-in upgrade such as `--drop-name-columns` |
+| `command` | `upgrade` (default), or `install` to add a plugin or an edition to the site |
+| `options` | Extra flags for that command: `--dry-run`, `--plugin <path>` (`install` needs it, e.g. `--plugin @engine9/schemas/editions/contact`), or an opt-in upgrade such as `--drop-name-columns` |
 | `rotate` | Replace production's API keys and signing secrets. Everyone signed in signs in again. Use it when a key or secret leaked, or when the status page says so |
 
 ## Administering the site
@@ -88,7 +107,7 @@ holds it. That is intended:
 - Upgrades run in the workflow with a temporary key (`--remote`).
 - Status is the browser page above.
 - A command run elsewhere that needs admin access (`e9core status`,
-  `segment`, `installDefaultPlugins`) takes `--remote` in any folder with
+  `segment`, `install`) takes `--remote` in any folder with
   the site's `wrangler.jsonc` and a Cloudflare token.
 
 To replace the key, run the workflow with `rotate`.

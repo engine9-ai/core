@@ -3,12 +3,12 @@ import assert from 'node:assert';
 import { createHash } from 'node:crypto';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, applySchemaPlugin, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, applySchemaPlugin, ensurePluginRow } from './helpers/applySchemas.js';
 
 test('client PersonWorker: processPeople runs the inbound pipeline end to end', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-web-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-web-plugin', name: 'Test Web Plugin' });
 
@@ -96,7 +96,7 @@ test('client PersonWorker: processPeople runs the inbound pipeline end to end', 
 test('person_hash is woven in once it is installed -- no extraTransforms needed', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const { tables: before } = await worker.tables();
     assert.ok(!before.includes('person_hash_email'), 'person_hash must not be in the standard stack');
     const pluginId = getPluginUUID('engine9.test', 'test-hash-plugin');

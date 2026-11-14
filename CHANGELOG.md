@@ -7,6 +7,71 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.21.0: required plugins; stacks become editions in @engine9/schemas; catalogs name no host
+
+Pair with `@engine9/schemas` 1.14.0. Step by step: [docs/upgrade-1.21.md](docs/upgrade-1.21.md).
+
+Who has to act:
+
+- **Every site:** upgrade both packages, deploy, run `npx e9core upgrade`.
+- **Code, scripts, and CI that call `installDefaultPlugins`, `--stack`, a
+  `stacks/` path, or the removed exports:** change them (table below). These
+  break.
+- **A site set up from now on:** start it with the contact edition. The
+  setup wizard has a new `plugins` step that recommends it (or run
+  `npx e9core setup --step plugins` before `setup`). It records the choice in
+  `package.json` `"engine9": { "install": [...] }`, and setup installs it in
+  every database it creates. Without a plugin that stores email, adding
+  people or admins by email fails, and each sign-in makes a new person.
+- **A site that sets `engine9.plugins`:** list its edition there.
+- **Plugin catalogs, secrets, and hosts:** find entries and secrets
+  definitions through their own configured catalog. Core no longer documents
+  a service's addresses.
+
+Core no longer installs a default set of plugins. Every database gets the
+**required plugins**, the four whose tables core reads and writes itself
+(`plugin`, `person`, `segment`, `source_code`), and the site installs
+everything else. The install lists that were "stacks" are now **editions** in
+`@engine9/schemas`: plugins whose `include` list adds to the required ones.
+Core names no edition.
+
+| # | Change | Who is affected | Breaks a build? |
+| --- | --- | --- | --- |
+| 1 | **New: `REQUIRED_PLUGINS` and `PluginWorker.installRequiredPlugins()`.** `@engine9/schemas/plugin`, `person`, `segment`, `source_code`, plus the `api_key` table and the identifier store setting. `e9core setup` installs only these. Exported from `@engine9/core`, `@engine9/core/requiredPlugins`, and `@engine9/core/PluginWorker` | Everyone | No |
+| 2 | **Removed: `installDefaultPlugins`**, the method, the `e9core installDefaultPlugins` command, and `POST /admin/install-default-plugins`. There is no default set beyond the required plugins. New: `e9core install --plugin <path>` and `POST /admin/install { path }` install one plugin and the plugins it includes | Code, CI, and workflows that call it | Yes |
+| 3 | **Removed: the `default_stack` setting**, `--stack`, `opts.stack`, the `defaultStackPath` worker option, `DEFAULT_CORE_SCHEMAS`, `DEFAULT_STACK_PATH`, `STANDARD_STACK_PATH`, `LIMITED_PII_STACK_PATH`, and `resolveDefaultPluginsPath`. `readCorePluginSettings` returns `{ exclude_pii }` only. `@engine9/schemas` 1.14.0's `retire_stacks` upgrade deletes the setting | Code that imports them | Yes |
+| 4 | **Renamed: `@engine9/core/stackMetadata` → `@engine9/core/pluginIncludes`; `loadStackMetadata` → `loadPluginIncludes`** (also a `PluginWorker` method), with `expandPluginIncludes` | Code that imports them | Yes |
+| 5 | **`exclude_pii` refuses, and no longer chooses.** It refuses the plaintext contact plugins and any plugin that includes one (an edition), before anything is installed. It no longer sends installs to the limited-pii list, so a PII-free account installs `person_hash` only when it asks for it | PII-free accounts | No |
+| 6 | **`bootstrapAccount({ path })`** installs the required plugins, then `path` only when given. Without one, nothing else is installed | Hosts that bootstrap accounts | No, but an account bootstrapped with no path gets only the required plugins |
+| 7 | **`e9core upgrade` installs a missing required plugin** before the reinstall, and reinstalls plugins with an `include` list before the rest. On an empty database it installs the required plugins as setup does. Status: `core.default_stack` is now `core.required_plugins` (a fail), and `core.tables` / `core.core_plugin` point at `e9core upgrade` | Everyone | No |
+| 8 | **`build-plugins` reads `plugin.json`** (was `stack.json`) for a plugin's `include` list, and an `engine9.plugins` list now adds only the required plugins and their includes | Sites that set `engine9.plugins` | Yes, if the site relied on `person_email` and the others being added: list the edition |
+| 9 | The audit record of an admin install is `plugins.install` (was `plugins.install_default`), with the path and what it included. Installs record the trigger `install_required` or `install` (was `install_default`) | Readers of the audit log | No |
+| 10 | **Plugin catalogs: core's code names no catalog service.** `PLUGIN_CATALOG_SCHEMA_URL` (unchanged value) is read from the `$id` in `plugin-catalog.schema.json`, the one place the address is written. [docs/plugin-catalog.md](docs/plugin-catalog.md) keeps the standard and drops market's URL table, the `/definitions/<path>.json` address, and the draft publish API: a host finds entries and secrets definitions through the catalog it is configured to use, and each catalog documents its own API (market's is market.engine9.ai/docs). Any catalog validates entries with `validatePluginCatalogEntry`, stores each version once, and derives definitions with `pluginCredentialsDefinition` | Catalog services, secrets, and hosts that built definition or entry URLs from the docs | No. Entries and the schema are unchanged |
+| 11 | **Fix: install records report the right core version.** `lib/version.js` said 1.20.0 in the 1.20.1 package, so plugin rows and status showed 1.20.0 | Readers of `last_install.core` | No |
+| 12 | **New: the setup wizard's `plugins` step**, before the create steps (`npx e9core setup --step plugins [--plugin <path> \| --none]`). It recommends the contact edition and writes `package.json` `"engine9": { "install": [...] }`. Setup installs those plugins after the required ones in every database it creates (`engine9.db`, local D1, production D1 on its first load), and `build-plugins` always bundles them. On a database that already exists, the step installs into `engine9.db` and prints the `install` command for the others | New sites; agents that walk people through setup (one more question) | No |
+
+| What a site changes | |
+| --- | --- |
+| Every site | `npm install @engine9/core@^1.21.0 @engine9/schemas@^1.14.0`, deploy, `npx e9core upgrade --url <site>`. The upgrade renames a `stacks/` plugin row to its edition |
+| `npx e9core installDefaultPlugins …` in scripts or docs | `npx e9core upgrade …` for the required plugins; `npx e9core install --plugin @engine9/schemas/editions/contact …` for what the site adds |
+| `--stack <path>` | `install --plugin <path>` |
+| The deploy workflow's `command` choice `installDefaultPlugins` | `install` (see [cloudflare/github-deploy.yml.example](cloudflare/github-deploy.yml.example)) |
+| `worker.installDefaultPlugins()` | `worker.installRequiredPlugins()`, then `worker.install({ path })` for the edition or plugins the site needs |
+| `POST /api/admin/install-default-plugins` | `POST /api/admin/install` with `{ path }` |
+| `import { DEFAULT_CORE_SCHEMAS } from '@engine9/core/stackMetadata'` | `import { REQUIRED_PLUGINS } from '@engine9/core/requiredPlugins'`, plus the edition the site installs |
+| `loadStackMetadata`, `@engine9/core/stackMetadata` | `loadPluginIncludes`, `@engine9/core/pluginIncludes` |
+| `STANDARD_STACK_PATH` / `'@engine9/schemas/stacks/standard'` | `'@engine9/schemas/editions/contact'` (core exports no constant for it) |
+| `LIMITED_PII_STACK_PATH` / `'@engine9/schemas/stacks/limited-pii'` | `'@engine9/schemas/editions/pii-free'` |
+| The `default_stack` setting | Nothing: the upgrade retires it. An account whose default named a stack it never installed gets that edition |
+| `package.json` `engine9.plugins` | Add the edition the site installs, e.g. `@engine9/schemas/editions/contact` |
+| `bootstrapAccount({ stack })` | `bootstrapAccount({ path })` |
+| A plugin package with `stack.json` | Rename it `plugin.json` |
+| Readers of `plugins.install_default` audit records | `plugins.install` |
+| A new site | Before `setup`, choose the contact edition: the wizard's `plugins` step, or `npx e9core setup --step plugins`, or add `"install": ["@engine9/schemas/editions/contact"]` to `package.json` `"engine9"` (a GitHub-only site, in the browser) |
+| A site that already ran setup without choosing | `npx e9core install --plugin @engine9/schemas/editions/contact --url <site>` (or `--remote`; a GitHub-only site runs the deploy workflow with command `install`) |
+| A login check that installs missing plugins (as `demo-festival` did) | Check `REQUIRED_PLUGINS` plus the site's edition; install with `installRequiredPlugins()` then `install({ path })` |
+| A secrets service or host that reads `https://market.engine9.ai/definitions/<path>.json` or `https://plugins.engine9.ai/definitions/<path>.json` from core's docs | Configure the catalog address in that service; core no longer names one |
+
 ## 1.20.1: standard plugin catalog entries; registry attaches credentials
 
 No site needs to change anything for this release.

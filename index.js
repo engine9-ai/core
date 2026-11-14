@@ -6,11 +6,10 @@
 export { default as SQLWorker } from './lib/SQLWorker.js';
 export { default as SchemaWorker } from './lib/SchemaWorker.js';
 export { default as PluginWorker, DEFAULT_PLUGIN_SCHEMA_PATH } from './lib/PluginWorker.js';
+export { REQUIRED_PLUGINS } from './lib/requiredPlugins.js';
 export {
   CORE_PLUGIN_PATH,
-  LIMITED_PII_STACK_PATH,
   LIMITED_PII_PLUGIN_PATH,
-  STANDARD_STACK_PATH,
   PLAINTEXT_PII_INSTALL_PATHS,
   isTruthyExcludePii,
   readCorePluginSettings
@@ -23,7 +22,7 @@ export {
   validateSettingValue
 } from './lib/pluginSettings.js';
 export { default as PersonWorker } from './lib/PersonWorker.js';
-export { loadStackMetadata, DEFAULT_STACK_PATH } from './lib/stackMetadata.js';
+export { loadPluginIncludes, expandPluginIncludes } from './lib/pluginIncludes.js';
 export {
   PLUGIN_CONFIG_INVALID,
   PLUGIN_PACKAGE_NOT_DECLARED,

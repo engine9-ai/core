@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { createApi } from '../api/index.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import { getPluginUUID } from '../lib/utilities.js';
 
 test('production API has no setup route; CORS still honors allowed origins', async () => {
@@ -12,7 +12,7 @@ test('production API has no setup route; CORS still honors allowed origins', asy
     auth: { database_connection: 'sqlite://:memory:' }
   });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'website');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const keyStore = new SqlApiKeyStore({ worker });

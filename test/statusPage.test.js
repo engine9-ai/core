@@ -11,7 +11,7 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 
 const ACCOUNT_ID = 'status-page';
 const SITE = 'https://site.example.com';
@@ -19,7 +19,7 @@ const SECRET = '0123456789abcdef'.repeat(4);
 
 async function site({ withLogin = true } = {}) {
   const worker = new PersonWorker({ accountId: ACCOUNT_ID, auth: { database_connection: 'sqlite://:memory:' } });
-  await applyStandardStack(worker);
+  await applyContactEdition(worker);
   const pluginId = getPluginUUID(ACCOUNT_ID, 'website');
   await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
   const keyStore = new SqlApiKeyStore({ worker });

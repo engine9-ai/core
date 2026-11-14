@@ -5,7 +5,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { setupStep } from '../api/setupSteps.js';
+import { CONTACT_EDITION, setupStep } from '../api/setupSteps.js';
 import { parseOriginList } from '../api/origins.js';
 import {
   ENV_ALLOWED_ORIGINS,
@@ -47,6 +47,33 @@ export function setSetupFinished(cwd, finished) {
   if (finished) state.setupFinished = new Date().toISOString();
   else delete state.setupFinished;
   writeWizardState(cwd, state);
+}
+
+/** package.json "engine9.install": the plugins setup installs after the required ones. */
+export function readInstallChoice(cwd) {
+  const file = path.join(cwd, 'package.json');
+  if (!existsSync(file)) return null;
+  const list = JSON.parse(readFileSync(file, 'utf8')).engine9?.install;
+  return Array.isArray(list) ? list : null;
+}
+
+function writeInstallChoice(cwd, list) {
+  const file = path.join(cwd, 'package.json');
+  if (!existsSync(file)) {
+    throw new Error('No package.json here. Run npm install @engine9/core @engine9/schemas first.');
+  }
+  const pkg = JSON.parse(readFileSync(file, 'utf8'));
+  pkg.engine9 = { ...(pkg.engine9 || {}), install: list };
+  writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
+}
+
+function readSetupState(cwd) {
+  const file = path.join(cwd, '.e9core', 'setup.json');
+  try {
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  } catch {
+    return {};
+  }
 }
 
 function readEnvFile(cwd) {
@@ -127,7 +154,9 @@ async function openWorker(ctx) {
  *   origins?: string|string[],
  *   email?: string,
  *   givenName?: string,
- *   given_name?: string
+ *   given_name?: string,
+ *   plugin?: string,
+ *   none?: boolean
  * }} answers
  * @param {{
  *   cwd?: string,
@@ -167,6 +196,41 @@ export async function runSetupStep(answers = {}, ctx = {}) {
   if (action === 'login') {
     await runCommand(['wrangler', 'login'], cwd, { detached: true });
     return { started: true, step: action };
+  }
+
+  if (action === 'plugins') {
+    // Recorded in package.json "engine9.install", so every database setup
+    // creates gets it: engine9.db, local D1, and production D1 on its first
+    // load (also from CI). Best chosen before the create steps.
+    const plugin = answers.none ? null : String(answers.plugin || CONTACT_EDITION).trim();
+    if (plugin === '') throw new Error('Name a plugin path, or choose only the required plugins.');
+    const install = plugin ? [plugin] : [];
+    writeInstallChoice(cwd, install);
+    const notes = [
+      plugin
+        ? `Recorded ${plugin} in package.json "engine9.install". Setup installs it after the required plugins in every database it creates.`
+        : 'Recorded only the required plugins in package.json "engine9.install".'
+    ];
+    const dbFile = path.join(cwd, 'engine9.db');
+    if (plugin && (ctx.worker || existsSync(dbFile))) {
+      // The local database already exists: install into it now.
+      const opened = await openWorker(ctx);
+      try {
+        await opened.worker.install({ path: plugin });
+        notes.push(`Installed ${plugin} in the local development database.`);
+      } finally {
+        if (opened.owned) await opened.worker.destroy();
+      }
+    }
+    if (plugin && readSetupState(cwd).schemaLocal) {
+      notes.push(
+        `The local Cloudflare database was created before this choice. With the preview running: npx e9core install --plugin ${plugin} --url <preview url>`
+      );
+    }
+    if (plugin) {
+      notes.push(`A production database that already has its tables: npx e9core install --plugin ${plugin} --remote`);
+    }
+    return { install, notes, step: action };
   }
 
   if (action === 'setup-cloudflare') {

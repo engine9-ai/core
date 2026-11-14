@@ -158,6 +158,33 @@ describe('setup', () => {
     }
   });
 
+  it('loads the plugins package.json "engine9.install" names after the required plugins', async () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-install-'));
+    try {
+      writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({ name: 'site', engine9: { install: ['@engine9/schemas/editions/contact'] } }));
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), `${JSON.stringify({
+        d1_databases: [{ binding: 'DB', database_name: 'engine9', database_id: DB_ID }]
+      })}\n`);
+      let sql = '';
+      const result = await setup({
+        cwd,
+        remote: true,
+        deploy: false,
+        skipKeys: true,
+        exec(args) {
+          if (args.includes('--file')) sql = readFileSync(args[args.indexOf('--file') + 1], 'utf8');
+          return { status: 0, stdout: '' };
+        }
+      });
+      for (const table of ['plugin', 'person', 'person_email', 'person_name', 'timeline']) {
+        assert.match(sql, new RegExp(`CREATE TABLE "?${table}"? `), `${table} is loaded`);
+      }
+      assert.match(result.notes.join('\n'), /and @engine9\/schemas\/editions\/contact \(package\.json "engine9\.install"\)/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it('--remote on a fresh runner loads nothing into a D1 database that already has the tables', async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-rerun-'));
     try {

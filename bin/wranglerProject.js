@@ -1,7 +1,7 @@
 /*
   The site's own wrangler config, and what the deployed target says about
   itself. `e9core setup --remote`, `status`, and the `--remote` key in
-  `upgrade`, `segment`, and `installDefaultPlugins` read the Worker name,
+  `upgrade`, `segment`, and `install` read the Worker name,
   the D1 database, and the account from here, never from defaults, so a run
   in CI or an agent session works on the same site a laptop would.
 */

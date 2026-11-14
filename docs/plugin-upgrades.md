@@ -14,7 +14,7 @@ reinstall cannot:
 - changes what a table means;
 - changes an inbound step that saved snapshots name.
 
-A new table, a new column, or a new plugin in a stack needs no upgrade.
+A new table, a new column, or a new plugin in an `include` list needs no upgrade.
 
 ## The declaration
 
@@ -127,7 +127,7 @@ Rules:
 ## When upgrades run
 
 Only `e9core upgrade` (`PluginWorker.upgrade`, `POST /api/admin/upgrade`)
-runs them, and `e9core status` checks them. Installs, `installDefaultPlugins`,
+runs them, and `e9core status` checks them. Installs, `installRequiredPlugins`,
 and requests never call either hook.
 
 | Plugin | Runs with |

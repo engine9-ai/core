@@ -6,7 +6,7 @@
   No accounts.d, no WorkerRunner.
 
   This is not the server CLI. @engine9/server publishes bin.e9, which points at
-  server/bin/e9 (WorkerRunner: `e9 personworker installDefaultPlugins -a …`).
+  server/bin/e9 (WorkerRunner: `e9 pluginworker install -a …`).
   See core/README.md "The e9core CLI" and server/README.md.
 
     e9core create-api-key --db sqlite://./engine9.db --name "website" --scopes people:write,data:read,tasks:read,tasks:schedule [--default-role-id <segment-uuid>]
@@ -55,12 +55,14 @@
         with wrangler d1 execute --file. migrations apply posts to /query
         and fails on the modified_at triggers this prints.
 
-    e9core installDefaultPlugins --db sqlite://./engine9.db [--stack ...]
-    e9core installDefaultPlugins --url https://www.example.com [--key e9key_... | --env staging] [--stack ...]
-        Live-install the published person schema plugins (default), or an opt-in stack
-        with --stack (e.g. @engine9/schemas/stacks/standard): plugin rows +
-        create/alter tables. Not the same as the stack named "standard" unless
-        you pass that --stack (or set the warehouse default_stack setting).
+    e9core install --plugin <path> --db sqlite://./engine9.db
+    e9core install --plugin <path> --url https://www.example.com [--key e9key_... | --remote] [--env staging]
+        Install one plugin: its plugin row, then create/alter its tables. A
+        plugin with an include list installs those plugins after it. Setup
+        already installed the required plugins (plugin, person, segment,
+        source_code); this is how a site adds anything else, such as the
+        plugins that store contact details. --url runs inside a deployed site
+        (D1 included) through POST /api/admin/install with the admin key.
 
     e9core upgrade --db sqlite://./engine9.db [--dry-run] [--no-refresh] [--<upgrade option> …]
     e9core upgrade --url https://www.example.com [--key e9key_... | --remote] [--env staging] [--dry-run] [--no-refresh] [--<upgrade option> …]
@@ -79,7 +81,7 @@
         --remote (with --url, or the one custom-domain route in wrangler.jsonc)
         uses a temporary admin key written to the site's D1 through wrangler
         and deleted afterwards, for a machine with no admin key (CI). The
-        same --remote works on status, segment, and installDefaultPlugins.
+        same --remote works on status, segment, and install.
         Any other flag is an option of the plugins' upgrades, such as an
         opt-in removal: --drop-name-columns is drop_name_columns. A dry run
         lists each opt-in upgrade and its option; unused_options names a
@@ -115,7 +117,7 @@
     e9core catalog build (--plugin <path>[,<path>] | --package <name>) [--out <dir>]
     e9core catalog validate <file.json> [...]
         A plugin's catalog entry: its published surface (name, publisher,
-        credentials, settings, methods) for market.engine9.ai, secrets, and
+        credentials, settings, methods) for plugin catalogs, secrets, and
         task callers (docs/plugin-catalog.md). build reads the plugins
         through package.json "engine9", as install does. Both exit 1 when an
         entry does not meet the standard.
@@ -189,7 +191,7 @@ import { setupKeys, readEnvValue } from './setupKeys.js';
 import { SETUP_HELP, setup } from './setup.js';
 import { serve, parseServeArgs } from './serve.js';
 import { runSetupStep } from './setupFlow.js';
-import { adminKey, callSite, installDefaultPluginsSite, upgradeSite } from './upgrade.js';
+import { adminKey, callSite, installSite, upgradeSite } from './upgrade.js';
 import { remoteSiteUrl, withTemporaryAdminKey } from './temporaryKey.js';
 import { renderStatus, runStatusCommand } from './status.js';
 import { catalogCommand } from './catalog.js';
@@ -550,13 +552,12 @@ function getPluginWorker(args) {
     accountId,
     accountHandle,
     auth: { database_connection: db },
-    defaultStackPath: args.stack || undefined,
     audit: cliAudit()
   });
 }
 
 /* Flags `e9core upgrade` reads itself; the rest go to the plugins' upgrades. */
-const UPGRADE_CLI_FLAGS = new Set(['url', 'remote', 'key', 'env', 'db', 'account', 'handle', 'stack', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
+const UPGRADE_CLI_FLAGS = new Set(['url', 'remote', 'key', 'env', 'db', 'account', 'handle', 'plugin', 'failed', 'sql', 'dry-run', 'no-refresh']);
 
 function listArg(value) {
   if (!value || value === true) return undefined;
@@ -586,7 +587,9 @@ async function main() {
           domain: args.domain && args.domain !== true ? String(args.domain) : undefined,
           origins: args.origins && args.origins !== true ? String(args.origins) : undefined,
           email: args.email && args.email !== true ? String(args.email) : undefined,
-          givenName: args['given-name'] && args['given-name'] !== true ? String(args['given-name']) : undefined
+          givenName: args['given-name'] && args['given-name'] !== true ? String(args['given-name']) : undefined,
+          plugin: args.plugin && args.plugin !== true ? String(args.plugin) : undefined,
+          none: args.none === true
         }, {
           cwd: process.cwd(),
           db: args.db && args.db !== true ? String(args.db) : undefined
@@ -718,11 +721,6 @@ async function main() {
       break;
     }
     case 'sqlite-ddl': {
-      if (args.stack) {
-        console.error('sqlite-ddl does not accept --stack; pass --schema <package>');
-        console.error('  Example: e9core sqlite-ddl --schema @engine9/schemas/person');
-        process.exit(1);
-      }
       if (!args.schema || args.schema === true) {
         console.error('sqlite-ddl requires --schema <package>');
         console.error('  Example: e9core sqlite-ddl --schema @engine9/schemas/person');
@@ -748,17 +746,22 @@ async function main() {
       }
       break;
     }
-    case 'installDefaultPlugins': {
-      const path = args.stack && args.stack !== true ? args.stack : args.path && args.path !== true ? args.path : undefined;
+    case 'install': {
+      const path = args.plugin && args.plugin !== true ? String(args.plugin).trim() : '';
+      if (!path) {
+        console.error('install requires --plugin <path>');
+        console.error('  Example: e9core install --plugin @engine9/schemas/event --url https://www.example.com');
+        process.exit(1);
+      }
       const siteUrl = siteUrlArg(args);
       if (siteUrl) {
-        const result = await withSiteAdminKey(args, siteUrl, (key) => installDefaultPluginsSite({ url: siteUrl, key, path }));
+        const result = await withSiteAdminKey(args, siteUrl, (key) => installSite({ url: siteUrl, key, path }));
         console.log(JSON.stringify(result, null, 2));
         break;
       }
       const worker = getPluginWorker(args);
       try {
-        const result = await worker.installDefaultPlugins({ path });
+        const result = await worker.install({ path });
         console.log(JSON.stringify(result, null, 2));
       } finally {
         await worker.destroy();
@@ -839,7 +842,7 @@ async function main() {
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|installDefaultPlugins|upgrade|status|build-plugins|catalog>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|install|upgrade|status|build-plugins|catalog>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

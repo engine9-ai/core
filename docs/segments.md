@@ -308,7 +308,7 @@ Membership changes still go through core: this account's
 ## Upgrading an existing database
 
 The three columns are on `@engine9/schemas/segment`. Reinstall the
-schema plugins (`npx e9core installDefaultPlugins`, or your usual schema apply) before
+schema plugins (`npx e9core upgrade`, or your usual schema apply) before
 `ensureRoleSegments` or `POST /auth/segments` runs. Until then every
 membership edit that reads the policy is denied. Role segments created before
 the columns keep `null` in all three; set them with

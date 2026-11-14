@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 
 async function withWorker(fn) {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'race');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     await fn(worker, pluginId);

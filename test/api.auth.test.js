@@ -7,7 +7,7 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
-import { applyStandardStack, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 
 const DOMAIN = 'site.example.com';
 const UNID = `${DOMAIN}:${'a'.repeat(64)}`;
@@ -36,7 +36,7 @@ async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, su
 test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-auth-routes');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
@@ -245,7 +245,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
 test('API login from @engine9/id: delegate option, no configured domain', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-auth-id');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
@@ -393,7 +393,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
 test('API role_id: only roles the caller holds', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyStandardStack(worker);
+    await applyContactEdition(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-role-id');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const viewerRoleId = getVersionedUUID();

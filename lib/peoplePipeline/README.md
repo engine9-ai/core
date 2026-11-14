@@ -48,7 +48,7 @@ extraTransforms / omitTransforms ──► per-job additions and removals
 ```
 
 A PII-free account (`exclude_pii` on `@engine9/schemas/utilities/limited-pii`,
-usually with the `@engine9/schemas/stacks/limited-pii` install list) is the
+often with the `@engine9/schemas/editions/pii-free` edition) is the
 clearest example: it has `person_hash` installed and `person_email` /
 `person_phone` / `person_address` not installed. The weave for that account has
 hash steps in `id` and `upsert` and no plaintext steps anywhere. With
@@ -167,11 +167,11 @@ Jobs can adjust the woven chain without touching plugins:
 ## Guard rails
 
 - Plugin table exists but no installed plugin declares inbound slots → the load
-  fails with "No inbound people plugins are installed. Run installDefaultPlugins".
+  fails with "No inbound people plugins are installed". `e9core upgrade` installs the missing required plugins.
   Silent skipping would lose data, so this is loud on purpose.
 - A known plugin is installed but has no saved spec and the runtime cannot load
   its package (Cloudflare Workers cannot import packages at runtime) → fails with
-  "re-run install". Re-running `installDefaultPlugins` refreshes the snapshots.
+  "re-run install". `e9core upgrade` reinstalls the installed plugins, which refreshes the snapshots.
 - No plugin table at all (unit tests, fresh dev database) → every package the
   runtime can execute is treated as installed. Real accounts always have the
   table.

@@ -52,7 +52,7 @@ It uses every source it can reach and says which in its first line.
   copies the D1 schema (`wrangler d1 export --no-data`) and the `plugin`,
   `setting`, and `api_key` rows into a temporary SQLite file, then checks that
   copy against this folder's `node_modules`. Plugin setting values stay in D1,
-  except the ones status reads (`default_stack`, `exclude_pii`). The copy has
+  except the ones status reads (`exclude_pii`, `identifier_store_kind`). The copy has
   no people rows, so it checks only whether each upgrade applies to the schema
   (`shouldUpgrade`), not its plan. This
   is the path that still works when the API's keys are broken.
@@ -84,10 +84,10 @@ run it by hand with a command, options, or "rotate"
 | `database.copy` | Wrangler could not export the schema or read the rows | Read the detail |
 | `handle.default` | Always a pass. No `E9_ACCOUNT_ID` (or `accountId`) was set, so the site runs on a core default (`client`, `cloudflare`, `local`, `my-site`), and that default is its permanent handle | Nothing. If `E9_ACCOUNT_ID` is set later, also set `E9_ACCOUNT_HANDLE` to the default so the ids stay the same |
 | `handle.fingerprint` | The configured account id or handle (or the site's plugin id, when the site sets one) does not match the ids already in the `roles`/`website`/`e9console`/`e9workers`/`e9forms` plugin rows or the admin segment (fail only in effect — reported as `warn`; it does not block requests, but every write under this config lands on a different row than the account's existing data) | Set `accountHandle` (`E9_ACCOUNT_HANDLE`) to the value that produced the existing rows; never change the rows |
-| `core.tables` | `plugin`, `setting`, or `api_key` is missing | `npx e9core installDefaultPlugins` |
-| `core.core_plugin` | `@engine9/schemas/plugin` has no row | `npx e9core installDefaultPlugins` |
+| `core.tables` | `plugin`, `setting`, or `api_key` is missing | `npx e9core upgrade` |
+| `core.core_plugin` | `@engine9/schemas/plugin` has no row | `npx e9core upgrade` |
 | `core.triggers` | A table with `modified_at` has no `<table>_modified_at_auto_update` trigger (SQLite, D1) | Load `e9core sqlite-ddl` output for that plugin with `wrangler d1 execute --file` |
-| `core.default_stack` | A plugin of the account's default stack is not installed | `npx e9core installDefaultPlugins` |
+| `core.required_plugins` | A [required plugin](../README.md#the-required-plugins) has no row | `npx e9core upgrade` (it installs missing required plugins) |
 | `keys.public`, `keys.admin` | The site's key has no row in `api_key`, or the row is turned off or expired | `npx e9core setup-keys --remote` |
 | `keys.live_public` | The site refuses the public key in `.env` | `npx e9core setup-keys --remote` |
 | `keys.admin_live` | The site refuses the admin key, or `/api/admin/status` failed | `npx e9core setup-keys --remote` |
@@ -156,7 +156,7 @@ someone who gains or loses a role.
 | --- | --- |
 | `plugin.install` | An install changed the schema, failed, or was the plugin's first. `meta.changes` lists the tables and columns it changed |
 | `upgrade`, `upgrade.plugins` | `e9core upgrade` (not a dry run), by any route: `--url`, `--db`, the server. Who ran it: the API key and role, or `by: "cli"` |
-| `plugins.install_default` | `e9core installDefaultPlugins --url` |
+| `plugins.install` | `e9core install --url` (`POST /admin/install`), with the plugin and what it included |
 | `role.grant`, `role.revoke` | A role segment's membership changed, with who did it |
 | `segment.policy` | `e9core segment policy` changed who may join, leave, or manage a segment |
 

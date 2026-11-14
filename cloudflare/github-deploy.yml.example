@@ -25,10 +25,10 @@ on:
       command:
         description: What runs after the deploy
         type: choice
-        options: [upgrade, installDefaultPlugins]
+        options: [upgrade, install]
         default: upgrade
       options:
-        description: Extra flags for that command, such as --dry-run or --plugin <path>
+        description: Extra flags for that command, such as --dry-run, or --plugin <path> (install needs it)
         required: false
         default: ''
       rotate:

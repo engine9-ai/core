@@ -44,8 +44,8 @@ as `@engine9/core`. Core lists it as a peer, so the site chooses the
 npm install @engine9/core @engine9/schemas
 ```
 
-`installDefaultPlugins` and `e9core sqlite-ddl` read the `@engine9/schemas`
-package that this install resolved. When you upgrade it, install the new
+`e9core install`, `e9core upgrade`, and `e9core sqlite-ddl` read the
+`@engine9/schemas` package that this install resolved. When you upgrade it, install the new
 version, deploy, then upgrade each database:
 
 ```bash
@@ -92,10 +92,10 @@ Before creating a table, decide in this order:
 
 1. **Use a published schema plugin.** Look through `@engine9/schemas` for a
    schema plugin that already describes the thing. An event is
-   `@engine9/schemas/event`: tables `event` and `person_event`. That
-   package is not in the default stack, so install it when the project needs
-   events (`npx e9core sqlite-ddl --schema @engine9/schemas/event`, or add
-   the package to the stack). Keep those table names. Every plugin in the
+   `@engine9/schemas/event`: tables `event` and `person_event`. It is
+   not a required plugin and no edition includes it, so install it when the
+   project needs events (`npx e9core install --plugin @engine9/schemas/event`).
+   Keep those table names. Every plugin in the
    packages listed in `package.json` `engine9.pluginPackages` is available;
    the default is every `@engine9/schemas` plugin
    ([details](../README.md#how-plugins-are-loaded)).
@@ -386,21 +386,49 @@ commands below.
 | `--node` | Skip Wrangler. Tables and keys go to the SQLite file only |
 
 ```bash
-npx e9core installDefaultPlugins --db sqlite://./engine9.db
+npx e9core upgrade --db sqlite://./engine9.db
+npx e9core install --plugin @engine9/schemas/editions/contact --db sqlite://./engine9.db
 npx e9core setup-keys
 npx e9core setup-keys --remote
 npx e9core create-api-key --db sqlite://./engine9.db --name website --scopes public
 ```
 
-`installDefaultPlugins` fills a database file on your computer. For D1,
-`setup` installs the default plugins into a new file in a temporary folder,
+`upgrade` installs the [required plugins](../README.md#the-required-plugins)
+into a database that lacks them, and `install` adds one plugin (an edition
+includes several). For D1, `setup` installs the required plugins into a new
+file in a temporary folder,
 loads its dump with `wrangler d1 execute --file`, prints the tables it
 loaded, and deletes it, so test people in `engine9.db` never reach D1.
 With `--remote`, it loads production only when production D1 has no
 engine9 tables (no `plugin` table); after that, `e9core upgrade` adds new
 tables. Building that file needs neither knex nor better-sqlite3.
-Tables without the plugin rows from `installDefaultPlugins` will not accept
-people writes.
+Tables without their plugin rows will not accept people writes.
+
+Setup installs the [required plugins](../README.md#the-required-plugins),
+then the plugins `package.json` lists in `"engine9": { "install": [...] }`.
+Start with the **contact edition**: names, email, phone, postal address,
+`timeline`, and transactions, which is what signup, login, and adding admins
+by email expect. The wizard's plugins step records it, or:
+
+```bash
+npx e9core setup --step plugins   # writes "install": ["@engine9/schemas/editions/contact"]
+```
+
+Choose before `setup` creates the databases, and every one of them gets it:
+`engine9.db`, local D1, and production D1 on its first load (from CI too,
+because `package.json` is committed). A database that already has its tables
+gets it with `npx e9core install --plugin @engine9/schemas/editions/contact`
+(`--db sqlite://./engine9.db` locally, `--remote` for production).
+
+Advanced: another edition, or only the required plugins, changes what the
+site can do. Without the contact edition the site keeps no names or email
+addresses: it cannot email people, signups keep less, and admins cannot be
+added by email. Read the `@engine9/schemas` README and understand what you
+give up before you choose.
+
+`--url https://www.example.com` with the admin key works the same way. A site run from
+GitHub alone runs the deploy workflow by hand with the command `install` and
+the options `--plugin <path>` ([no-command-line.md](no-command-line.md)).
 
 The Worker that `setup` points at is
 [`cloudflare/worker.js`](../cloudflare/worker.js). Optional KV and R2 bindings
@@ -478,7 +506,7 @@ Configuration failures are not fixed by signing in again.
 | Detail | Reason | What is happening | What to do |
 | --- | --- | --- | --- |
 | `no plugin registry is configured` | `plugin_registry_missing` | The Worker bundle did not include `@engine9/schemas`. `@engine9/core/plugins/site` is an empty stub until the build aliases it. | Run `e9core build-plugins` before the bundle, alias `@engine9/core/plugins/site` to `engine9.plugins.js`, deploy again. On Astro, the Vite alias has to point at that file too, because Vite bundles before Wrangler. |
-| `Cannot add a column with non-constant default` | `schema_update_failed` | `installDefaultPlugins` tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
+| `Cannot add a column with non-constant default` | `schema_update_failed` | An install tried to `ALTER TABLE ... ADD COLUMN` with `DEFAULT CURRENT_TIMESTAMP`. D1 rejects that. A new `created_at` or `modified_at` on a table that already exists is the usual case. | Current core rebuilds that table (create, copy, rename) instead of `ADD COLUMN`. An older core needs a migration that rebuilds the table the same way. `wrangler d1 execute --file` can apply a file that contains the `modified_at` trigger. `wrangler d1 migrations apply` cannot: it splits the trigger on the semicolon. |
 | other `D1_ERROR` / `SQLITE_ERROR` | `database_error` | The database rejected some other statement while finishing sign-in (missing table, constraint, and so on). | Read the detail. Fix the schema or the data, then deploy. |
 | `SESSION_SECRET is not set` | `missing_session_secret`; `login_off` (501 from `/auth/*`, with `missing`) | The site cannot mint its session cookie. | `npx e9core setup-keys --remote`, or run the deploy workflow again ([no-command-line.md](no-command-line.md)). Do not choose a value yourself. |
 | `SESSION_SECRET is not 64 hex characters` | `login_off` (501 from `/auth/*`, with `invalid`) | Someone typed the secret. Login stays off; a typed value can be guessed from any session. | `npx e9core setup-keys --remote --rotate`, or the deploy workflow with `rotate` checked. |
