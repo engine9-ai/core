@@ -81,7 +81,20 @@ false.
 | Cloudflare production, from CI or any machine without the admin key | `npx e9core upgrade --remote` (`--url` when `wrangler.jsonc` has no single custom-domain route) |
 | Local `wrangler dev` (local D1) | `npx e9core upgrade --url http://localhost:8787` |
 | Local SQLite file, or a Node site's SQLite or MySQL | `npx e9core upgrade --db sqlite://./engine9.db` |
-| An account on the engine9 server | `e9 pluginworker upgrade -a <account_id>`, or MCP `plugin` with `command: upgrade` |
+| An account on the engine9 server (including Frakture services) | `e9 pluginworker upgrade -a <account_id>`, or MCP `plugin` with `command: upgrade` |
+
+### Installing plugins remotely
+
+`install` runs in the same places as `upgrade`, with the same credentials. Use it to add what a site needs beyond the required plugins (for example the contact edition). An edition installs the plugins it includes. It is safe to re-run.
+
+| Database | Command |
+| --- | --- |
+| Cloudflare production (D1) | `npx e9core install --plugin @engine9/schemas/editions/contact --url https://www.example.com` (`POST /api/admin/install` with `{ "path": "<plugin>" }`, admin key) |
+| Cloudflare, from CI or any machine without the admin key | `npx e9core install --plugin <path> --remote` |
+| Local SQLite file, or a Node site | `npx e9core install --plugin <path> --db sqlite://./engine9.db` |
+| An account on the engine9 server (including Frakture services) | `e9 pluginworker install -a <account_id> --path <plugin>`, or MCP `plugin` with `command: install` and `path` |
+
+The server runs any `PluginWorker` method that carries `.metadata`; `install`, `installRequiredPlugins`, `upgrade`, and `status` all do. The plugin must be in a package listed in `engine9.pluginPackages`.
 
 `--url` posts to `POST /api/admin/upgrade` with `E9_ADMIN_API_KEY` (from
 `--key`, the environment, or `./.env`). The upgrade runs inside the Worker
