@@ -212,11 +212,14 @@ install rules, not part of the published surface, and are left out.
 ### Plugins that run elsewhere
 
 Engine9's own workers and Frakture's bots run on their own servers, so their
-code is not loaded by the host. Their builders write the same entries:
-engine9's `Engine9Workers.registerPluginCatalog` and Frakture's
-`BotFactory.register`. Frakture bots list published methods in
+code is not loaded by the host. Their builders write the same entries and
+publish them to a catalog: engine9's `Engine9Workers.registerPluginCatalog`
+and Frakture's `BotFactory.register`. Frakture bots list published methods in
 `metadata.mcp_methods` (or `catalog_methods`) and keep their own
-`auth_fields`, which the builder converts to `credentials`.
+`auth_fields`, which the builder converts to `credentials`. An auth field's
+`secret: true` or `false` decides; otherwise a field the bot shows
+(`is_visible`) is not secret, unless its name says it is a credential (it ends
+in `key`, `token`, `password`, `secret` or `cookie`).
 
 ## Publishing
 
@@ -236,14 +239,26 @@ A published version never changes, so anything that changes an entry needs a
 new `package.version`, and two builds of the same code must produce the same
 entry (no timestamps or hostnames).
 
+### Packages that are not released to npm
+
+A package deployed from git and never released to npm, such as engine9's
+server plugins and Frakture's bots, has no release version to give, and its
+`package.json` version rarely changes. Its publisher compares each entry with
+the newest published one: an entry with the same content (apart from
+`package.version`) is not published again, and a changed entry is published
+as the next patch after the newest published version, or as the package's own
+version when that is newer. The version then counts changes to that one
+entry. It is not a package release, so a caller must not expect every plugin
+in such a package to have an entry at the same version.
+
 ## Bundles
 
-A host reads entries through `ENGINE9_PLUGIN_METADATA_PATH`: one file or a
-directory of files. A file holds one entry, or an object of entries keyed by
-path (a bundle). The producers above write one file per plugin and then bundle
-them (`bundlePluginCatalog`) into `engine9-plugins.catalog.json` and
-`frakture-bots.catalog.json` for hosts that read those. A bundle has no
-meaning beyond the entries in it.
+A bundle is an object of entries keyed by path (`bundlePluginCatalog`). It has
+no meaning beyond the entries in it. Publishers send their entries to a
+catalog as a bundle or an array in one request. In development a host may read
+entries from local files, one entry or one bundle per file, instead of from a
+catalog. Entries are not kept in object storage for hosts to read; a catalog
+is where they live.
 
 ## From the older shape
 
