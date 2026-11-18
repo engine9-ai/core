@@ -105,9 +105,10 @@ superadmins. An organization's staff are admins of its own account.
 
 ### The server
 
-The engine9 server asks each account database whether the signed-in email is
-a member of that account's `admin` segment (`rolesForEmail` in
-`@engine9/core/auth/roles`), and caches the answer briefly in memory. It reads
+The engine9 server asks each account database whether the signed-in email's
+login (`person_login`) is a member of that account's `admin` segment
+(`rolesForEmail` in `@engine9/core/auth/roles`; pass `subject` when known),
+and caches the answer briefly in memory. It reads
 superadmins from `ENGINE9_SUPERADMINS_URI`. Neither is a copy to keep in sync:
 membership changes in the account database and the file are the record.
 

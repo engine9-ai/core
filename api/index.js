@@ -124,11 +124,26 @@ import {
 import {
   createDelegateAuth,
   normalizeRoleRegistry,
-  resolveDelegatePersonId,
+  resolveDelegateLogin,
   isDelegateIdentityJwt,
   domainFromUrl,
   resolveRoleId
 } from '../auth/delegate.js';
+import {
+  loginTableReady,
+  loginMode,
+  LOGIN_PLUGIN_PATH,
+  SIGN_IN_OFF_MESSAGE,
+  forgetLoginTable,
+  loginRow,
+  loginsOfPerson,
+  listLogins,
+  explainLogin,
+  linkLogin,
+  lockLogin,
+  unlockLogin,
+  retireLogin
+} from '../auth/logins.js';
 import { canEditSegmentMembership, loadMembershipPolicies } from '../auth/segmentAccess.js';
 import {
   addPeopleToSegment,
@@ -149,9 +164,12 @@ import {
   safeReturnPath,
   sessionCookie,
   sessionTokenFromCookie,
-  withQueryParam
+  withQueryParam,
+  changeSignInUrl,
+  loginStopPage
 } from '../auth/signIn.js';
 import { parseOriginList } from './origins.js';
+import { filterPublicRows, SIGN_IN_INPUT_ID } from './publicRows.js';
 import { extractApiKey, hashApiKey, isEngine9ApiKeyToken, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { requireRole } from '../auth/gate.js';
@@ -200,6 +218,9 @@ function extractBearer(headers) {
 }
 
 const debug = debug$0('client:api');
+
+/** Sign-in stops (auth/logins.js): the Login button shows each one. */
+const STOP_REASONS = new Set(['other_login', 'login_reassigned', 'login_locked', 'sign_in_off']);
 
 const SCOPES = {
   PEOPLE_WRITE: 'people:write',
@@ -410,6 +431,24 @@ export function createApi({
     return requireAnyScope(ctx, [scope]);
   }
 
+  /* The caller's roles for membership policy: through its login when the table exists. */
+  async function heldRoleIdsForSession(session) {
+    if (!session?.personId) return [];
+    if (typeof delegateAuth?.heldRolesForSession === 'function' && (await loginTableReady(worker))) {
+      return delegateAuth.heldRolesForSession(session);
+    }
+    return heldRoleIds(session.personId);
+  }
+
+  /* null when this database has person_login; otherwise the 409 that says why not and how to fix it. */
+  async function loginsUnavailable() {
+    const mode = await loginMode(worker);
+    if (mode === 'on') return null;
+    return mode === 'off'
+      ? json(409, { error: SIGN_IN_OFF_MESSAGE, reason: 'sign_in_off', fix: `npx e9core upgrade --plugin ${LOGIN_PLUGIN_PATH}` })
+      : json(409, { error: 'This site has not run e9core upgrade yet.', fix: 'npx e9core upgrade' });
+  }
+
   async function heldRoleIds(personId) {
     if (!personId) return [];
     const { data } = await worker.query({
@@ -468,6 +507,11 @@ export function createApi({
     }
   }
 
+  function isPublicKey(apiKey) {
+    const scopes = Array.isArray(apiKey?.scopes) ? apiKey.scopes : String(apiKey?.scopes || '').split(',');
+    return scopes.map((x) => String(x).trim()).includes(SCOPES.PUBLIC);
+  }
+
   async function postPeople({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
     // `public` (e9publickey_) is the signup-form scope; it may add people and
@@ -480,6 +524,21 @@ export function createApi({
     }
     if (people.length > maxBatchSize) return json(400, { error: `body.people exceeds max batch size ${maxBatchSize}` });
     const options = body.options || {};
+    // A key a browser holds: remove the fields that point a row at a record
+    // (api/publicRows.js). A pure filter; the pipeline runs as for any key.
+    const publicKey = isPublicKey(apiKey);
+    const warnings = [];
+    let batch = people;
+    let remoteInputId = options.remoteInputId;
+    if (publicKey) {
+      const filtered = filterPublicRows(people, { session });
+      batch = filtered.rows;
+      warnings.push(...filtered.warnings);
+      if (remoteInputId === SIGN_IN_INPUT_ID) {
+        remoteInputId = undefined;
+        warnings.push({ field: 'options.remoteInputId', reason: 'reserved for sign-in' });
+      }
+    }
     const requestedSegments = segmentIdsOnPeople(people, options);
     if (requestedSegments.length) {
       // The people in the batch are not signed in, whatever session the
@@ -502,12 +561,12 @@ export function createApi({
     try {
       summary = await worker.processPeople({
         pluginId,
-        remoteInputId: options.remoteInputId || defaultRemoteInputId,
+        remoteInputId: remoteInputId || defaultRemoteInputId,
         inputType: options.inputType || defaultInputType,
         defaultSourceCode: options.sourceCode,
         defaultEntryType: options.entryType,
         doNotUpsert: options.doNotUpsert,
-        batch: people
+        batch
       });
     } catch (e) {
       debug('postPeople error:', e);
@@ -520,13 +579,14 @@ export function createApi({
         personIds: summary.personIds,
         apiKeyId: apiKey?.id,
         roleId: ctx.roleId,
-        meta: { remoteInputId: options.remoteInputId || defaultRemoteInputId }
+        meta: { remoteInputId: remoteInputId || defaultRemoteInputId, ...(warnings.length ? { warnings: warnings.length } : {}) }
       });
     }
     return json(200, {
       records: summary.records,
       recordsWithPersonIds: summary.recordsWithPersonIds,
-      personIds: summary.personIds
+      personIds: summary.personIds,
+      ...(warnings.length ? { warnings } : {})
     });
   }
 
@@ -637,7 +697,16 @@ export function createApi({
     let result;
     try {
       // The upgrade writes its own audit record; actor comes from the key, never the body.
-      result = await worker.upgrade({ ...(body || {}), actor: { apiKeyId: apiKey?.id, roleId: ctx.roleId } });
+      // The site's configured roles are role holders for the person_login backfill,
+      // and a site with sign-in turns on @engine9/schemas/login (sign_in).
+      const roleSegments = Object.keys(rolesRegistry || {});
+      result = await worker.upgrade({
+        ...(roleSegments.length ? { role_segments: roleSegments } : {}),
+        ...(delegateAuth ? { sign_in: true } : {}),
+        ...(body || {}),
+        actor: { apiKeyId: apiKey?.id, roleId: ctx.roleId }
+      });
+      forgetLoginTable(worker);
     } catch (e) {
       debug('postAdminUpgrade error:', e);
       return json(422, { error: String(e.message || e) });
@@ -715,7 +784,8 @@ export function createApi({
       source: 'site',
       sitePluginId: pluginId,
       fixTarget: `--url ${siteOrigin(apiBase)}`,
-      webFixes: true
+      webFixes: true,
+      signIn: Boolean(delegateAuth)
     });
   }
 
@@ -885,14 +955,19 @@ export function createApi({
     });
     // person_id changes (imports, merges, erase), so it is read from SQL on
     // every request and never cached outside the database.
-    const personId = await resolveDelegatePersonId({
+    const { personId } = await resolveDelegateLogin({
       worker,
       delegateUser,
       pluginId,
       remoteInputId: 'delegate',
       inputType: defaultInputType
     });
-    const roles = await delegateAuth.rolesForPerson(personId);
+    const roles = await delegateAuth.heldRolesForSession({
+      personId,
+      domainUnid: delegateUser.domainUnid,
+      email: delegateUser.email,
+      level: delegateUser.level
+    });
     const session = {
       personId,
       roles,
@@ -995,9 +1070,13 @@ export function createApi({
     );
   }
 
-  function getAuthStart({ query, apiBase }) {
+  async function getAuthStart({ query, apiBase }) {
     if (!delegateAuth) return notConfigured();
     if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    // No @engine9/schemas/login: say so before sending anyone to Delegate.
+    if ((await loginMode(worker)) === 'off') {
+      return { status: 403, body: loginStopPage({ reason: 'sign_in_off' }), contentType: 'text/html; charset=utf-8', headers: { 'cache-control': 'no-store' } };
+    }
     const origin = new URL(apiBase).origin;
     const next = safeReturnPath(query.returnTo ?? query.return_to, { origin });
     const reason = query.reason === 'access_denied' ? 'access_denied' : undefined;
@@ -1010,7 +1089,10 @@ export function createApi({
       maxLevel: signIn.maxLevel,
       fields: signIn.fields ?? ['email'],
       optionalFields: signIn.optionalFields,
-      loginLevel: signIn.loginLevel,
+      // From a stop or an access-denied page, offer an emailed code too, so a
+      // person who does not know which Google account holds the address can
+      // still sign in with it (Delegate ignores it where Level 3 is required).
+      loginLevel: reason ? signIn.loginLevel ?? 2 : signIn.loginLevel,
       loginProviders: signIn.loginProviders,
       brand: signIn.brand,
       loginHint: plausibleEmail(query.login_hint),
@@ -1050,6 +1132,7 @@ export function createApi({
         state: query.state,
         cookie,
         secure,
+        newAccount: query.new_account === '1',
         returnTo: `${apiBase}/auth/callback`,
         fallbackDomain: requestDomain(headers)
       });
@@ -1057,6 +1140,21 @@ export function createApi({
       debug('getAuthCallback error:', e);
       // A return this browser did not start: sign in again is the answer, not an error.
       if (e.reason === 'state_mismatch') return redirect('/', [e.clearCookie || clearLogin]);
+      if (STOP_REASONS.has(e.reason)) {
+        // The Login button's dialog, for a browser without JavaScript.
+        const next = nextFor();
+        const differentUrl = changeSignInUrl(next, { startPath: `${new URL(apiBase).pathname}/auth/start`, reason: 'access_denied' });
+        const newAccountUrl = e.retryCookie
+          ? `${new URL(apiBase).pathname}/auth/callback?${new URLSearchParams({ delegate_token: query.delegate_token, state: query.state, new_account: '1' })}`
+          : null;
+        return {
+          status: 403,
+          body: loginStopPage({ reason: e.reason, masked: e.masked ?? null, differentUrl, newAccountUrl }),
+          contentType: 'text/html; charset=utf-8',
+          headers: { 'cache-control': 'no-store' },
+          cookies: [e.retryCookie || e.clearCookie || clearLogin]
+        };
+      }
       return redirect(withQueryParam(nextFor(), 'login_error', String(e.reason || 'login_failed')), [
         e.clearCookie || clearLogin
       ]);
@@ -1126,6 +1224,7 @@ export function createApi({
         state: body?.state,
         cookie: getHeader(headers, 'Cookie'),
         secure,
+        newAccount: body?.new_account === true,
         returnTo: body?.return_to || body?.returnTo,
         domain: body?.domain,
         fallbackDomain: requestDomain(headers)
@@ -1143,6 +1242,15 @@ export function createApi({
       );
     } catch (e) {
       debug('postAuthLogin (cookie) error:', e);
+      if (STOP_REASONS.has(e.reason)) {
+        // The Login button shows the stop and its choices. other_login can be
+        // finished as a new person once: POST again with new_account: true.
+        return json(
+          403,
+          { error: e.userMessage, reason: e.reason, masked: e.masked ?? null, new_account: Boolean(e.retryCookie) },
+          { headers: { 'cache-control': 'no-store' }, cookies: [e.retryCookie || e.clearCookie || clearLogin] }
+        );
+      }
       const status = e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
       const error =
         e.reason === 'state_mismatch'
@@ -1171,11 +1279,97 @@ export function createApi({
       return json(200, { session: result.session, token: result.token });
     } catch (e) {
       debug('postAuthLogin error:', e);
-      const status = e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
+      const status = STOP_REASONS.has(e.reason) ? 403 : e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
       return json(status, {
         error: e.userMessage || String(e.message || e),
-        reason: e.reason
+        reason: e.reason,
+        ...(STOP_REASONS.has(e.reason) ? { masked: e.masked ?? null } : {})
       });
+    }
+  }
+
+  /*
+    POST /auth/add-address { delegate_token, state }: the Login button's "Add
+    a sign-in address". The browser is signed in (cookie) and began a second
+    sign-in (POST /auth/begin, then the popup with prompt=select).
+  */
+  async function postAuthAddAddress({ body, headers, session, apiBase }) {
+    if (!delegateAuth) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    if (!session?.personId) return json(401, { error: 'sign in first' });
+    if (!sameSiteOrigin(headers, apiBase)) return json(403, { error: 'must come from this site\'s own pages', reason: 'origin_mismatch' });
+    if (!body?.delegate_token) return json(400, { error: 'delegate_token is required' });
+    const secure = apiBase.startsWith('https:');
+    try {
+      const result = await delegateAuth.finishAddAddress(body.delegate_token, {
+        state: body.state,
+        cookie: getHeader(headers, 'Cookie'),
+        secure,
+        session,
+        returnTo: body.return_to || body.returnTo,
+        domain: body.domain,
+        fallbackDomain: requestDomain(headers)
+      });
+      const { clearCookie, ...out } = result;
+      return json(out.ok ? 200 : 409, out, { headers: { 'cache-control': 'no-store' }, cookies: [clearCookie] });
+    } catch (e) {
+      debug('postAuthAddAddress error:', e);
+      return json(401, { error: e.userMessage || String(e.message || e), reason: e.reason }, { cookies: e.clearCookie ? [e.clearCookie] : [] });
+    }
+  }
+
+  /*
+    POST /auth/retire-address { email }: the signed-in person stops signing
+    in with one of their own addresses (offered after Add a sign-in address).
+    Never the last active address. This session goes on through its Delegate
+    account's login.
+  */
+  async function postAuthRetireAddress({ body, session }) {
+    if (!session?.personId) return json(401, { error: 'sign in first' });
+    const unavailable = await loginsUnavailable();
+    if (unavailable) return unavailable;
+    const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (!email) return json(400, { error: 'body.email is required' });
+    const row = await loginRow(worker, 'email', email);
+    if (!row || row.person_id !== session.personId || row.state !== 'active') return json(404, { error: 'not one of your sign-in addresses' });
+    const active = (await loginsOfPerson(worker, session.personId)).filter((r) => r.state === 'active' && r.type === 'email');
+    if (active.length < 2) return json(409, { error: 'this is your only sign-in address' });
+    await retireLogin({ worker, email, actor: { by: 'self', person_id: session.personId } });
+    return json(200, { retired: email });
+  }
+
+  /*
+    POST /admin/logins { action, email?, subject?, person_id? } (admin): the
+    `e9core signin` commands through a deployed site.
+  */
+  async function postAdminLogins({ body, apiKey, query, session }) {
+    const ctx = authContextFor({ apiKey, query, body: null, session });
+    const denied = requireScope(ctx, SCOPES.ADMIN);
+    if (denied) return denied;
+    const unavailable = await loginsUnavailable();
+    if (unavailable) return unavailable;
+    const action = String(body?.action || '');
+    const args = {
+      worker,
+      email: body?.email || undefined,
+      subject: body?.subject || undefined,
+      personId: body?.person_id ?? body?.personId ?? undefined,
+      actor: { apiKeyId: apiKey?.id, roleId: ctx.roleId }
+    };
+    const actions = {
+      list: () => listLogins(args),
+      explain: () => explainLogin({ ...args, roleIds: Object.keys(rolesRegistry || {}) }),
+      link: () => linkLogin(args),
+      lock: () => lockLogin(args),
+      unlock: () => unlockLogin(args),
+      retire: () => retireLogin(args)
+    };
+    if (!actions[action]) return json(400, { error: `body.action must be one of ${Object.keys(actions).join(', ')}` });
+    try {
+      return json(200, await actions[action]());
+    } catch (e) {
+      debug('postAdminLogins error:', e);
+      return json(422, { error: String(e.message || e) });
     }
   }
 
@@ -1237,6 +1431,7 @@ export function createApi({
       if (sessionToken) {
         session = await readSessionToken(sessionToken);
         if (!session) return json(401, { error: 'invalid session' });
+        if (typeof delegateAuth.refreshSession === 'function') session = await delegateAuth.refreshSession(session);
       }
     }
 
@@ -1267,7 +1462,7 @@ export function createApi({
     const resolvedRoleId = resolveRoleId(rolesRegistry, roleId) || roleId;
     if (!isAdmin) {
       if (!session?.personId) return json(401, { error: 'session or identity token required' });
-      const held = await heldRoleIds(session.personId);
+      const held = await heldRoleIdsForSession(session);
       const caller = callerFrom({ ctx, session, roleIds: held });
       const policies = await loadMembershipPolicies(worker, [resolvedRoleId, ...held], rolesRegistry);
       const add = canEditSegmentMembership({
@@ -1416,7 +1611,7 @@ export function createApi({
     for (const item of edits) {
       item.targetPersonId = item.self ? session.personId : (item.personId ?? -1);
     }
-    const held = session?.personId ? await heldRoleIds(session.personId) : [];
+    const held = session?.personId ? await heldRoleIdsForSession(session) : [];
     const caller = callerFrom({ ctx, session, roleIds: held });
     const segmentIds = edits.map((item) => item.segmentId);
     let policies = await loadMembershipPolicies(worker, segmentIds, rolesRegistry);
@@ -1457,8 +1652,10 @@ export function createApi({
           emails: item.email ? [item.email] : [],
           personIds: item.email ? [] : [item.targetPersonId]
         };
-        if (item.operation === 'add') await addPeopleToSegment({ ...args, pluginId });
-        else await removePeopleFromSegment(args);
+        // A configured role is a grant to a login, whichever plugin made its segment.
+        const login = Boolean(rolesRegistry?.[item.segmentId] || standardRoleFor(worker.accountHandle, item.segmentId)) || undefined;
+        if (item.operation === 'add') await addPeopleToSegment({ ...args, pluginId, login });
+        else await removePeopleFromSegment({ ...args, login });
       }
     } catch (e) {
       debug('postAuthSegments error:', e);
@@ -1572,6 +1769,8 @@ export function createApi({
         : sessionTokenFromCookie(getHeader(req.headers, 'Cookie'), sessionCookieName);
       const sessionToken = explicitToken || cookieToken;
       if (sessionToken) session = await readSessionToken(sessionToken);
+      // With person_login, the token's copy of the roles is never used: read them through the login now.
+      if (session && typeof delegateAuth.refreshSession === 'function') session = await delegateAuth.refreshSession(session);
       sessionFromCookie = Boolean(session && cookieToken);
 
       if (!session) {
@@ -1602,6 +1801,12 @@ export function createApi({
       result = postAuthBegin({ apiBase: req.apiBase });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'login') {
       result = await postAuthLogin({ body: req.body, apiKey, headers: req.headers, apiBase: req.apiBase });
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'add-address') {
+      result = await postAuthAddAddress({ body: req.body, headers: req.headers, session, apiBase: req.apiBase });
+    } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'retire-address') {
+      result = await postAuthRetireAddress({ body: req.body, session });
+    } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'logins') {
+      result = await postAdminLogins({ body: req.body, apiKey, query: req.query || {}, session });
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {

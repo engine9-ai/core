@@ -7,7 +7,17 @@ import { SqlApiKeyStore } from '../auth/index.js';
 import { createDelegateAuth } from '../auth/delegate.js';
 import { createApi } from '../api/index.js';
 import { getPluginUUID, getVersionedUUID } from '../lib/utilities.js';
-import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyWebsitePlugins, ensurePluginRow } from './helpers/applySchemas.js';
+import { insertPersons } from '../lib/id/sqlStore.js';
+import { linkLogin } from '../auth/logins.js';
+
+/* A person who signs in with Delegate account `subject` and holds these roles (person_segment). */
+async function signedInPerson(worker, subject, roleIds) {
+  const [personId] = await insertPersons(worker, [{}]);
+  await linkLogin({ worker, subject, personId });
+  if (roleIds.length) await worker.upsertArray({ table: 'person_segment', array: roleIds.map((segment_id) => ({ person_id: personId, segment_id })) });
+  return Number(personId);
+}
 
 const DOMAIN = 'site.example.com';
 const UNID = `${DOMAIN}:${'a'.repeat(64)}`;
@@ -36,7 +46,7 @@ async function signIdentityJwt({ privateKey, kid = 'api-test-key', level = 2, su
 test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-auth-routes');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
@@ -245,7 +255,7 @@ test('API /auth/login, /auth/me, Bearer JWT, tightened /auth/role', async () => 
 test('API login from @engine9/id: delegate option, no configured domain', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-auth-id');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
 
@@ -393,7 +403,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
 test('API role_id: only roles the caller holds', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'website-role-id');
     await ensurePluginRow(worker, { id: pluginId, path: 'website', name: 'Website' });
     const viewerRoleId = getVersionedUUID();
@@ -427,13 +437,18 @@ test('API role_id: only roles the caller holds', async () => {
     const inBody = await api.handle({ method: 'POST', path: '/people', headers, body: { ...body, role_id: editorRoleId } });
     assert.equal(inBody.status, 403, 'body role_id is checked the same way');
 
-    const strictSession = delegateAuth.issueToken({ personId: 1, roles: [strictRoleId], level: 1, auth: {} });
+    // Roles come from the database through the login on every request, never from the token.
+    const strictPerson = await signedInPerson(worker, 'site.example:strict', [strictRoleId]);
+    const strictSession = delegateAuth.issueToken({ personId: strictPerson, domainUnid: 'site.example:strict', roles: [], level: 2, auth: {} });
     const levelTooLow = await post({ headers: { 'x-engine9-session': strictSession } });
     assert.equal(levelTooLow.status, 403, 'requiredAuth.minLevel applies');
     const dodge = await post({ headers: { 'x-engine9-session': strictSession }, query: { role_id: 'not-a-role' } });
     assert.equal(dodge.status, 403, 'an unknown role_id cannot skip requiredAuth');
 
-    const twoRoles = delegateAuth.issueToken({ personId: 1, roles: [viewerRoleId, editorRoleId], level: 1, auth: {} });
+    const bothPerson = await signedInPerson(worker, 'site.example:both', [viewerRoleId, editorRoleId]);
+    const twoRoles = delegateAuth.issueToken({ personId: bothPerson, domainUnid: 'site.example:both', roles: [], level: 2, auth: {} });
+    const tokenOnly = delegateAuth.issueToken({ personId: bothPerson + 100, roles: [viewerRoleId, editorRoleId], level: 3, auth: {} });
+    assert.equal((await post({ headers: { 'x-engine9-session': tokenOnly }, query: { role_id: 'Editor' } })).status, 403, 'roles written into a token alone hold nothing');
     assert.equal((await post({ headers: { 'x-engine9-session': twoRoles } })).status, 403, 'first role acts by default');
     const chosen = await post({ headers: { 'x-engine9-session': twoRoles }, query: { role_id: 'Editor' } });
     assert.equal(chosen.status, 200, JSON.stringify(chosen.body));

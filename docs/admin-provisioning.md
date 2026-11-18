@@ -188,6 +188,13 @@ const roleId = roleSegmentId(accountId, 'admin');
 await rolesForEmail({ worker, email: 'a@example.org', roleIds: [roleId] }); // [roleId]
 ```
 
+A grant by email gives the address a login (`npx e9core signin list --email
+a@example.org` shows it, `granted`). The first Delegate account that signs
+in with that verified address is bound to it. If the address was on a record
+someone else already signs in as, the grant made a new person and said so in
+`notes`; `npx e9core signin link --email a@example.org --person <id>` moves
+it if that was not the intent.
+
 On the engine9 server the new admin opens the account within
 `ENGINE9_ADMIN_LOOKUP_TTL_MS` (default 60 seconds); it reads the account
 database and keeps no copy. Sign in as the person at Level 3 and confirm the

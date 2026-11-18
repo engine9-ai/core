@@ -3,7 +3,7 @@
 This is the normative description of who may do what on an `@engine9/core`
 site and on the engine9 server, how to put it in place, and how to bring an
 existing site up to it. Security reviews and automated checks measure sites
-against the numbered requirements here (**PL-1** to **PL-12**; the ids are stable and are grouped by topic, not in
+against the numbered requirements here (**PL-1** to **PL-13**; the ids are stable and are grouped by topic, not in
 numeric order). When this
 page and another page disagree, this page is the intended behavior and the
 other page is a bug.
@@ -158,8 +158,33 @@ recorded reason.
   (`requiredAuth: { minLevel: 3 }`). Do not lower it, and do not offer an
   email-link sign-in to people who must reach Level 3.
 - **PL-3 (MUST)** Admin membership exists only as `person_segment` rows for
-  the account's `admin` segment. No list of admins is kept in code,
-  environment variables, or configuration.
+  the account's `admin` segment, reached through a login in `person_login`
+  (PL-13). No list of admins is kept in code, environment variables, or
+  configuration.
+- **PL-13 (MUST)** Who a sign-in is comes from `person_login` only
+  ([auth/logins.js](auth/logins.js)): the Delegate account's login, then a
+  `merged_from` login, then the verified address's login. Dedupe (the
+  identifier store, `person_email`), which public forms write, never decides
+  it, except to offer a person nobody signs in as yet to a first sign-in
+  (adopted: self-join roles only) or a first grant. Only sign-in, an admin's
+  grant by email, the `e9core signin` commands, Add a sign-in address, and
+  the one-time upgrade write `person_login`. A person someone already signs
+  in as is never given to a second account without an admin or that person
+  (`other_login` stops instead, and shows at most one masked address). A
+  sign-in below Identity Level 2 writes nothing and carries no role that is
+  not self-join. A public key's `POST /people` row cannot point itself at a
+  record: the fields that do
+  (`person_id` other than the signed-in person's own, `identifiers`, Domain
+  UNIDs, hashes, `confirmation_status`, another system's `remote_person_id`)
+  are removed, and dedupe files the rest as for any row. Offboarding
+  retires the person's logins (`e9core signin retire`); rows are deleted
+  only when the person is erased. `person_login` belongs to the
+  `@engine9/schemas/login` plugin, which a site installs to have sign-in. A
+  database without it has no sign-in: every sign-in stops (`sign_in_off`),
+  and nothing falls back to dedupe (`rolesForEmail` finds no role). The only
+  exception is a database that has not yet run the release that added the
+  plugin (`@engine9/schemas` 1.15.0), which keeps its earlier lookup until
+  `e9core upgrade`, with `e9core status` failing `login.table`.
 - **PL-6 (MUST)** The `admin` segment has `join_min_level`,
   `leave_min_level` and `manager_role_id` all `null`, so only a request that
   already has the `admin` scope can add or remove admins. Do not make `admin`
@@ -205,13 +230,16 @@ recorded reason.
   (opening an admin page, performing an admin action) uses
   `auth.rolesForSession(session)` and the role's `requiredAuth`
   (`meetsRequiredAuth`). It does not trust the `roles` copy in a token for
-  that decision.
+  that decision. On a database with sign-in (`@engine9/schemas/login`),
+  core's API reads the roles through the session's login on every request
+  (`auth.refreshSession`).
 
 ### Operation
 
 - **PL-9 (MUST)** Removing access removes the record: delete the
-  `person_segment` row (admin) or the list entry (superadmin). Removal is
-  complete on the person's next request for privileged checks. To end an
+  `person_segment` row (admin) or the list entry (superadmin), and for
+  someone who left, retire their logins (`e9core signin retire --person`).
+  Removal is complete on the person's next request for privileged checks. To end an
   existing session, use logout with `sessionRevocations`, or rotate
   `SESSION_SECRET` to end every session.
 - **PL-11 (MUST)** Upgrades follow install, deploy, then `e9core upgrade`
@@ -381,6 +409,7 @@ only way to read the production D1 database, so use it there.
 | PL-9 | Remove a test admin, then call a privileged route with a fresh token: it must be refused. |
 | PL-10 | `curl -I https://<site>/engine9.superadmins.json` returns 404, and the file is not in a public repository. |
 | PL-11 | `npx e9core status --url <site>` (or the status page, `/api/admin/status` in a browser as an admin) reports no failure, and every `upgrade.<id>` check passes (or is a skipped opt-in). |
+| PL-13 | `npx e9core status --url <site>`: `login.table` passes and `login.review` lists no role holder. For each admin, `npx e9core signin list --person <id>` shows only addresses and accounts that are theirs. With the public key, `POST /api/people` with `{ "people": [{ "email": "x@example.com", "person_id": 1 }] }` answers 200 with a `person_id` warning, and `x@example.com` is not on person 1. |
 | PL-12 | The review output from the rows above, dated, kept with change records. The audit log's `role.grant` and `role.revoke` records show every change to a role between reviews. |
 
 A superadmin check: sign in as a listed address at Level 3 and request

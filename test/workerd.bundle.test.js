@@ -15,6 +15,7 @@ import esbuild from 'esbuild';
 import { buildPlugins } from '../bin/buildPlugins.js';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
+import { ensureRoleSegments, roleSegmentId } from '../auth/roles.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
 import { makeLegacyPersonNames } from './helpers/legacyPersonNames.js';
@@ -249,6 +250,11 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
   try {
     await makeLegacyPersonNames(setupWorker);
     await ensurePluginRow(setupWorker, { id: pluginId, path: 'website', name: 'Website' });
+    // An admin from before person_login: the upgrade copies their address into it.
+    await ensureRoleSegments({ worker: setupWorker, accountId });
+    const [adminPid] = (await setupWorker.processPeople({ pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'boss@example.com' }] })).personIds;
+    await setupWorker.upsertArray({ table: 'person_segment', array: [{ person_id: adminPid, segment_id: roleSegmentId(accountId, 'admin') }] });
+    await setupWorker.drop({ table: 'person_login' });
     const keyStore = new SqlApiKeyStore({ worker: setupWorker });
     await keyStore.deploy();
     adminKey = (await keyStore.create({ name: 'admin', scopes: ['admin'] })).key;
@@ -278,7 +284,7 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
 
     const before = await call('/people', publicKey, { people: [{ email: 'ada@example.com', given_name: 'Ada', family_name: 'Lovelace' }] });
     assert.equal(before.status, 200, await before.clone().text());
-    assert.equal(d1.db.prepare('select given_name from person').get().given_name, 'Ada', 'pre-upgrade signup still lands on person');
+    assert.equal(d1.db.prepare('select given_name from person where given_name is not null').get().given_name, 'Ada', 'pre-upgrade signup still lands on person');
 
     const denied = await call('/admin/upgrade', publicKey, {});
     assert.equal(denied.status, 403);
@@ -287,6 +293,14 @@ test('Cloudflare worker: POST /api/admin/upgrade moves person names on D1, then 
     assert.equal(upgraded.status, 200, JSON.stringify(body));
     assert.equal(body.upgrades.find((u) => u.id === 'person_name').copied, 1);
     assert.equal(body.upgrades.find((u) => u.id === 'person_name_columns').status, 'opt_in');
+    const logins = body.upgrades.find((u) => u.id === 'person_login');
+    assert.equal(logins.status, 'applied', JSON.stringify(logins));
+    assert.equal(logins.role_holders, 1);
+    assert.deepEqual(
+      d1.db.prepare("select type, how, state from person_login").all().map((r) => ({ ...r })),
+      [{ type: 'email', how: 'backfill', state: 'active' }],
+      'the admin keeps signing in on D1'
+    );
 
     const columns = () => d1.db.prepare('pragma table_info(person)').all().map((c) => c.name);
     assert.ok(columns().includes('given_name'), 'the default upgrade keeps the person columns');

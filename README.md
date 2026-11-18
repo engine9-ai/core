@@ -77,7 +77,9 @@ npx e9core serve
 every database it creates, production included: people's names, email,
 phone, and postal address, plus `timeline` and transactions. That is what
 signup, login, and adding admins by email expect, so start there. The setup
-wizard asks the same question.
+wizard asks the same question. A site where people sign in also adds the
+login plugin (`@engine9/schemas/login`) on purpose; see
+[Add login](#add-login) below.
 
 Advanced: another edition, or only the [required plugins](#the-required-plugins),
 changes what the site can do. Without the contact edition the site keeps no
@@ -217,6 +219,10 @@ never leaves the server.
 
 A plain HTML form that posts to `/api/people` on the same origin is the
 whole integration for signups. The setup page shows a copy-paste snippet.
+With the public key, a row cannot point itself at a record: fields such as
+`person_id` and `identifiers` are removed and listed in `warnings`, and
+the rest goes through dedupe as for any row. Nothing a form writes changes
+who someone signs in as.
 
 ## Add login
 
@@ -232,6 +238,24 @@ whole integration for signups. The setup page shows a copy-paste snippet.
 Login is optional. Saving people needs only the API key. When visitors
 should log in, the browser talks to **delegate** and core verifies the
 result. No OAuth client id, no callback route to write.
+
+**Database: sign-in needs the login plugin.** A site where people sign in
+needs `@engine9/schemas/login` in its database: the `person_login` table,
+the list of who can sign in and as which person. It is not a
+[required plugin](#the-required-plugins) and no edition includes it: a site
+adds it on purpose. Without it, core refuses every sign-in and the Login
+button says the site has no sign-in yet. A new site lists it in `package.json` after the edition, so setup puts
+it in every database it creates:
+
+```json
+"engine9": { "install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"] }
+```
+
+Add it to an existing database, and copy today's admins into it, with:
+
+```bash
+npx e9core upgrade --plugin @engine9/schemas/login --url https://www.example.com
+```
 
 **Server:** already done if `SESSION_SECRET` is set. `e9core setup` writes it
 to `.env`; `setup --remote` makes production's own and stores it in Cloudflare. The shipped Worker and
@@ -374,9 +398,14 @@ plugins a kind of site adds to the required ones.
   (`@engine9/schemas/editions/pii-free`) stores hashed email and phone
   instead of plaintext. It is not a free upgrade in privacy: the site keeps
   no names or email addresses, so it cannot email people or show them their
-  details, and admins cannot be added by email. Choose it, or plugins one at
-  a time, only when the site must not hold contact details and you have
-  checked what it gives up. The `@engine9/schemas` README lists the editions.
+  details, and admins cannot be added by email. It does not include
+  `@engine9/schemas/login` either (hashes only, so a PII-free site may add
+  it). Choose it, or plugins one at a time, only when
+  the site must not hold contact details and you have checked what it gives
+  up. The `@engine9/schemas` README lists the editions.
+- **Sign-in is the `login` plugin** (`@engine9/schemas/login`). A site where
+  people sign in adds it on purpose; a data-only database leaves it out and
+  core refuses every sign-in there. No edition includes it.
 
 ```bash
 npx e9core install --plugin @engine9/schemas/editions/contact --url https://www.example.com
@@ -548,12 +577,15 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | Endpoint              | Purpose                                                                                                                                                    | Needs                                                             |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `GET /ok`             | Health check                                                                                                                                               | nothing                                                           |
-| `POST /people`        | `{ people: [...] }` through the inbound person pipeline                                                                                                    | `people:write` or `public`                                        |
+| `POST /people`        | `{ people: [...] }` through the inbound person pipeline. With a `public` key, fields that point a row at a record (`person_id` other than the signed-in person's own, `identifiers`, Domain UNIDs, hashes, `confirmation_status`, another system's `remote_person_id`) are removed and listed in `warnings` | `people:write` or `public`                                        |
 | `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table                                                                                                 | `tables:write`                                                    |
 | `GET /read/:name`     | Configured read, optionally gated by `person_segment`. With a session it reads the signed-in person; another `?person_id=` needs `admin`                   | `data:read`                                                       |
 | `GET /auth/start`     | `302` to Delegate (`?returnTo=/path`, `login_hint`, `prompt=select`). One link, no script; see [auth/README.md](auth/README.md#one-link-sign-in-authstart-authcallback) | nothing; 501 until `SESSION_SECRET` / `delegate` is set           |
 | `GET /auth/callback`  | Checks the return, sets the `e9_session` cookie, `302` to `returnTo` (`?login_error=` on failure)                                                          | nothing (a signed `e9_login` cookie from `/auth/start`)           |
 | `POST /auth/login`    | `{ delegate_token }` → `{ session, token }`                                                                                                                | API key; 501 until `SESSION_SECRET` / `delegate` is set           |
+| `POST /auth/add-address` | `{ delegate_token, state }`: the Login button's Add a sign-in address (a second Delegate account signs in as the signed-in person) | API key + cookie session |
+| `POST /auth/retire-address` | `{ email }`: stop signing in with one of your own addresses (never the last one) | API key + session |
+| `POST /admin/logins` | `{ action, email?, subject?, person_id? }`: `e9core signin` through the site (list, explain, link, lock, unlock, retire) | `admin` |
 | `GET /auth/me`        | `{ personId, roles, level, domainUnid, fields? }`                                                                                                          | API key + session or Identity Token                               |
 | `POST /auth/logout`   | `{ loggedOut, revoked }` (clears the `e9_session` cookie; `revoked` with `delegate.sessionRevocations`)                                                        | API key                                                           |
 | `POST /auth/role`     | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments`                      | API key + session/token matching `person_id`, or `admin`          |

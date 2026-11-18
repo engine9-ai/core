@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "publishConfig": {
     "access": "public"
   },
@@ -34,6 +34,7 @@
     "./auth/hmac": "./auth/hmac.js",
     "./auth/policy": "./auth/policy.js",
     "./auth/roles": "./auth/roles.js",
+    "./auth/logins": "./auth/logins.js",
     "./auth/superadmins": "./auth/superadmins.js",
     "./superadmins/node": "./bin/superadminsFile.js",
     "./auth/segmentAccess": "./auth/segmentAccess.js",
@@ -77,7 +78,7 @@
   "author": "engine9",
   "license": "MIT",
   "dependencies": {
-    "@engine9/input-tools": "^2.7.1",
+    "@engine9/input-tools": "^2.7.2",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
@@ -88,7 +89,7 @@
     "uuid": "^14.0.1"
   },
   "peerDependencies": {
-    "@engine9/schemas": "^1.14.0",
+    "@engine9/schemas": "^1.15.0",
     "better-sqlite3": ">=11",
     "knex": ">=3",
     "mysql2": ">=3"

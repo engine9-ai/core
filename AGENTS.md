@@ -199,8 +199,23 @@ installs those plugins after the required ones in every database it creates.
 When you walk someone through setup, recommend the contact edition. Do not
 offer the pii-free edition to a new user. If they ask for something else, say
 first that another edition, or none, changes what the site can do (no names
-or email addresses: no email to people, no admins added by email), and only
-then take `--plugin <path>` or `--none`.
+or email addresses: no email to people, no admins added by email; and no
+sign-in without `@engine9/schemas/login`), and only then take
+`--plugin <path>` or `--none`.
+
+Sign-in is the `@engine9/schemas/login` plugin (`person_login`). It is not
+required, and no edition includes it: a site that signs people in adds it
+on purpose (`"engine9": { "install": [..., "@engine9/schemas/login"] }`, or
+`upgrade --plugin`). Core never installs it on its own outside an upgrade: the plugin's
+`person_login` upgrade turns it on where people sign in (`sign_in` from the
+site, a `roles` row, or `upgrade --plugin @engine9/schemas/login`). `loginMode` ([auth/logins.js](auth/logins.js)) is
+`on`, `legacy` (not yet upgraded: the earlier lookup), or `off` (no
+sign-in: every sign-in stops with `sign_in_off`). Do not add a dedupe
+fallback for `off`, do not add the plugin to `REQUIRED_PLUGINS` or to an
+edition, and keep login code out of the people pipeline, dedupe, and
+`POST /people`: only sign-in routes, role grants by email, status, and the
+`signin` commands read `person_login`. Outside `on`, sessions and roles
+behave exactly as before the plugin existed.
 
 `exclude_pii` only refuses plaintext contact plugins, and any plugin that
 includes one. It never chooses what to install.
@@ -314,7 +329,9 @@ Local development does not require one.
 
 ## Sign-in on a site built with core
 
-When a site adds login, the first thing to build is the **Login button**,
+When a site adds login, check first that its database has the login plugin
+(`@engine9/schemas/login`, which no edition includes). Without it,
+every sign-in stops. Then build the **Login button**,
 the button in `demo-festival`'s header. The default is two lines in the
 header of every page; core serves the script (`GET /api/auth/login.js`,
 [auth/loginButton.js](auth/loginButton.js)) with the site's public key:
@@ -378,7 +395,7 @@ Do not start HTTP servers unless asked.
 
 [PERMISSIONS.md](PERMISSIONS.md) is the normative description of the permission
 levels (visitor, site role, admin, superadmin) and the requirements PL-1 to
-PL-12 that outside security checks measure sites against. Read it before
+PL-13 that outside security checks measure sites against. Read it before
 changing roles, scopes, keys, sessions, or the superadmins file. A change that
 alters any requirement updates that page in the same change. There are two
 administrator tiers only: `admin` (database, `person_segment`) and
@@ -413,6 +430,17 @@ not in setup docs.
   (`signingSecretProblem` in [auth/hmac.js](auth/hmac.js)); do not loosen it.
 - Roles may set `requiredAuth.minLevel`; that is authorization policy, not
   an identity level itself.
+- Who a sign-in is comes from `person_login` only (`personForSignIn` in
+  [auth/logins.js](auth/logins.js), PERMISSIONS.md PL-13). Do not find a
+  person for sign-in, an admin check, or an agent through dedupe
+  (`person_email`, the identifier store, `processPeople`): public forms write
+  those. Do not add a writer of `person_login` outside `auth/logins.js` and
+  the `person_login` upgrade, and do not delete its rows (retire them).
+- Sign-in stops and their choices (`other_login` with "This isn't me",
+  `login_reassigned`, `login_locked`), Add a sign-in address, Switch email,
+  and Log out live in the Login button's dialog only. Do not build a site
+  link or page for any of them; `/api/auth/callback` is the no-JavaScript
+  fallback.
 
 Do not git commit unless the user asks.
 

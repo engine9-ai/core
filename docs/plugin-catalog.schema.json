@@ -25,8 +25,20 @@
     "name": { "type": "string", "minLength": 1 },
     "alias": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
     "description": { "type": "string" },
+    "readme": { "type": "string", "maxLength": 65536 },
     "categories": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "logo": { "$ref": "#/$defs/link" },
+    "icon": { "$ref": "#/$defs/link" },
+    "screenshots": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["url"],
+        "properties": { "url": { "$ref": "#/$defs/link" }, "caption": { "type": "string", "maxLength": 200 } },
+        "additionalProperties": false
+      }
+    },
     "homepage": { "$ref": "#/$defs/link" },
     "publisher": {
       "type": "object",
@@ -55,7 +67,8 @@
             "required": ["label"],
             "properties": { "label": { "type": "string" }, "description": { "type": "string" } }
           }
-        }
+        },
+        "instructions": { "type": "string", "maxLength": 32768 }
       },
       "additionalProperties": false
     },

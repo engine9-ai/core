@@ -116,3 +116,53 @@ export function sessionCookie(token, { cookieName = DEFAULT_SESSION_COOKIE, maxA
 export function clearSessionCookie({ cookieName = DEFAULT_SESSION_COOKIE, secure } = {}) {
   return `${cookieName}=; Max-Age=0; Path=/; SameSite=Lax; HttpOnly${secure ? '; Secure' : ''}`;
 }
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** The sign-in stops (auth/logins.js) and what the Login button says for each. */
+export const LOGIN_STOP_TEXT = {
+  other_login: {
+    title: 'Sign in with your other address',
+    masked: (masked) => `This email address belongs to someone here who signs in with a different address: ${masked}. Sign in with that address instead.`,
+    unmasked: 'This email address belongs to someone here who signs in with a different address. Sign in with the address this site knows you by.',
+    different: 'Sign in with a different address',
+    newAccount: "This isn't me: continue with this address"
+  },
+  login_reassigned: {
+    title: 'Ask the site\'s administrator',
+    text: "This address signs in to an account here through a different Delegate account. Ask the site's administrator."
+  },
+  login_locked: {
+    title: 'This sign-in is turned off',
+    text: "This sign-in is turned off. Ask the site's administrator."
+  },
+  // The database has no @engine9/schemas/login. For the site's owner, not the visitor.
+  sign_in_off: {
+    title: 'This site does not have sign-in yet',
+    text: "This site does not have sign-in yet. If you run this site, add the login plugin: npx e9core upgrade --plugin @engine9/schemas/login"
+  }
+};
+
+/**
+ * The no-JavaScript fallback of the Login button's stop dialog, served by
+ * core's /api/auth/callback. Same words and choices as the button; a site
+ * adds no page or link of its own for these.
+ */
+export function loginStopPage({ reason, masked = null, differentUrl, newAccountUrl }) {
+  const text = LOGIN_STOP_TEXT[reason] || LOGIN_STOP_TEXT.login_locked;
+  const button = (href, label, primary) =>
+    `<a href="${escapeHtml(href)}" style="display:inline-block;margin:.25rem .5rem .25rem 0;padding:.6rem 1rem;border-radius:.5rem;${primary ? 'background:#1a73e8;color:#fff' : 'border:1px solid #1a73e8;color:#1a73e8'};font-weight:600;text-decoration:none">${escapeHtml(label)}</a>`;
+  let body;
+  if (reason === 'other_login') {
+    body = `<p>${escapeHtml(masked ? text.masked(masked) : text.unmasked)}</p><p>${button(differentUrl, text.different, true)}${newAccountUrl ? button(newAccountUrl, text.newAccount, false) : ''}</p>`;
+  } else {
+    body = `<p>${escapeHtml(text.text)}</p>${differentUrl ? `<p>${button(differentUrl, 'Use a different email or account', false)}</p>` : ''}`;
+  }
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(text.title)}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"><h1>${escapeHtml(text.title)}</h1>${body}</body></html>`;
+}

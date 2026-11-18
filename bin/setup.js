@@ -590,7 +590,7 @@ export function loginButtonNote() {
   return [
     'Optional, when visitors should log in: put the Delegate Login button in your page header.',
     loginButtonSnippet().replace(/^/gm, '    '),
-    '  Nothing to copy or configure: core serves it with this site\'s public key. Details: node_modules/@engine9/core/docs/sign-in.md'
+    '  Nothing to copy or configure: core serves it with this site\'s public key. Sign-in needs @engine9/schemas/login in the database (no edition includes it): npx e9core upgrade --plugin @engine9/schemas/login. Details: node_modules/@engine9/core/docs/sign-in.md'
   ].join('\n');
 }
 

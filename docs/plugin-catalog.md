@@ -90,8 +90,11 @@ host runs reads that version's entry; anything else reads the newest.
 | `publisher` | yes | `{ name, url?, email? }`: who stands behind the plugin and answers for it |
 | `alias` | | Short lower-case name callers may use for the plugin (`mailchimp`) |
 | `description` | | One or two sentences |
+| `readme` | | Markdown: what the plugin does and anything a person should know before using it. At most 65,536 characters |
 | `categories` | | Strings, such as `crm`, `email`, `payments`, `commerce` |
-| `logo` | | An https URL, or a path starting with `/` on the host that serves the entry |
+| `logo` | | The publisher's wordmark, wider than tall. An https URL, or a path starting with `/` on the host that serves the entry |
+| `icon` | | A square app icon, given the same way as `logo` |
+| `screenshots` | | At most 5: `[{ url, caption? }]`, `url` given the same way as `logo`, `caption` at most 200 characters |
 | `homepage` | | An https URL for people to read about the plugin |
 | `bot_path` | | Frakture plugins only: the Frakture bot id that runs it (`channelbots.ActBlueBot`) |
 | `dependencies` | | `{ "<plugin path>": "<semver range>" }`: plugins that must be installed first, as in `metadata.dependencies` |
@@ -102,6 +105,14 @@ host runs reads that version's entry; anything else reads the newest.
 
 Any other key is an error, except keys that start with `x-`, which consumers
 ignore. Use `x-<publisher>-…` for something only your own tools read.
+
+## Images
+
+`logo`, `icon` and `screenshots` are references, not image data: an https URL, or a path starting with `/` on the
+host that serves the entry. The standard says nothing about formats or sizes; a catalog sets its own and may only
+accept images it hosts. market.engine9.ai, for one, takes uploads at `PUT /v1/assets` and requires a 1024×1024 PNG
+icon and 16:10 screenshots ([its publishing guide](https://market.engine9.ai/docs)). A path such as
+`/assets/<sha256>.png` keeps an entry the same wherever it is served.
 
 ## Fields
 
@@ -134,6 +145,10 @@ missing `type` means any JSON value.
 tokens, logins, account ids. Every credentials field says `secret`: `true`
 for anything that grants access, `false` for an id or a region a person may
 read back. `credentials.sections` gives section keys a label and description.
+`credentials.instructions` is Markdown, at most 32,768 characters, that tells
+a person how to get the credentials: where to create the key, which
+permissions it needs, what to send. Keep the plugin's other documentation in
+`readme`; instructions are about connecting only.
 
 Credentials are kept in secrets, never in settings. A catalog derives the
 secrets definition from the newest entry's `credentials` with
@@ -199,10 +214,10 @@ It reads, from each plugin:
 
 | From | Becomes |
 | --- | --- |
-| `metadata.name`, `alias`, `description`, `categories`, `logo`, `homepage`, `dependencies` | The same keys |
+| `metadata.name`, `alias`, `description`, `readme`, `categories`, `logo`, `icon`, `screenshots`, `homepage`, `dependencies` | The same keys |
 | `metadata.publisher`, else the package's `"author"` | `publisher` |
 | `package.json` `"version"` | `package.version` |
-| A `credentials` export: `{ fields, sections? }` or a list of fields | `credentials` |
+| A `credentials` export: `{ fields, sections?, instructions? }` or a list of fields | `credentials` |
 | The `settings` export or `settings.js` | `settings` |
 | A worker class on the plugin object, with `metadata` | A submodule. Its `metadata.catalog_methods` lists the methods to publish; their options come from `Worker.prototype.<method>.metadata.options` |
 

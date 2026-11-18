@@ -146,3 +146,15 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Temporary files from tools, editors and merges
+.tmp_*/
+.tmp/
+*.tmp
+*.orig
+*.rej
+*.swp
+*~
+.DS_Store
+.claude/settings.local.json
+.claude/worktrees/

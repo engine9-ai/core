@@ -160,6 +160,8 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
         roles: [curatorId],
         level: 2,
         auth: {},
+        // A session after the curator's sign-in: roles are read through the login it names.
+        email: 'curator@example.com',
         domainUnid: 'seg-http.example'
       })
     };

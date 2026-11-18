@@ -11,7 +11,8 @@ import {
   catalogMethodsOf,
   pluginCatalogFile,
   pluginCredentialsDefinition,
-  validatePluginCatalogEntry
+  validatePluginCatalogEntry,
+  README_MAX_LENGTH
 } from '../lib/pluginCatalog.js';
 import { catalogSettingDefinitions } from '../lib/pluginSettings.js';
 
@@ -120,6 +121,52 @@ test('validatePluginCatalogEntry: reports what is wrong', () => {
   assert.match(text, /"claude_api_key" is also declared at settings\[0\]/);
   assert.match(result.warnings.join('\n'), /declare it under credentials/);
   assert.equal(validatePluginCatalogEntry({ ...entry, 'x-acme': { anything: true } }).ok, true);
+});
+
+test('validatePluginCatalogEntry: icon and at most five screenshots', () => {
+  const entry = buildPluginCatalogEntry({
+    path: 'acme-plugins/shop',
+    plugin: {
+      ...plugin,
+      metadata: { ...plugin.metadata, icon: '/assets/a.png', screenshots: ['/assets/b.png', { url: 'https://acme.example/c.png', caption: 'Orders' }] }
+    },
+    packageVersion: '1.4.0'
+  });
+  assert.equal(entry.icon, '/assets/a.png');
+  assert.deepEqual(entry.screenshots, [{ url: '/assets/b.png' }, { url: 'https://acme.example/c.png', caption: 'Orders' }]);
+  assert.deepEqual(validatePluginCatalogEntry(entry).errors, []);
+
+  const shot = { url: '/assets/b.png' };
+  const text = validatePluginCatalogEntry({
+    ...entry,
+    icon: 'http://acme.example/a.png',
+    screenshots: [shot, shot, shot, shot, shot, { url: 'b.png', alt: 'x', caption: 'y'.repeat(201) }]
+  }).errors.join('\n');
+  assert.match(text, /icon must be an https URL/);
+  assert.match(text, /screenshots: at most 5, not 6/);
+  assert.match(text, /screenshots\[5\]: unknown key "alt"/);
+  assert.match(text, /screenshots\[5\].url must be an https URL/);
+  assert.match(text, /screenshots\[5\].caption must be a string of at most 200/);
+});
+
+test('validatePluginCatalogEntry: readme and credentials.instructions are Markdown strings', () => {
+  const entry = buildPluginCatalogEntry({
+    path: 'acme-plugins/shop',
+    plugin: { ...plugin, metadata: { ...plugin.metadata, readme: '# Shop\n\nOrders.' } },
+    packageVersion: '1.4.0'
+  });
+  assert.equal(entry.readme, '# Shop\n\nOrders.');
+  const documented = { ...entry, credentials: { ...entry.credentials, instructions: '1. Create a key.' } };
+  assert.deepEqual(validatePluginCatalogEntry(documented).errors, []);
+
+  const bad = {
+    ...entry,
+    readme: 'x'.repeat(README_MAX_LENGTH + 1),
+    credentials: { ...entry.credentials, instructions: { steps: [] } }
+  };
+  const text = validatePluginCatalogEntry(bad).errors.join('\n');
+  assert.match(text, /readme is 65537 characters/);
+  assert.match(text, /credentials.instructions must be a Markdown string/);
 });
 
 test('pluginCredentialsDefinition: a secrets definition, or null', () => {

@@ -122,6 +122,19 @@
         through package.json "engine9", as install does. Both exit 1 when an
         entry does not meet the standard.
 
+    e9core signin list    --person <id> | --email <address> | --subject <Domain UNID>
+    e9core signin explain --email <address> [--subject <Domain UNID>] | --person <id>
+    e9core signin link    --email <address> | --subject <Domain UNID>  --person <id>
+    e9core signin lock    --email … | --subject … | --person <id>
+    e9core signin unlock  --email … | --subject … | --person <id>
+    e9core signin retire  --email … | --subject … | --person <id>
+        Who can sign in, and as which person (the person_login table). list
+        and explain only read. link gives a person a login (or moves one
+        there); lock stops a login; unlock turns it back on; retire is
+        offboarding: a new account with a retired address gets a new person.
+        Each change writes the audit log. --db, or --url <site> with the
+        admin key (POST /api/admin/logins), as for segment.
+
     e9core segment list    [--db ...] [--account <id>] [--handle <handle>]
     e9core segment members --segment <role name | segment id>
     e9core segment add     --segment admin --email a@x.org[,b@y.org] [--emails file.txt] [--person-id 12]
@@ -198,6 +211,7 @@ import { catalogCommand } from './catalog.js';
 import { ConsoleLogger, JsonlFileLogger } from '../logging/index.js';
 import { SETUP_STEPS } from '../api/setupSteps.js';
 import PersonWorker from '../lib/PersonWorker.js';
+import { loginMode, LOGIN_PLUGIN_PATH, listLogins, explainLogin, linkLogin, lockLogin, unlockLogin, retireLogin } from '../auth/logins.js';
 import { getPluginUUID, getStringArray } from '../lib/utilities.js';
 import {
   STANDARD_ROLES,
@@ -281,6 +295,78 @@ async function withSiteAdminKey(args, url, fn) {
   const explicit = args.key && args.key !== true ? String(args.key) : undefined;
   if (args.remote === true && !explicit) return withTemporaryAdminKey({ cwd: process.cwd(), env: envArg(args) }, fn);
   return fn(adminKey({ key: explicit, target: envArg(args), url }));
+}
+
+/** `e9core signin <action>`: person_login, through --db or a deployed site (--url). */
+const SIGNIN_ACTIONS = ['list', 'explain', 'link', 'lock', 'unlock', 'retire'];
+
+function signinArgs(args) {
+  const value = (name) => (args[name] && args[name] !== true ? String(args[name]).trim() : undefined);
+  return { email: value('email'), subject: value('subject'), person_id: value('person') ?? value('person-id') };
+}
+
+async function signinCommand(args) {
+  const [, action] = args._;
+  if (!SIGNIN_ACTIONS.includes(action)) {
+    console.error(`Usage: e9core signin <${SIGNIN_ACTIONS.join('|')}> --email <address> | --subject <Domain UNID> | --person <id>  (--db … or --url …)`);
+    process.exit(1);
+  }
+  const target = signinArgs(args);
+  if (!target.email && !target.subject && !target.person_id) {
+    console.error('Name a login or a person: --email <address>, --subject <Domain UNID>, or --person <id>.');
+    process.exit(1);
+  }
+  let url;
+  try {
+    url = siteUrlArg(args);
+  } catch (e) {
+    console.error(String(e.message || e));
+    process.exit(1);
+  }
+  try {
+    if (url) {
+      const result = await withSiteAdminKey(args, url, (key) =>
+        callSite({ url, key, method: 'POST', route: '/admin/logins', body: { action, ...target } })
+      );
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const db = args.db || process.env.ENGINE9_DATABASE_CONNECTION;
+    if (!db) {
+      console.error('Provide --db <connection>, --url <site> (a deployed site, D1 included), or set ENGINE9_DATABASE_CONNECTION');
+      process.exit(1);
+    }
+    const { accountId, accountHandle } = cliAccount(args, { fallback: 'local' });
+    ensureNodePluginRegistry({ cwd: process.cwd() });
+    const worker = new PersonWorker({ accountId, accountHandle, auth: { database_connection: db } });
+    worker.audit = cliAudit();
+    try {
+      const mode = await loginMode(worker);
+      if (mode !== 'on') {
+        console.error(
+          mode === 'off'
+            ? `This database has no sign-in (no person_login table). To turn it on: npx e9core upgrade --plugin ${LOGIN_PLUGIN_PATH}`
+            : 'This database has no person_login table yet. Run npx e9core upgrade first.'
+        );
+        process.exit(1);
+      }
+      const opts = { worker, email: target.email, subject: target.subject, personId: target.person_id, actor: { by: 'cli' } };
+      const run = {
+        list: () => listLogins(opts),
+        explain: () => explainLogin({ ...opts, roleIds: Object.keys(standardRoleRegistry(accountHandle)) }),
+        link: () => linkLogin(opts),
+        lock: () => lockLogin(opts),
+        unlock: () => unlockLogin(opts),
+        retire: () => retireLogin(opts)
+      }[action];
+      console.log(JSON.stringify(await run(), null, 2));
+    } finally {
+      await worker.destroy?.();
+    }
+  } catch (e) {
+    console.error(String(e.message || e));
+    process.exit(1);
+  }
 }
 
 /** `e9core segment … --url`: the same actions through a deployed site's API (D1 included). */
@@ -822,6 +908,10 @@ async function main() {
       superadminCommand(args);
       break;
     }
+    case 'signin': {
+      await signinCommand(args);
+      break;
+    }
     case 'build-plugins': {
       const result = buildPlugins({
         cwd: process.cwd(),
@@ -842,7 +932,7 @@ async function main() {
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|sqlite-ddl|install|upgrade|status|build-plugins|catalog>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|signin|sqlite-ddl|install|upgrade|status|build-plugins|catalog>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

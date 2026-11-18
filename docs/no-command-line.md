@@ -62,8 +62,14 @@ database already exists runs the workflow by hand (below) once, with command
 Advanced: another edition, or only the required plugins, changes what the
 site can do. Without the contact edition the site keeps no names or email
 addresses: it cannot email people, signups keep less, and admins cannot be
-added by email. Read the `@engine9/schemas` README and understand what you
-give up before you choose.
+added by email.
+
+**Sign-in needs the login plugin** (`@engine9/schemas/login`), which no
+edition includes. For a new site, add it to the same line:
+`"install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"]`.
+A site whose database already exists runs the workflow by hand with command
+`upgrade` and options `--plugin @engine9/schemas/login`. Read the `@engine9/schemas` README and
+understand what you give up before you choose.
 
 Run by hand (**Actions**, **Deploy**, **Run workflow**), it takes three
 inputs:

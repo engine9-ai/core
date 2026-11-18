@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import PersonWorker from '../lib/PersonWorker.js';
 import { getPluginUUID } from '../lib/utilities.js';
-import { applyContactEdition, ensurePluginRow } from './helpers/applySchemas.js';
+import { applyWebsitePlugins, ensurePluginRow } from './helpers/applySchemas.js';
 import {
   createSessionToken,
   verifySessionToken,
@@ -58,7 +58,7 @@ const UNID_B = domainUnidOf('site.example.com', 'b');
 test('delegate identities dedupe through the person pipeline (id_type "delegate")', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
 
@@ -82,14 +82,23 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     const { data: people } = await worker.query('select id from person');
     assert.equal(people.length, 1);
 
-    // Known email arriving with a NEW unid (Level 2 confirms it) -> the same
-    // person, found by the email
-    const merged = await resolveDelegatePersonId({
+    // Known email arriving with a NEW unid: another Delegate account first used
+    // this address, so sign-in stops (person_login, subject first).
+    await assert.rejects(
+      resolveDelegatePersonId({
+        worker,
+        pluginId,
+        delegateUser: { domainUnid: UNID_B, email: 'alice@example.com', emailVerified: true, level: 3 }
+      }),
+      (e) => e.reason === 'login_reassigned'
+    );
+    // Level 2 without email_verified (a verified phone) is not an address.
+    const phoneOnly = await resolveDelegatePersonId({
       worker,
       pluginId,
       delegateUser: { domainUnid: UNID_B, email: 'alice@example.com', level: 2 }
     });
-    assert.equal(merged, personId, 'a confirmed email finds the person core knows by it');
+    assert.notEqual(phoneOnly, personId, 'an unverified address does not find a person');
 
     // Brand new person entirely
     const other = await resolveDelegatePersonId({
@@ -122,9 +131,9 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     assert.equal(unverifiedAgain, unverified, 'with no confirmed email the Domain UNID finds the person');
     const { data: delegateIds } = await worker.query('select person_id from person_id_delegate');
     assert.deepEqual(
-      delegateIds.map((r) => r.person_id),
-      [unverified],
-      'only the login without a confirmed email stored a Domain UNID'
+      delegateIds.map((r) => Number(r.person_id)).sort((a, b) => a - b),
+      [phoneOnly, unverified].sort((a, b) => a - b),
+      'only the logins without a confirmed email stored a Domain UNID'
     );
 
     const browserOne = await resolveDelegatePersonId({
@@ -152,30 +161,32 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
   }
 });
 
-test('one Delegate User with two confirmed emails: two people unless core joined them', async () => {
+test('one Delegate account is one person; an address core already has is adopted once', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
-    const login = (email) =>
-      resolveDelegatePersonId({ worker, pluginId, delegateUser: { domainUnid: UNID_A, email, emailVerified: true } });
+    const login = (email, unid = UNID_A) =>
+      resolveDelegatePersonId({ worker, pluginId, delegateUser: { domainUnid: unid, email, emailVerified: true, level: 3 } });
     const add = async (record) =>
       (await worker.processPeople({ pluginId, remoteInputId: 'import', inputType: 'api', batch: [record] }))
         .personIds[0];
 
     const home = await login('pat@home.example');
     const work = await login('pat@work.example');
-    assert.notEqual(work, home, 'a second address is a second person');
-    assert.equal(await login('pat@home.example'), home, 'each address keeps its own person');
+    assert.equal(work, home, 'the Delegate account finds its person; the second address becomes a login on it');
+    assert.equal(await login('pat@home.example'), home);
 
     const roster = await add({ email: 'sam@work.example', given_name: 'Sam' });
-    assert.equal(await login('sam@work.example'), roster, 'an address core already has finds that person');
+    assert.equal(await login('sam@work.example', domainUnidOf('site.example.com', 'sam')), roster, 'an address core already has is adopted');
 
+    // Two addresses core joined, two Delegate accounts: the first adopts the
+    // person, the second is asked to sign in with the first address.
     const joined = await add({ email: 'lee@home.example' });
     await add({ person_id: joined, email: 'lee@work.example' });
-    assert.equal(await login('lee@work.example'), joined, 'addresses core joined stay one person');
-    assert.equal(await login('lee@home.example'), joined);
+    assert.equal(await login('lee@work.example', domainUnidOf('site.example.com', 'lee-w')), joined);
+    await assert.rejects(login('lee@home.example', domainUnidOf('site.example.com', 'lee-h')), (e) => e.reason === 'other_login' && e.masked === 'l***e@w***k.example');
   } finally {
     await worker.destroy();
   }
@@ -277,7 +288,7 @@ async function jwksFetch(publicKey, kid = 'test-key') {
 test('createDelegateAuth: login -> person -> roles-as-segments -> signed session', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
@@ -444,7 +455,7 @@ test('createDelegateAuth: login -> person -> roles-as-segments -> signed session
 test('createDelegateAuth: loadRolesOnLogin false skips segment roles on login', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-site-session-roles');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-site', name: 'Test Delegate Site' });
 
@@ -511,7 +522,7 @@ test('classifyDelegateLoginToken and createSessionCookieHeaders', () => {
 test('createDelegateAuth: login() with JWT creates session with level and shared fields', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
-    await applyContactEdition(worker);
+    await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-jwt');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-jwt', name: 'Test Delegate JWT' });
 

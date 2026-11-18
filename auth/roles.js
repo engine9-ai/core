@@ -16,10 +16,16 @@
   The *Segment functions take any segment id; a role is just a segment
   the registry names.
 
-  Email is the key. Adding an email that is not yet a person runs the normal
-  inbound pipeline, so the person exists before anyone signs in. When that
-  person later logs in through Delegate with a verified email, the login
-  merges into the same person and the Domain UNID attaches to it.
+  Email is the key, through the login table. Adding an email to a role
+  segment (one the `roles` plugin made, or `login: true`) names a login:
+  the address gets a `granted` row in person_login (auth/logins.js), on the
+  person that address already signs in as, or on an unclaimed person dedupe
+  holds, or on a new person. A grant never lands on a person someone else
+  already signs in as. Whoever signs in with that verified address holds the
+  role. Before `e9core upgrade` creates person_login, on a database with no
+  sign-in (no @engine9/schemas/login), and for any other segment, an email is
+  found or created through the inbound pipeline. Without sign-in nobody
+  signs in to use the role; turning sign-in on copies the role holders.
 
   Roles are account-scoped. Every role segment belongs to the account's
   `roles` plugin, rolesPluginId(accountId) = getPluginUUID(accountId, 'roles'),
@@ -42,6 +48,7 @@ import { v5 as uuidv5 } from 'uuid';
 import { getPluginUUID } from '../lib/utilities.js';
 import { STANDARD_ROLES } from './roleNames.js';
 import { normalizeMembershipPolicy } from './segmentAccess.js';
+import { loginMode, loginTableReady, personForGrant, personForLoginEmail, loginRoleIdsForEmail } from './logins.js';
 
 export { ROLE_NAMES, STANDARD_ROLES } from './roleNames.js';
 
@@ -310,12 +317,42 @@ export async function personIdsForEmails({
   return known;
 }
 
-async function resolveTargets({ worker, pluginId, emails, personIds, create, remoteInputId }) {
+/* A role segment: made by the account's roles plugin. Membership of it is a grant to a login. */
+async function isRoleSegment(worker, segmentId) {
+  try {
+    const { data } = await worker.query({
+      sql: 'select p.path from segment s join plugin p on p.id=s.plugin_id where s.id=?',
+      values: [segmentId]
+    });
+    return data[0]?.path === ROLES_PLUGIN_PATH;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveTargets({ worker, pluginId, emails, personIds, create, remoteInputId, login = false }) {
   const ids = personIdList(personIds);
-  const byEmail = await personIdsForEmails({ worker, pluginId, emails, create, remoteInputId });
+  let byEmail;
+  const notes = [];
+  if (login && (await loginTableReady(worker))) {
+    byEmail = {};
+    for (const email of emailList(emails)) {
+      if (create) {
+        const grant = await personForGrant({ worker, pluginId, email, remoteInputId });
+        byEmail[email] = grant.personId;
+        if (grant.note) notes.push(grant.note);
+      } else {
+        // A removal: the person this address signs in as, else whoever dedupe files it under.
+        const personId = (await personForLoginEmail(worker, email)) ?? (await lookupPersonIdsByEmail({ worker, emails: [email] }))[email];
+        if (personId) byEmail[email] = personId;
+      }
+    }
+  } else {
+    byEmail = await personIdsForEmails({ worker, pluginId, emails, create, remoteInputId });
+  }
   const resolved = new Set(ids);
   for (const id of Object.values(byEmail)) resolved.add(id);
-  return { personIds: [...resolved].sort((a, b) => a - b), byEmail };
+  return { personIds: [...resolved].sort((a, b) => a - b), byEmail, notes };
 }
 
 /**
@@ -329,11 +366,14 @@ export async function addPeopleToSegment({
   segmentId,
   emails = [],
   personIds = [],
-  remoteInputId = 'roles'
+  remoteInputId = 'roles',
+  login
 } = {}) {
   requireWorker(worker, 'addPeopleToSegment');
   if (!segmentId) throw new Error('addPeopleToSegment requires segmentId');
-  const targets = await resolveTargets({ worker, pluginId, emails, personIds, create: true, remoteInputId });
+  // Only on a database with person_login, and only for a role segment, is membership a grant to a login.
+  const asLogin = login ?? (emailList(emails).length > 0 && (await loginTableReady(worker)) && (await isRoleSegment(worker, segmentId)));
+  const targets = await resolveTargets({ worker, pluginId, emails, personIds, create: true, remoteInputId, login: asLogin });
   if (!targets.personIds.length) throw new Error('addPeopleToSegment requires at least one email or person_id');
   const { data: existing } = await worker.query({
     sql: `select person_id from person_segment where segment_id=? and person_id in (${targets.personIds.map(() => '?').join(',')})`,
@@ -347,17 +387,19 @@ export async function addPeopleToSegment({
       array: added.map((person_id) => ({ person_id, segment_id: segmentId }))
     });
   }
-  return { segmentId, personIds: targets.personIds, byEmail: targets.byEmail, added };
+  return { segmentId, personIds: targets.personIds, byEmail: targets.byEmail, added, ...(targets.notes.length ? { notes: targets.notes } : {}) };
 }
 
 /**
  * Remove people from a segment. Unknown emails are ignored (nothing to
  * remove). Returns { segmentId, personIds, removed }.
  */
-export async function removePeopleFromSegment({ worker, segmentId, emails = [], personIds = [] } = {}) {
+export async function removePeopleFromSegment({ worker, segmentId, emails = [], personIds = [], login } = {}) {
   requireWorker(worker, 'removePeopleFromSegment');
   if (!segmentId) throw new Error('removePeopleFromSegment requires segmentId');
-  const targets = await resolveTargets({ worker, emails, personIds, create: false });
+  // Only on a database with person_login, and only for a role segment, is membership a grant to a login.
+  const asLogin = login ?? (emailList(emails).length > 0 && (await loginTableReady(worker)) && (await isRoleSegment(worker, segmentId)));
+  const targets = await resolveTargets({ worker, emails, personIds, create: false, login: asLogin });
   if (!targets.personIds.length) return { segmentId, personIds: [], removed: [] };
   const { data: existing } = await worker.query({
     sql: `select person_id from person_segment where segment_id=? and person_id in (${targets.personIds.map(() => '?').join(',')})`,
@@ -406,15 +448,21 @@ export async function personHasRole({ worker, personId, roleId } = {}) {
 }
 
 /**
- * Role ids (segment ids) held by the person who owns this email, limited
- * to `roleIds`. One query; used by hosts that only know an email (the
- * engine9 server checking an account database at login).
+ * Role ids (segment ids) held by the login for this email, limited to
+ * `roleIds`; used by hosts that only know an email (the engine9 server
+ * checking an account database at login). With person_login: an active email
+ * login only (it never reads person_email or adopts); pass `subject` when
+ * known. Before the upgrade: the person who owns the email. A database with
+ * no @engine9/schemas/login after the upgrade has no sign-in: no roles.
  */
-export async function rolesForEmail({ worker, email, roleIds } = {}) {
+export async function rolesForEmail({ worker, email, roleIds, subject } = {}) {
   requireWorker(worker, 'rolesForEmail');
   const mail = normalizeEmail(email);
   const ids = Array.isArray(roleIds) ? roleIds.filter(Boolean) : [];
   if (!mail || !ids.length) return [];
+  const mode = await loginMode(worker);
+  if (mode === 'off') return [];
+  if (mode === 'on') return loginRoleIdsForEmail({ worker, email: mail, subject, roleIds: ids });
   const { data } = await worker.query({
     sql: `select distinct ps.segment_id
       from person_email pe

@@ -47,7 +47,7 @@ export const SETUP_STEPS = [
         id: CONTACT_EDITION,
         label: 'Contact edition (recommended)',
         detail:
-          "People's names, email, phone, and postal address, plus timeline and transactions. Signup, login, and adding admins by email work with it."
+          "People's names, email, phone, and postal address, plus timeline and transactions. Signup, login, and adding admins by email work with it. Sign-in also needs @engine9/schemas/login, which a site adds on purpose."
       }
     ],
     advancedNote:

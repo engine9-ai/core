@@ -73,3 +73,17 @@ export async function applyContactEdition(worker) {
   await plugins.installRequiredPlugins();
   return plugins.install({ path: CONTACT_EDITION });
 }
+
+export const LOGIN_PLUGIN = '@engine9/schemas/login';
+
+/**
+ * A website's database: the required plugins, the contact edition, and the
+ * login plugin, which a site that signs people in adds on purpose (no
+ * edition includes it). Tests that sign anyone in use this.
+ */
+export async function applyWebsitePlugins(worker) {
+  const plugins = asPluginWorker(worker);
+  await plugins.installRequiredPlugins();
+  await plugins.install({ path: CONTACT_EDITION });
+  return plugins.install({ path: LOGIN_PLUGIN });
+}

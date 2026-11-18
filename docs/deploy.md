@@ -426,6 +426,18 @@ addresses: it cannot email people, signups keep less, and admins cannot be
 added by email. Read the `@engine9/schemas` README and understand what you
 give up before you choose.
 
+**Sign-in needs the login plugin.** A site where people sign in adds
+`@engine9/schemas/login` on purpose; no edition includes it. List it after
+the edition, before `setup` creates the databases:
+
+```json
+"engine9": { "install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"] }
+```
+
+A database that already has its tables gets it, with today's admins copied
+in, from `npx e9core upgrade --plugin @engine9/schemas/login`. Without it,
+core refuses every sign-in ([sign-in.md](sign-in.md)).
+
 `--url https://www.example.com` with the admin key works the same way. A site run from
 GitHub alone runs the deploy workflow by hand with the command `install` and
 the options `--plugin <path>` ([no-command-line.md](no-command-line.md)).

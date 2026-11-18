@@ -40,6 +40,7 @@ import {
 } from './roles.js';
 import { ROLE_NAMES } from './roleNames.js';
 import { isSuperadmin } from './superadmins.js';
+import { loginMode, loginTableReady, personForSignIn, loginRoleIds, loginHash, addSignInAddress, SIGN_IN_OFF_MESSAGE } from './logins.js';
 
 /** In-memory JWKS (createLocalJWKSet) keyed by delegateUrl. */
 const delegateJwksCache = new Map();
@@ -88,6 +89,26 @@ const DELEGATE_LOGIN_ERRORS = {
   invalid_domain: {
     kind: 'auth',
     message: 'This identity token is not valid for this domain. Please sign in again.'
+  },
+  // The sign-in stops (auth/logins.js). The Login button shows each with its choices.
+  other_login: {
+    kind: 'auth',
+    message:
+      'This email address belongs to someone here who signs in with a different address. Sign in with that address, or choose "This isn\'t me".'
+  },
+  login_reassigned: {
+    kind: 'auth',
+    message:
+      'This address signs in to an account here through a different Delegate account. Ask the site\'s administrator.'
+  },
+  login_locked: {
+    kind: 'auth',
+    message: 'This sign-in is turned off. Ask the site\'s administrator.'
+  },
+  // The database has no @engine9/schemas/login: the site has no sign-in.
+  sign_in_off: {
+    kind: 'configuration',
+    message: SIGN_IN_OFF_MESSAGE
   },
   // Not an expiry: the return belongs to a sign-in this browser did not start
   // (another browser, an old tab, a link someone sent). Start sign-in again.
@@ -534,42 +555,65 @@ export async function verifyDelegateIdentityToken({
 
 
 /*
-  The address Delegate confirmed for this login, or undefined. Confirmed
-  means emailVerified, or an Identity Level of at least 2 (Contact Confirmed).
+  The address Delegate confirmed for this login, or undefined: only an
+  address with email_verified. Level 2 alone can mean a verified phone.
 */
 export function delegateConfirmedEmail(delegateUser) {
-  const confirmed =
-    delegateUser?.emailVerified === true ||
-    (typeof delegateUser?.level === 'number' && delegateUser.level >= 2);
-  return confirmed && delegateUser.email ? String(delegateUser.email) : undefined;
+  return delegateUser?.emailVerified === true && delegateUser.email ? String(delegateUser.email) : undefined;
 }
 
 /*
-  Find the person for a Delegate login through the normal inbound person
-  pipeline. The Identity Token is a credential, not a person: Delegate
-  confirms an address, and core's own data decides who has it.
+  Find the person a Delegate login signs in as.
 
-  - A confirmed email is the only key. The person is whoever core knows by
-    that address, exactly as an import of that address would find them. The
-    Domain UNID is not stored on that person, so two addresses one Delegate
-    User holds stay two people unless core already joined them.
-  - With no confirmed email, the Domain UNID is the key (id_type "delegate",
-    person_id_delegate), and `mergedFrom` links the browser's earlier Domain
-    UNID to the same person.
+  With person_login (after `e9core upgrade` creates it), the login table
+  decides, never dedupe alone: see auth/logins.js. A sign-in can stop with
+  other_login (and a masked address), login_reassigned, or login_locked; the
+  thrown failure carries `reason` and `masked`. `newAccount` is the
+  person's "This isn't me" after an other_login stop.
+
+  Before the upgrade (loginMode 'legacy'), the lookup from earlier
+  releases: a confirmed email through the people pipeline, else the Domain
+  UNID (person_id_delegate) with `mergedFrom`. A database with no
+  @engine9/schemas/login after the upgrade (loginMode 'off') has no sign-in:
+  it stops with sign_in_off and never falls back to dedupe.
 
   Returns the person_id. See auth/README.md, "Who is signing in".
 */
-export async function resolveDelegatePersonId({
+export async function resolveDelegateLogin({
   worker,
   delegateUser,
   pluginId,
   remoteInputId = 'delegate',
   inputType = 'api',
-  person = {}
+  person = {},
+  newAccount = false,
+  readOnly = false
 }) {
   if (!worker) throw new Error('resolveDelegatePersonId requires a worker (PersonWorker)');
   if (!delegateUser?.domainUnid) throw new Error('resolveDelegatePersonId requires delegateUser.domainUnid');
   const email = delegateConfirmedEmail(delegateUser);
+  const mode = await loginMode(worker);
+  if (mode === 'off') throw createDelegateLoginFailure('sign_in_off');
+  if (mode === 'on') {
+    try {
+      return await personForSignIn({
+        worker,
+        pluginId,
+        identity: { subject: delegateUser.domainUnid, mergedFrom: delegateUser.mergedFrom, email, level: delegateUser.level },
+        person,
+        newAccount,
+        readOnly,
+        remoteInputId,
+        inputType
+      });
+    } catch (e) {
+      if (!e?.loginStop) throw e;
+      const failure = createDelegateLoginFailure(e.reason, { detail: e.message });
+      if (e.masked !== undefined) failure.masked = e.masked;
+      throw failure;
+    }
+  }
+  if (readOnly) throw new Error('readOnly sign-in lookups need person_login: run e9core upgrade');
   const record = { ...person };
   if (email) {
     record.email = email;
@@ -591,7 +635,12 @@ export async function resolveDelegatePersonId({
       detail: 'delegate person resolution did not produce a person_id'
     });
   }
-  return personId;
+  return { personId: Number(personId), how: null, foundBy: 'legacy' };
+}
+
+/** resolveDelegateLogin, returning the person_id only. */
+export async function resolveDelegatePersonId(options) {
+  return (await resolveDelegateLogin(options)).personId;
 }
 
 /* ---------------------------------------------------------------------------
@@ -830,12 +879,12 @@ export function createDelegateAuth({
      email later merges into the same person. */
   async function addPeople({ role, emails, personIds } = {}) {
     const segmentId = requireRoleId(role, 'addPeople');
-    return addPeopleToSegment({ worker, pluginId, segmentId, emails, personIds, remoteInputId });
+    return addPeopleToSegment({ worker, pluginId, segmentId, emails, personIds, remoteInputId, login: true });
   }
 
   async function removePeople({ role, emails, personIds } = {}) {
     const segmentId = requireRoleId(role, 'removePeople');
-    return removePeopleFromSegment({ worker, segmentId, emails, personIds });
+    return removePeopleFromSegment({ worker, segmentId, emails, personIds, login: true });
   }
 
   async function members({ role } = {}) {
@@ -867,10 +916,36 @@ export function createDelegateAuth({
   /* Roles this session holds now: person_segment, plus the admin role when
      its verified email is a superadmin. Use this, not rolesForPerson, for a
      privileged decision on a session. */
+  /* person_segment roles this session holds now, without the superadmin list. */
+  async function heldRolesForSession(session) {
+    if (!session || !Number.isInteger(session.personId)) return [];
+    // With person_login, roles come through the login this session signed in
+    // with. Without it (not upgraded, or no login plugin), as before: the
+    // person's person_segment rows.
+    return (await loginTableReady(worker)) ? loginRoleIds({ worker, session, roleIds }) : rolesForPerson(session.personId);
+  }
+
   async function rolesForSession(session) {
     if (!session) return [];
-    const held = Number.isInteger(session.personId) ? await rolesForPerson(session.personId) : [];
-    return withSuperadmin({ ...session, roles: held }).roles;
+    return withSuperadmin({ ...session, roles: await heldRolesForSession(session) }).roles;
+  }
+
+  /*
+    A session read from a token, with its roles read again now (PL-8, PL-9):
+    the copy inside the token is never used for a decision. A Core Session
+    lasts a day; a locked or retired login, or a removed role, takes effect
+    on the next request.
+
+    Only on a database with person_login (@engine9/schemas/login). Without
+    it the session is returned unchanged, as before that plugin existed, so
+    a site without sign-in, and a host that issues its own Core Sessions
+    there, see no difference.
+  */
+  async function refreshSession(session) {
+    if (!session) return session;
+    if (!(await loginTableReady(worker))) return session;
+    const { superadmin: _s, ...rest } = session;
+    return withSuperadmin({ ...rest, roles: await heldRolesForSession(session) });
   }
 
   async function grantRole(personId, roleIdOrName, { exclusive = false } = {}) {
@@ -1084,8 +1159,14 @@ export function createDelegateAuth({
     cookie, other state, other nonce) throws `state_mismatch`: send the
     browser to sign in again, do not show an error. Always send
     `clearCookie` (also on the thrown error) so the request is used once.
+
+    One exception: an `other_login` stop keeps the request open for the
+    person's "This isn't me". The error carries `retryCookie` (send it
+    instead of clearCookie), a copy of the request marked with the Delegate
+    account that stopped. finishLogin(sameToken, { state, cookie, newAccount:
+    true }) then signs in as a new person, once, for that account only.
   */
-  async function finishLogin(token, { state, cookie, cookieName = 'e9_login', secure, ...loginOptions } = {}) {
+  async function finishLogin(token, { state, cookie, cookieName = 'e9_login', secure, newAccount = false, ...loginOptions } = {}) {
     const raw = readCookie(cookie, cookieName);
     const pending = raw
       ? verifySessionToken(raw, { secret: sessionSecret, typ: LOGIN_REQUEST_TOKEN_TYPE })
@@ -1098,13 +1179,71 @@ export function createDelegateAuth({
       failure.clearCookie = clearCookie;
       throw failure;
     }
+    // "This isn't me" is honored only for the account this request stopped.
+    const allowNew = Boolean(newAccount) && typeof pending.stopped === 'string' && pending.stopped.length > 0;
     try {
-      const result = await login(token, { ...loginOptions, nonce: pending.nonce });
+      const result = await login(token, {
+        ...loginOptions,
+        nonce: pending.nonce,
+        newAccount: allowNew,
+        ...(allowNew ? { requireSubjectHash: pending.stopped } : {})
+      });
       return { ...result, clearCookie, data: pending.data };
     } catch (err) {
-      if (err && typeof err === 'object') err.clearCookie = clearCookie;
+      if (err && typeof err === 'object') {
+        err.clearCookie = clearCookie;
+        if (err.reason === 'other_login' && err.stoppedSubjectHash && !allowNew) {
+          const ttl = Math.max(60, Math.min(LOGIN_REQUEST_TTL_SECONDS, (pending.exp || 0) - Math.floor(Date.now() / 1000)));
+          const value = createSessionToken(
+            { state: pending.state, nonce: pending.nonce, ...(pending.data === undefined ? {} : { data: pending.data }), stopped: err.stoppedSubjectHash },
+            { secret: sessionSecret, ttlSeconds: ttl, typ: LOGIN_REQUEST_TOKEN_TYPE }
+          );
+          err.retryCookie = createSessionCookieHeaders(value, { cookieName, maxAge: ttl, secure: Boolean(secure) });
+        }
+        delete err.stoppedSubjectHash;
+      }
       throw err;
     }
+  }
+
+  /*
+    Add a sign-in address (the Login button's "Add a sign-in address"). The
+    signed-in `session` proves the current account; the token, from a
+    sign-in this browser started (state, nonce, e9_login cookie, as
+    finishLogin), proves the new one. Both logins of the new account go on
+    the session's person. Returns { ok, person_id } or { refused, error }.
+  */
+  async function finishAddAddress(token, { state, cookie, cookieName = 'e9_login', secure, session, returnTo, domain: domainOverride, fallbackDomain } = {}) {
+    const raw = readCookie(cookie, cookieName);
+    const pending = raw ? verifySessionToken(raw, { secret: sessionSecret, typ: LOGIN_REQUEST_TOKEN_TYPE }) : null;
+    const clearCookie = clearCookieHeader(cookieName, Boolean(secure));
+    if (!pending || !state || pending.state !== state) {
+      const failure = createDelegateLoginFailure('state_mismatch', { detail: 'no sign-in was started in this browser' });
+      failure.clearCookie = clearCookie;
+      throw failure;
+    }
+    const mode = await loginMode(worker);
+    if (mode === 'off') return { refused: 'sign_in_off', error: SIGN_IN_OFF_MESSAGE, clearCookie };
+    if (mode !== 'on') return { refused: 'not_upgraded', error: 'This site has not run e9core upgrade yet.', clearCookie };
+    const delegateUser = await verifyDelegateIdentityToken({
+      token,
+      delegateUrl,
+      domain: domainOverride || domain || domainFromUrl(returnTo) || fallbackDomain,
+      jwks,
+      issuer,
+      nonce: pending.nonce,
+      fetchImpl
+    });
+    const result = await addSignInAddress({
+      worker,
+      session,
+      identity: {
+        subject: delegateUser.domainUnid,
+        email: delegateConfirmedEmail(delegateUser),
+        level: delegateUser.level
+      }
+    });
+    return { ...result, clearCookie };
   }
 
   /*
@@ -1115,7 +1254,7 @@ export function createDelegateAuth({
   */
   async function login(
     token,
-    { person = {}, returnTo, domain: domainOverride, fallbackDomain, nonce } = {}
+    { person = {}, returnTo, domain: domainOverride, fallbackDomain, nonce, newAccount = false, requireSubjectHash } = {}
   ) {
     if (classifyDelegateLoginToken(token) !== 'jwt') {
       throw createDelegateLoginFailure('invalid_identity_token', {
@@ -1133,15 +1272,31 @@ export function createDelegateAuth({
       fetchImpl
     });
 
-    const personId = await resolveDelegatePersonId({
-      worker,
-      delegateUser,
-      pluginId,
-      remoteInputId,
-      inputType,
-      person
-    });
-    const sessionRoles = loadRolesOnLogin ? await rolesForPerson(personId) : [];
+    const subjectHash = loginHash(delegateUser.domainUnid);
+    if (requireSubjectHash && requireSubjectHash !== subjectHash) {
+      throw createDelegateLoginFailure('state_mismatch', { detail: '"This isn\'t me" belongs to a different sign-in' });
+    }
+    let personId;
+    try {
+      ({ personId } = await resolveDelegateLogin({
+        worker,
+        delegateUser,
+        pluginId,
+        remoteInputId,
+        inputType,
+        person,
+        newAccount
+      }));
+    } catch (err) {
+      if (err?.reason === 'other_login') err.stoppedSubjectHash = subjectHash;
+      throw err;
+    }
+    const base = { personId, domainUnid: delegateUser.domainUnid, email: delegateUser.email, level: delegateUser.level };
+    const sessionRoles = loadRolesOnLogin
+      ? (await loginTableReady(worker))
+        ? await loginRoleIds({ worker, session: base, roleIds })
+        : await rolesForPerson(personId)
+      : [];
     const session = {
       personId,
       roles: sessionRoles,
@@ -1167,6 +1322,7 @@ export function createDelegateAuth({
     beginLogin,
     beginLoginRequest,
     finishLogin,
+    finishAddAddress,
     readLoginRequest,
     login,
     verify,
@@ -1176,6 +1332,8 @@ export function createDelegateAuth({
     issueToken,
     withSuperadmin,
     rolesForSession,
+    heldRolesForSession,
+    refreshSession,
     rolesForPerson,
     grantRole,
     changeRole,

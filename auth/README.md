@@ -24,6 +24,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 | `hmac.js`          | `encoded.sig` HMAC helpers (Core Session + legacy bridge)                                                              |
 | `delegate.js`      | Identity Tokens, person + role + session                                                                               |
 | `delegate.d.ts`    | Types for `createDelegateAuth` and JWT verification                                                                    |
+| `logins.js`        | `person_login` (`@engine9/schemas/login`): whether this database has sign-in (`loginMode`), who a sign-in is (`personForSignIn`), roles through a login, grants by email, the `e9core signin` actions |
 | `roles.js`         | Role segments: standard names, deterministic ids, add/remove people by email ([docs/segments.md](../docs/segments.md)) |
 | `roleNames.js`     | `ROLE_NAMES`, `STANDARD_ROLES`                                                                                         |
 | `superadmins.js`   | Superadmin list logic: `normalizeSuperadmins`, `isSuperadmin` (a file of verified emails; [docs/roles.md](../docs/roles.md#superadmins)) |
@@ -112,9 +113,9 @@ need.
 ### Removing someone
 
 Remove their `person_segment` row (`auth.removePeople`, or
-`POST /auth/segments`). Privileged checks see it on their next request. The
-copy in a token they already hold goes away when it expires or they log in
-again, so menus can show the old role until then. To end the session itself,
+`POST /auth/segments`). For someone who left, also retire their logins
+(`e9core signin retire --person <id>`). Core's API and `requireRole` read
+roles through the login on every request, so the next request sees it. To end the session itself,
 use logout with `sessionRevocations` (below), or rotate `SESSION_SECRET` to
 end every session.
 
@@ -137,90 +138,103 @@ Default provider implementation. Behavior and vocabulary:
 
 `verifyDelegateIdentityToken({ token, delegateUrl, domain, jwks?, issuer?, fetchImpl? })`
 verifies the provider JWT and returns the provider user object.
-`resolveDelegatePersonId` finds the person for it, by the rule in the next
-section.
+`resolveDelegateLogin` (and `resolveDelegatePersonId`, which returns only the
+id) finds the person for it, by the rule in the next section.
 
-## Who is signing in: credential, identity, deduplication
+## Who is signing in: logins, people, deduplication
 
-A login involves three different things. Keep them apart.
+A sign-in involves four different things. Keep them apart.
 
 | | What it is | Decided by | Stored in |
 | --- | --- | --- | --- |
-| **Credential** | The Identity Token. Delegate says: this browser's User controls this address, at this Identity Level, for this Domain | Delegate | The token, then the Core Session |
-| **Identity** | The person: one `person` row and its `person_id` | core | `person`, `person_email`, `person_id_*` |
-| **Deduplication** | Whether two identifiers (two addresses, an address and a CRM id) are one person | core's people pipeline, from core's own data | `person_id_*` |
+| **Credential** | The Identity Token. Delegate says: this browser's Delegate account controls this address, at this Identity Level, for this Domain | Delegate | The token, then the Core Session |
+| **Login** | Who can sign in, and as which person: a Delegate account (by Domain UNID) or a verified address (by `email_hash_v1`) | Sign-in, an admin's grant, `e9core signin` | `person_login` |
+| **Identity** | The person: one `person` row and its `person_id` | core | `person` and the person tables |
+| **Deduplication** | Whether two identifiers (two addresses, an address and a CRM id) are one person's data | The people pipeline, from imports and forms | `person_id_*` |
 
-Delegate issues credentials. It is not a deduplication mechanism. That one
-Delegate User holds two addresses is not evidence to core that they are one
-person.
+`person_login` is this database's `/etc/passwd`. It belongs to the login plugin
+(`@engine9/schemas/login`, which no edition includes), which a site needs to have
+sign-in: a database without it has no sign-in (`loginMode` `off`), and every
+sign-in stops with `sign_in_off`. Deduplication files data,
+and public forms write it, so it never decides who someone signs in as. It
+is asked only when a sign-in or a grant has no login yet, to offer a person
+nobody signs in as. [auth/logins.js](logins.js) has every rule; PERMISSIONS.md
+PL-13 is the requirement.
 
 ### The names
 
 | Name | Meaning |
 | --- | --- |
-| `sub` (Domain UNID) | Delegate's id for the Delegate User on this Domain, `domain:hex`. It is the same for every address that User holds. It names the holder of the credential, not a person in core. On the session as `domainUnid` |
-| `fields.email`, `fields.email_verified` | The address the User chose to share with this Domain, and whether Delegate confirmed it |
-| Confirmed email | `email_verified` is true, or the Identity Level is 2 or more. `delegateConfirmedEmail(delegateUser)` returns it, or undefined |
-| Login record | The one row core sends through the people pipeline (`processPeople`) at login, exactly as an import would: `{ email }` with a confirmed email, else `{ delegate_id: sub }` (plus `delegate_merged_from`). Fields the site passes as `login(token, { person })` ride along |
+| `sub` (Domain UNID) | Delegate's id for the Delegate account on this Domain, `domain:hex`. The same for every address that account holds. On the session as `domainUnid` |
+| `fields.email`, `fields.email_verified` | The address the account chose to share with this Domain, and whether Delegate confirmed it |
+| Confirmed email | `email_verified` is true. `delegateConfirmedEmail(delegateUser)` returns it, or undefined. Level 2 alone can mean a verified phone |
+| Login | One `person_login` row: `type` (`delegate` or `email`), the hash, the person, `how` (`created`, `adopted`, `granted`, `backfill`), `state` (`active`, `locked`, `retired`). An email login also keeps the Delegate account that first signed in with it |
 | `person_id` | core's id for the person. Roles (`person_segment`) and every person table hang on it. On the session as `personId` |
-| `session.email` | The confirmed address of this login. Undefined when there is none |
+| `session.email` | The confirmed address of this sign-in. Undefined when there is none |
 
 ### The rule
 
-1. **A confirmed email is the key.** core finds the person it knows by that
-   address, or creates one, the same way an import of that address would.
-   The Domain UNID is not stored on that person.
-2. **With no confirmed email, the Domain UNID is the key**
-   (`person_id_delegate`). This covers Level 0 visitors, an unconfirmed
-   address (Facebook and Microsoft addresses are never confirmed), and a Grant that does not
-   share `email`. `merged_from` links the browser's earlier Domain UNID to the
-   same person.
-3. **Only core joins people.** Two addresses are one person when core's data
-   already says so: an import that gives both the same `person_id` or
-   `remote_person_id`, or a merge an operator made. Never because Delegate
-   holds both for one User.
+At Identity Level 2 and above (`personForSignIn`):
 
-Why:
+1. **The Delegate account's login**, if it has one. Locked or retired: stop
+   (`login_locked`).
+2. Else a **`merged_from` login**: Delegate merged that account into this one.
+3. Else the **address's login**. Locked: stop. Retired: a new person (the
+   address was offboarded). First used by a different Delegate account: stop
+   (`login_reassigned`). Otherwise sign in, and the account is recorded on
+   the address. This is how a granted or upgraded admin's first sign-in works.
+4. **No login:** dedupe names a person by the address (or, without one, the
+   Domain UNID). Nobody signs in as that person: adopt it (`adopted`, which
+   carries only self-join roles). Nobody: a new person. Someone already signs
+   in as it: stop with `other_login`, unless the person chose "This isn't
+   me".
+5. The logins the token brings are written on the person, and the sign-in's
+   own data (fields the site passed, a new address) goes through the people
+   pipeline as before.
 
-- Roles and superadmins are granted by address (`addPeople({ emails })`, the
-  superadmin list). Grant `pat@work.example` a role, and whoever signs in with
-  that confirmed address holds it, whatever address they used before.
-- One Delegate User is not always one person. A family or a team shares an
-  inbox, and many people keep work and home apart on purpose.
-- If the Domain UNID stuck to the first person, every later address that User
-  picked would sign in as that first person, and the site's records for the
-  new address would never be found.
+Below Level 2 nothing is written: an existing login signs in with self-join
+roles only, and anyone else is a visitor found by Domain UNID.
+
+A Delegate account that first signed in without a confirmed address
+(Microsoft, Facebook, a phone) and later proves an address an admin granted,
+moves to the granted person once, when its own person holds nothing.
+
+### The stops
+
+The Login button shows them; `/api/auth/callback` shows the same page
+without JavaScript. Every stop issues no session and shows no `person_id`
+and no full address.
+
+| Reason | The Login button says | Ways forward |
+| --- | --- | --- |
+| `other_login` | This address belongs to someone here who signs in with a different address: `v***x@g***l.com` (no mask on a PII-free site) | **Sign in with a different address** (Delegate's share screen: pick, add, or switch account; an emailed code), or **This isn't me** (a new person) |
+| `login_reassigned` | This address signs in here through a different Delegate account. Ask the site's administrator | An admin retires the old login, or links the new account |
+| `login_locked` | This sign-in is turned off. Ask the site's administrator | An admin unlocks it |
 
 ### Use cases
 
-| The person… | Signs in with | They are |
-| --- | --- | --- |
-| Signs in for the first time | `a@` (new to core) | A new person with `a@` |
-| Was imported, put on a roster, or granted a role by address | `a@` | That person |
-| Signs in again | `a@` | The same person |
-| Uses "Change your login email" and picks a second address | `b@` (new to core) | A new person with `b@`. The `a@` person is untouched; signing in with `a@` returns to it |
-| Picks an address that already belongs to someone in core | `b@` | That person. Delegate confirmed they control `b@` |
-| Has both addresses already joined in core | `b@` | The joined person |
-| Uses a different Google account | `c@` | Whoever core knows by `c@`, like any other address |
-| Has no confirmed email | (none) | The person for their Domain UNID |
-| Was a Level 0 visitor, then confirms an address | `a@` | The person for `a@`. The visitor record for the Domain UNID is not joined to it |
+| The person… | What happens |
+| --- | --- |
+| Was imported, or granted a role by address, and signs in for the first time | The granted login (or adoption) finds that person |
+| Signs in again | Their Delegate account's login finds the same person |
+| Changes the address they share, in the same Delegate account | Same person; the new address becomes a login too |
+| Moves to a new Delegate account | **Add a sign-in address** from the old session (Login button), then retire the old one |
+| Has two addresses on one imported record and signs in with the second | `other_login`, showing the first masked |
+| Shares one imported record with someone else (a household) | The second one chooses **This isn't me** |
+| Reuses an address a former colleague signed in with | `login_reassigned`; offboarding retires the old login |
+| Is offboarded | `e9core signin retire --person <id>`; their address, used by someone new later, gets a new person |
 
 ### What a site does
 
 - Use `session.personId` for everything you store. Do not key your own tables
   on `sub` or on an email address.
 - Show `session.email` as "signed in as". It is always the address of this
-  login.
-- Treat "Change your login email" (`prompt: 'select'`) as "sign in with
-  another address". Say so next to the link: *What you see here follows the
-  address you sign in with.*
-- To make two addresses one person, join them in core (an import with the
-  same `person_id` or `remote_person_id`, or an operator merge). Delegate
-  cannot do it for you.
-
-People who signed in before core 1.16.0 keep their `person_id_delegate`
-rows. A login with a confirmed email no longer reads them; a login without
-one still does.
+  sign-in.
+- Leave sign-in choices to the Login button: switching address, the stops,
+  "This isn't me", adding an address. Add no link or page of your own for them.
+- To make two addresses one person's data, join them in an import or a merge.
+  To make them one person's **logins**, the person adds the address in the
+  Login button, or an admin runs `e9core signin link`.
 
 ## `createDelegateAuth`
 

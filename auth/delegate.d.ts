@@ -188,11 +188,8 @@ export function delegateConfirmedEmail(delegateUser: {
   level?: number;
 } | null | undefined): string | undefined;
 
-/**
- * person_id for a Delegate login. A confirmed email is the only key; the
- * Domain UNID is the key only when there is no confirmed email.
- */
-export function resolveDelegatePersonId(options: {
+/** Options for resolveDelegateLogin / resolveDelegatePersonId. */
+export interface ResolveDelegateLoginOptions {
   worker: unknown;
   delegateUser: {
     domainUnid: string;
@@ -205,7 +202,26 @@ export function resolveDelegatePersonId(options: {
   remoteInputId?: string;
   inputType?: string;
   person?: Record<string, unknown>;
-}): Promise<number>;
+  /** The person chose "This isn't me" after an other_login stop: a new person. */
+  newAccount?: boolean;
+  /** Find only: never write, adopt, or stop with a prompt (agents). */
+  readOnly?: boolean;
+}
+
+/**
+ * Who a Delegate sign-in is, from person_login (auth/logins.js) once
+ * `e9core upgrade` has created it; before that, the people pipeline. Throws a
+ * login failure with `reason` other_login (and `masked`), login_reassigned,
+ * or login_locked.
+ */
+export function resolveDelegateLogin(options: ResolveDelegateLoginOptions): Promise<{
+  personId: number;
+  how: 'created' | 'adopted' | 'granted' | 'backfill' | null;
+  foundBy: string;
+}>;
+
+/** resolveDelegateLogin, returning the person_id only. */
+export function resolveDelegatePersonId(options: ResolveDelegateLoginOptions): Promise<number>;
 
 /** Full origin from an absolute URL, or null when unparseable. */
 export function siteOriginFromUrl(value?: string | null): string | null;
@@ -375,6 +391,8 @@ export interface DelegateAuth {
       returnTo?: string;
       domain?: string;
       fallbackDomain?: string;
+      /** "This isn't me": honored only after an other_login stop of this same account (its retryCookie). */
+      newAccount?: boolean;
     }
   ): Promise<{
     session: DelegateSession;
@@ -408,6 +426,8 @@ export interface DelegateAuth {
       fallbackDomain?: string;
       /** The nonce this browser sent; a different token nonce throws `state_mismatch`. */
       nonce?: string;
+      /** "This isn't me" (a new person instead of an other_login stop). finishLogin decides when it is allowed. */
+      newAccount?: boolean;
     }
   ): Promise<{
     session: DelegateSession;
@@ -435,8 +455,20 @@ export interface DelegateAuth {
   issueToken(session: DelegateSession): string;
   /** Add the admin role to a session whose verified email is a superadmin. */
   withSuperadmin<T extends DelegateSession>(session: T): T;
-  /** role_ids a session holds now: person_segment plus `admin` for a superadmin. Use for privileged decisions on a session. */
+  /** role_ids a session holds now: through its login (person_login), plus `admin` for a superadmin. Use for privileged decisions on a session. */
   rolesForSession(session: DelegateSession): Promise<string[]>;
+  /** rolesForSession without the superadmin list. */
+  heldRolesForSession(session: DelegateSession): Promise<string[]>;
+  /** The session with its roles read again now (the token's copy is never used). */
+  refreshSession<T extends DelegateSession>(session: T): Promise<T>;
+  /**
+   * Add a sign-in address: `session` is the signed-in person; the token, from a
+   * sign-in this browser began, proves the new Delegate account.
+   */
+  finishAddAddress(
+    identityToken: string,
+    options: { state: string; cookie: string | null | undefined; session: DelegateSession; cookieName?: string; secure?: boolean; returnTo?: string; domain?: string; fallbackDomain?: string }
+  ): Promise<{ ok?: true; person_id?: number; refused?: string; error?: string; clearCookie: string }>;
   /** role_ids the person holds now (person_segment, configured roles). Use for privileged decisions. */
   rolesForPerson(personId: number): Promise<string[]>;
   /**

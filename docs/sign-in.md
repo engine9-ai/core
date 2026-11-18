@@ -20,6 +20,29 @@ core with the site's own key. It is what `demo-festival` ships, and every
 case below is already handled in it. Build your own only for a need the button
 cannot meet. If you do, follow [If you build your own](#if-you-build-your-own).
 
+**Sign-in needs the login plugin in the site's database.** Core decides who
+someone is from `@engine9/schemas/login`: the `person_login` table, the
+list of who can sign in and as which person. It is not one of the required
+plugins, because a data-only database never signs anyone in, and no
+edition includes it: a site that signs people in adds it on purpose.
+Without it, core refuses every sign-in (`sign_in_off`): `/api/auth/start`
+shows "This site does not have sign-in yet", the Login button says the same,
+and `e9core status` fails `login.table`. A new site lists it in `package.json` after the edition, so setup puts
+it in every database it creates:
+
+```json
+"engine9": { "install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"] }
+```
+
+Add it to an existing database, and copy today's admins into it, with:
+
+```bash
+npx e9core upgrade --plugin @engine9/schemas/login --url https://www.example.com
+```
+
+A site set up in GitHub only runs the deploy workflow by hand with command
+`upgrade` and options `--plugin @engine9/schemas/login`.
+
 ## Who does what
 
 | Layer | Owns | Never does |
@@ -199,6 +222,36 @@ session when `sessionRevocations` is set. Reload or navigate in the widget's
 `@engine9/id`, call `POST /api/auth/logout` with the public key
 (`X-API-Key: e9publickey_…`).
 
+### 6. When sign-in stops: also in the Login button
+
+Who someone is when they sign in comes from the site's list of logins
+(`person_login`), never from addresses a form wrote ([Who is signing
+in](#who-is-signing-in)). Three answers stop a sign-in, and the Login button
+shows each one in its dialog:
+
+| The person sees | Why | Choices in the dialog |
+| --- | --- | --- |
+| This email address belongs to someone here who signs in with a different address: `v***x@g***l.com` | The address is on a record that someone already signs in to with another address | **Sign in with a different address**, or **This isn't me: continue with this address** (two people on one record, such as a household) |
+| This address signs in here through a different Delegate account. Ask the site's administrator | The address now belongs to a different Delegate account | None; an administrator fixes it |
+| This sign-in is turned off. Ask the site's administrator | An administrator locked it, or the person was offboarded | None |
+
+The dialog also has **Add a sign-in address**: a signed-in person proves a
+second Delegate account, and both sign in as them from then on. It then
+offers to stop using the old address.
+
+These are the Login button's, and only the Login button's. Do not add a
+"This isn't me" link, a "wrong account" page, or a way to add an address
+anywhere else on the site. Without JavaScript, `/api/auth/callback` shows
+the same message and choices; that page is core's, not the site's.
+
+<a id="who-is-signing-in"></a>
+**Who is signing in.** The rules are in
+[auth/README.md](../auth/README.md#who-is-signing-in-logins-people-deduplication):
+the Delegate account's login first, then the address's login, and only for a
+first sign-in a record nobody signs in as yet (it then carries only roles a
+person can join themselves). Admins manage logins with `e9core signin`
+(list, explain, link, lock, unlock, retire).
+
 ## How the widget sign-in is kept safe
 
 Setting a cookie from a `fetch()` needs more care than setting one from a
@@ -253,6 +306,8 @@ blank page. Each one has a core feature that replaces it.
 | Keep the session in `localStorage` or `sessionStorage` on a site whose server gates pages | `session: 'cookie'`. Your server cannot see browser storage, so the gate reads "signed out" |
 | Have one route sign people in and a separate admin route check a different cookie | One session (`e9_session`) and `requireRole` everywhere |
 | Read `session.roles` from the cookie for an access decision | `requireRole`, or `auth.rolesForSession(session)` |
+| Build a "This isn't me", "wrong account", or "add an address" link or page | The Login button's dialog (step 6) |
+| Add the Login button to a site whose database has no `@engine9/schemas/login` | `npx e9core upgrade --plugin @engine9/schemas/login` first. Without it every sign-in stops |
 | Answer every failure the same way | 401 for signed out, 403 for signed in without access |
 | Hide the address the person is signed in with | Show `email`. The fix is usually another address |
 | Build the header's sign-in from text links ("Log in", the email, "Use a different email", "Log out") | The Login button (step 2). It shows the email and has Switch email and Log out in its dialog |
