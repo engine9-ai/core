@@ -139,9 +139,8 @@ test('status finds what a failed deploy leaves behind', async () => {
     assert.equal(byId(report, 'plugin.schema', '@engine9/schemas/person_address')[0].status, 'fail');
     assert.deepEqual(byId(report, 'core.triggers')[0].data.tables, ['person_email']);
     assert.equal(byId(report, 'plugin.inbound_snapshot', '@engine9/schemas/person_email')[0].status, 'warn');
-    const [code] = byId(report, 'plugin.code_present', '@acme/plugins/gone');
-    assert.equal(code.status, 'fail');
-    assert.match(code.fix, /engine9\.pluginPackages/);
+    // A plugin row with no code is expected (settings, attribution, third-party tools): not reported.
+    assert.equal(byId(report, 'plugin.code_present', '@acme/plugins/gone').length, 0);
     const [failed] = byId(report, 'plugin.last_install', '@engine9/schemas/person_name');
     assert.equal(failed.status, 'fail');
     assert.match(failed.detail, /non-constant default/);

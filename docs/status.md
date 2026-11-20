@@ -99,7 +99,7 @@ run it by hand with a command, options, or "rotate"
 | `upgrade.<id>` | An upgrade a plugin declares applies (its `shouldUpgrade` is true) and its dry run is pending (warn) or blocked (fail). An opt-in step not run is `skip`. On a Wrangler copy, an upgrade that applies is a warning without a plan. `plugin` names the plugin that declares it | `npx e9core upgrade`, or `upgrade --plugin <path>` outside `@engine9/schemas`; on a copy, add `--dry-run` |
 | `upgrades.none` | Never: it passes when no upgrade applies | — |
 | `upgrades.declaration` | A plugin's `upgrades` are malformed | Fix the plugin ([plugin-upgrades.md](plugin-upgrades.md)) |
-| `plugin.code_present` | A plugin row exists but its code is not in the build | Add its package to `engine9.pluginPackages` and redeploy |
+| `plugin.code_present` | Pass when a plugin's code is in the build. A row with no code is not reported: settings-only plugins, third-party tools, and a site's own attribution row have no code, and that is expected | — |
 | `plugin.schema` | A table or column the plugin declares is missing (fail); an index or a column attribute differs (warn) | `npx e9core upgrade`, or `upgrade --plugin <path>` outside `@engine9/schemas` |
 | `plugin.settings` | A setting the plugin declares has no row | as `plugin.schema` |
 | `plugin.inbound_snapshot` | The people pipeline still uses an older snapshot of the plugin's inbound steps | as `plugin.schema` |
