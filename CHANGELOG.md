@@ -7,6 +7,25 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.22.2: the status report works on Cloudflare D1
+
+On D1, `GET /api/admin/status` (and its page) failed with
+`D1_ERROR: not authorized: SQLITE_AUTH`, and `e9core status --url` with it.
+D1 keeps an internal table, `_cf_KV`, in `sqlite_master`, and a Worker's
+binding refuses every read of it, `PRAGMA table_info` included. Core's schema
+listings skipped `sqlite_*` tables but not `_cf_*` ones, so the trigger check
+tried to describe `_cf_KV` and the whole report failed. The schema snapshot and
+`tables()` now leave `_cf_*` tables out. `e9core upgrade` was never affected.
+
+`CORE_VERSION` (`lib/version.js`, written into each plugin's install record)
+had stayed at `1.22.0`. It now matches `package.json`, so a database's install
+records name the core that wrote them.
+
+| What a site changes | |
+| --- | --- |
+| A site on Cloudflare D1 | `npm install @engine9/core@^1.22.2`, deploy, then `npx e9core status --url <site>`. No upgrade is needed; the database is unchanged |
+| Any other site | Nothing |
+
 ## 1.22.0: sign-in reads a list of logins (the login plugin)
 
 Pair with `@engine9/schemas` 1.15.0. Step by step, in plain words for site

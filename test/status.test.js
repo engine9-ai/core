@@ -81,6 +81,35 @@ test('the batched snapshot and the per-table fallback diff the same', async () =
   }
 });
 
+test("D1's internal _cf_KV table is left out of the snapshot, tables(), and status", async () => {
+  const worker = memory();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/contact');
+    // D1 keeps _cf_KV in sqlite_master. A Worker's binding answers
+    // "not authorized: SQLITE_AUTH" to any read of it, PRAGMA table_info included.
+    await worker.query('create table _cf_KV (key text primary key, value blob)');
+    const query = worker.query.bind(worker);
+    worker.query = async (q, ...rest) => {
+      const sql = typeof q === 'string' ? q : q.sql;
+      const refuse = () => new Error('D1_ERROR: not authorized: SQLITE_AUTH');
+      if (/_cf_KV/i.test(sql)) throw refuse();
+      const result = await query(q, ...rest);
+      if ((result?.data || []).some((r) => r.tbl === '_cf_KV' || r.name === '_cf_KV')) throw refuse();
+      return result;
+    };
+    const snapshot = await createSchemaSnapshot(worker);
+    assert.equal(snapshot.batched, true, 'the batched read must not trip over _cf_KV');
+    assert.ok(!snapshot.hasTable('_cf_KV'));
+    assert.ok(snapshot.hasTable('plugin'));
+    assert.ok(!(await worker.tables()).tables.includes('_cf_KV'));
+    const report = await worker.status();
+    assert.equal(report.ok, true);
+    assert.deepEqual(bad(report), []);
+  } finally {
+    await worker.destroy();
+  }
+});
+
 test('status finds what a failed deploy leaves behind', async () => {
   const worker = memory();
   try {
