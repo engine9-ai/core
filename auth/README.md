@@ -25,6 +25,7 @@ aliases, or extra OIDC claims. The default provider’s wire protocol is
 | `delegate.js`      | Identity Tokens, person + role + session                                                                               |
 | `delegate.d.ts`    | Types for `createDelegateAuth` and JWT verification                                                                    |
 | `logins.js`        | `person_login` (`@engine9/schemas/login`): whether this database has sign-in (`loginMode`), who a sign-in is (`personForSignIn`), roles through a login, grants by email, the `e9core signin` actions |
+| `linkTokens.js`    | Link tokens: an outside sender's signed note of which person an email went to, for one-click forms ([docs/link-tokens.md](../docs/link-tokens.md)). Never a session |
 | `roles.js`         | Role segments: standard names, deterministic ids, add/remove people by email ([docs/segments.md](../docs/segments.md)) |
 | `roleNames.js`     | `ROLE_NAMES`, `STANDARD_ROLES`                                                                                         |
 | `superadmins.js`   | Superadmin list logic: `normalizeSuperadmins`, `isSuperadmin` (a file of verified emails; [docs/roles.md](../docs/roles.md#superadmins)) |
@@ -148,7 +149,7 @@ A sign-in involves four different things. Keep them apart.
 | | What it is | Decided by | Stored in |
 | --- | --- | --- | --- |
 | **Credential** | The Identity Token. Delegate says: this browser's Delegate account controls this address, at this Identity Level, for this Domain | Delegate | The token, then the Core Session |
-| **Login** | Who can sign in, and as which person: a Delegate account (by Domain UNID) or a verified address (by `email_hash_v1`) | Sign-in, an admin's grant, `e9core signin` | `person_login` |
+| **Login** | Who can sign in, and as which person: a Delegate account (by Domain UNID) or a verified address (by `email_hash_v1`) | Sign-in, an admin's grant or link, `e9core signin`, the login plugin's upgrade | `person_login` |
 | **Identity** | The person: one `person` row and its `person_id` | core | `person` and the person tables |
 | **Deduplication** | Whether two identifiers (two addresses, an address and a CRM id) are one person's data | The people pipeline, from imports and forms | `person_id_*` |
 
@@ -156,10 +157,12 @@ A sign-in involves four different things. Keep them apart.
 (`@engine9/schemas/login`, which no edition includes), which a site needs to have
 sign-in: a database without it has no sign-in (`loginMode` `off`), and every
 sign-in stops with `sign_in_off`. Deduplication files data,
-and public forms write it, so it never decides who someone signs in as. It
-is asked only when a sign-in or a grant has no login yet, to offer a person
-nobody signs in as. [auth/logins.js](logins.js) has every rule; PERMISSIONS.md
-PL-13 is the requirement.
+and public forms write it, so it never decides who someone signs in as: a
+sign-in or a grant with no login is a new person. Joining a login to a
+record that already exists is an explicit act: an admin's link, or a merge
+tool ([docs/merge-tools.md](../docs/merge-tools.md)).
+[auth/logins.js](logins.js) has every rule; PERMISSIONS.md PL-13 is the
+requirement.
 
 ### The names
 
@@ -168,7 +171,7 @@ PL-13 is the requirement.
 | `sub` (Domain UNID) | Delegate's id for the Delegate account on this Domain, `domain:hex`. The same for every address that account holds. On the session as `domainUnid` |
 | `fields.email`, `fields.email_verified` | The address the account chose to share with this Domain, and whether Delegate confirmed it |
 | Confirmed email | `email_verified` is true. `delegateConfirmedEmail(delegateUser)` returns it, or undefined. Level 2 alone can mean a verified phone |
-| Login | One `person_login` row: `type` (`delegate` or `email`), the hash, the person, `how` (`created`, `adopted`, `granted`, `backfill`), `state` (`active`, `locked`, `retired`). An email login also keeps the Delegate account that first signed in with it |
+| Login | One `person_login` row: `type` (`delegate` or `email`), the hash, the person, `how` (`created` by a first sign-in, `granted` by an admin, `backfill` by the upgrade), `state` (`active`, `locked`, `retired`). An email login also keeps the Delegate account that first signed in with it |
 | `person_id` | core's id for the person. Roles (`person_segment`) and every person table hang on it. On the session as `personId` |
 | `session.email` | The confirmed address of this sign-in. Undefined when there is none |
 
@@ -183,17 +186,36 @@ At Identity Level 2 and above (`personForSignIn`):
    address was offboarded). First used by a different Delegate account: stop
    (`login_reassigned`). Otherwise sign in, and the account is recorded on
    the address. This is how a granted or upgraded admin's first sign-in works.
-4. **No login:** dedupe names a person by the address (or, without one, the
-   Domain UNID). Nobody signs in as that person: adopt it (`adopted`, which
-   carries only self-join roles). Nobody: a new person. Someone already signs
-   in as it: stop with `other_login`, unless the person chose "This isn't
-   me".
+4. **No login:** **a new person**. Never a record found by the address or
+   by the Domain UNID: both are dedupe data, which imports and forms write
+   too.
 5. The logins the token brings are written on the person, and the sign-in's
-   own data (fields the site passed, a new address) goes through the people
-   pipeline as before.
+   own data (fields the site passed, the address when no other record holds
+   it) is filed on that person through the people pipeline.
 
-Below Level 2 nothing is written: an existing login signs in with self-join
-roles only, and anyone else is a visitor found by Domain UNID.
+Sign-in starts at Identity Level 2. Core asks Delegate for at least
+Level 2, and a token below it stops with `level_too_low` before anything
+is read or written. A session below Level 2 is no session, and holds no
+role. People who do not sign in are found by what they send (forms,
+imports), never through Delegate.
+
+**Sign-in links** are the one sign-in without Delegate: an admin runs
+`e9core signin invite --email …` for an address with an active login and
+emails the URL. Core signs it with `SESSION_SECRET` (type
+`e9.signin_link`, never a session); `GET /auth/link` shows a Sign in
+button and changes nothing; `POST /auth/link` from that page uses it
+once (`useSignInLink`: the login's `last_sign_in_at`, compared as stored,
+must not have changed) and starts a Level 2 session. See
+[docs/sign-in.md](../docs/sign-in.md#sign-in-links).
+
+**Link tokens** ([linkTokens.js](linkTokens.js),
+[docs/link-tokens.md](../docs/link-tokens.md)) are not sign-in: an outside
+sender's ES256 note of which person an email went to, which files one
+`POST /people` row on that person. Never a session or a role.
+
+A grant by email follows the same rule: the address's login, else a new
+person with a `granted` login. `e9core signin link --email … --person <id>`
+before the grant puts the login on an existing record instead.
 
 A Delegate account that first signed in without a confirmed address
 (Microsoft, Facebook, a phone) and later proves an address an admin granted,
@@ -207,20 +229,22 @@ and no full address.
 
 | Reason | The Login button says | Ways forward |
 | --- | --- | --- |
-| `other_login` | This address belongs to someone here who signs in with a different address: `v***x@g***l.com` (no mask on a PII-free site) | **Sign in with a different address** (Delegate's share screen: pick, add, or switch account; an emailed code), or **This isn't me** (a new person) |
 | `login_reassigned` | This address signs in here through a different Delegate account. Ask the site's administrator | An admin retires the old login, or links the new account |
 | `login_locked` | This sign-in is turned off. Ask the site's administrator | An admin unlocks it |
+| `sign_in_off` | This site does not have sign-in yet | The owner adds `@engine9/schemas/login` |
 
 ### Use cases
 
 | The person… | What happens |
 | --- | --- |
-| Was imported, or granted a role by address, and signs in for the first time | The granted login (or adoption) finds that person |
+| Was imported, and an admin linked their address to that record | Their first sign-in lands on it (the invite flow) |
+| Was granted a role by address, and signs in for the first time | The granted login finds the person the grant made |
+| Is on file but nobody linked them, and signs in for the first time | A new person; an admin links them, or a merge tool joins the records |
 | Signs in again | Their Delegate account's login finds the same person |
 | Changes the address they share, in the same Delegate account | Same person; the new address becomes a login too |
 | Moves to a new Delegate account | **Add a sign-in address** from the old session (Login button), then retire the old one |
-| Has two addresses on one imported record and signs in with the second | `other_login`, showing the first masked |
-| Shares one imported record with someone else (a household) | The second one chooses **This isn't me** |
+| Has two addresses on one record | An admin links one; the person adds the other with **Add a sign-in address** |
+| Shares one imported record with someone else (a household) | Each signs in to a record of their own |
 | Reuses an address a former colleague signed in with | `login_reassigned`; offboarding retires the old login |
 | Is offboarded | `e9core signin retire --person <id>`; their address, used by someone new later, gets a new person |
 
@@ -231,7 +255,7 @@ and no full address.
 - Show `session.email` as "signed in as". It is always the address of this
   sign-in.
 - Leave sign-in choices to the Login button: switching address, the stops,
-  "This isn't me", adding an address. Add no link or page of your own for them.
+  adding an address. Add no link or page of your own for them.
 - To make two addresses one person's data, join them in an import or a merge.
   To make them one person's **logins**, the person adds the address in the
   Login button, or an admin runs `e9core signin link`.
@@ -390,7 +414,7 @@ link and no JavaScript:
   `prompt=select`, and Delegate says why) are the only other query
   parameters. `signInUrl(path)` and `changeSignInUrl(path, { reason? })` in
   `@engine9/core/auth/signIn` build these links. Everything else is `config.signIn`: `minLevel`
-  (default 1), `maxLevel`, `fields` (default `['email']`), `optionalFields`,
+  (default 2; a lower value is raised to 2), `maxLevel`, `fields` (default `['email']`), `optionalFields`,
   `loginLevel`, `loginProviders`, `brand`, `sessionCookie` (default
   `e9_session`), `sessionTtlSeconds`. On the Cloudflare example Worker,
   `E9_SIGN_IN` holds that object as JSON.

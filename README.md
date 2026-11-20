@@ -174,7 +174,7 @@ const api = createApi({
       "person_segment",
     ],
     roles: {
-      // "<segment-uuid>": { name: "Member", scopes: ["data:read"], requiredAuth: { minLevel: 1 } },
+      // "<segment-uuid>": { name: "Member", scopes: ["data:read"], requiredAuth: { minLevel: 2 } },
     },
     reads: {
       // content: { table: "member_content", segmentId: "<segment uuid>" },
@@ -222,18 +222,11 @@ whole integration for signups. The setup page shows a copy-paste snippet.
 With the public key, a row cannot point itself at a record: fields such as
 `person_id` and `identifiers` are removed and listed in `warnings`, and
 the rest goes through dedupe as for any row. Nothing a form writes changes
-who someone signs in as.
+who someone signs in as. A one-click form in an email (nothing typed)
+posts the sender's link token to name the recipient
+([docs/link-tokens.md](docs/link-tokens.md)).
 
 ## Add login
-
-<!-- REMOVE-AFTER 2026-11-06: delegate.engine9.ai retirement notice. Delete this block one week after the old host is retired on 2026-10-30. -->
-> **Moving to `delegate.network`.** `https://delegate.engine9.ai` is being
-> retired and will stop working on 2026-10-30. If your site sets
-> `DELEGATE_URL`, `delegateUrl`, or `issuer` to the old host, or links to it,
-> change them to `https://delegate.network` (or delete `DELEGATE_URL` to use the
-> default), and change `@engine9/id` in the browser in the same deploy. The
-> exact list of places is in [docs/upgrade-1.15.md](docs/upgrade-1.15.md#1150-delegate-moves-to-delegatenetwork).
-<!-- END REMOVE-AFTER 2026-11-06 -->
 
 Login is optional. Saving people needs only the API key. When visitors
 should log in, the browser talks to **delegate** and core verifies the
@@ -251,11 +244,21 @@ it in every database it creates:
 "engine9": { "install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"] }
 ```
 
-Add it to an existing database, and copy today's admins into it, with:
+Add it to an existing database, and copy today's admins (and everyone who
+has signed in before) into it, with:
 
 ```bash
 npx e9core upgrade --plugin @engine9/schemas/login --url https://www.example.com
 ```
+
+A first sign-in with no login is a new person, even when the address is on
+file. For people on file to reach their own record (imported donors or
+members), add `--all-addresses` to that command once, or link an address
+before inviting the person: `npx e9core signin link --email <address>
+--person <id>` ([docs/sign-in.md](docs/sign-in.md#who-is-signing-in)).
+`npx e9core signin invite --email <address> --url <site>` makes a link
+that signs them in once, without Delegate, for you to email
+([docs/sign-in.md](docs/sign-in.md#sign-in-links)).
 
 **Server:** already done if `SESSION_SECRET` is set. `e9core setup` writes it
 to `.env`; `setup --remote` makes production's own and stores it in Cloudflare. The shipped Worker and
@@ -577,15 +580,16 @@ routes already do. Details: [Permissions](auth/README.md#permissions) and
 | Endpoint              | Purpose                                                                                                                                                    | Needs                                                             |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | `GET /ok`             | Health check                                                                                                                                               | nothing                                                           |
-| `POST /people`        | `{ people: [...] }` through the inbound person pipeline. With a `public` key, fields that point a row at a record (`person_id` other than the signed-in person's own, `identifiers`, Domain UNIDs, hashes, `confirmation_status`, another system's `remote_person_id`) are removed and listed in `warnings` | `people:write` or `public`                                        |
+| `POST /people`        | `{ people: [...] }` through the inbound person pipeline. With a `public` key, fields that point a row at a record (`person_id` other than the signed-in person's own, `identifiers`, Domain UNIDs, hashes, `confirmation_status`, another system's `remote_person_id`) are removed and listed in `warnings`. `options.linkToken` files a one-click row on the email's recipient ([docs/link-tokens.md](docs/link-tokens.md)) | `people:write` or `public`                                        |
 | `POST /upsert/:table` | `{ rows: [...] }` into an allowlisted person-related table                                                                                                 | `tables:write`                                                    |
 | `GET /read/:name`     | Configured read, optionally gated by `person_segment`. With a session it reads the signed-in person; another `?person_id=` needs `admin`                   | `data:read`                                                       |
 | `GET /auth/start`     | `302` to Delegate (`?returnTo=/path`, `login_hint`, `prompt=select`). One link, no script; see [auth/README.md](auth/README.md#one-link-sign-in-authstart-authcallback) | nothing; 501 until `SESSION_SECRET` / `delegate` is set           |
 | `GET /auth/callback`  | Checks the return, sets the `e9_session` cookie, `302` to `returnTo` (`?login_error=` on failure)                                                          | nothing (a signed `e9_login` cookie from `/auth/start`)           |
+| `GET /auth/link`, `POST /auth/link` | A sign-in link from `e9core signin invite`: GET shows a Sign in button and changes nothing; POST from that page signs in once (Level 2), sets `e9_session`, `303` to its return path | nothing (the signed link) |
 | `POST /auth/login`    | `{ delegate_token }` → `{ session, token }`                                                                                                                | API key; 501 until `SESSION_SECRET` / `delegate` is set           |
 | `POST /auth/add-address` | `{ delegate_token, state }`: the Login button's Add a sign-in address (a second Delegate account signs in as the signed-in person) | API key + cookie session |
 | `POST /auth/retire-address` | `{ email }`: stop signing in with one of your own addresses (never the last one) | API key + session |
-| `POST /admin/logins` | `{ action, email?, subject?, person_id? }`: `e9core signin` through the site (list, explain, link, lock, unlock, retire) | `admin` |
+| `POST /admin/logins` | `{ action, email?, subject?, person_id? }`: `e9core signin` through the site (list, explain, link, lock, unlock, retire, invite) | `admin` |
 | `GET /auth/me`        | `{ personId, roles, level, domainUnid, fields? }`                                                                                                          | API key + session or Identity Token                               |
 | `POST /auth/logout`   | `{ loggedOut, revoked }` (clears the `e9_session` cookie; `revoked` with `delegate.sessionRevocations`)                                                        | API key                                                           |
 | `POST /auth/role`     | `{ role_id, person_id?, exclusive? }` — switch the active role and get a re-signed session; same membership rules as `/auth/segments`                      | API key + session/token matching `person_id`, or `admin`          |

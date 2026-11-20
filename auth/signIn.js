@@ -6,6 +6,16 @@
   and the Core Session cookie.
 */
 import { createSessionCookieHeaders, readCookie } from './delegate.js';
+import { LOGIN_MIN_LEVEL } from './logins.js';
+
+/**
+ * The Identity Level core asks Delegate for: `config.signIn.minLevel`, never
+ * below 2. People who do not sign in are never sent to Delegate.
+ */
+export function signInMinLevel(signIn = {}) {
+  const asked = Number(signIn?.minLevel);
+  return Number.isFinite(asked) && asked > LOGIN_MIN_LEVEL ? asked : LOGIN_MIN_LEVEL;
+}
 
 /** Cookie the Core Session is delivered in by /auth/callback. */
 export const DEFAULT_SESSION_COOKIE = 'e9_session';
@@ -127,13 +137,6 @@ function escapeHtml(value) {
 
 /** The sign-in stops (auth/logins.js) and what the Login button says for each. */
 export const LOGIN_STOP_TEXT = {
-  other_login: {
-    title: 'Sign in with your other address',
-    masked: (masked) => `This email address belongs to someone here who signs in with a different address: ${masked}. Sign in with that address instead.`,
-    unmasked: 'This email address belongs to someone here who signs in with a different address. Sign in with the address this site knows you by.',
-    different: 'Sign in with a different address',
-    newAccount: "This isn't me: continue with this address"
-  },
   login_reassigned: {
     title: 'Ask the site\'s administrator',
     text: "This address signs in to an account here through a different Delegate account. Ask the site's administrator."
@@ -154,15 +157,31 @@ export const LOGIN_STOP_TEXT = {
  * core's /api/auth/callback. Same words and choices as the button; a site
  * adds no page or link of its own for these.
  */
-export function loginStopPage({ reason, masked = null, differentUrl, newAccountUrl }) {
+export function loginStopPage({ reason, differentUrl }) {
   const text = LOGIN_STOP_TEXT[reason] || LOGIN_STOP_TEXT.login_locked;
   const button = (href, label, primary) =>
     `<a href="${escapeHtml(href)}" style="display:inline-block;margin:.25rem .5rem .25rem 0;padding:.6rem 1rem;border-radius:.5rem;${primary ? 'background:#1a73e8;color:#fff' : 'border:1px solid #1a73e8;color:#1a73e8'};font-weight:600;text-decoration:none">${escapeHtml(label)}</a>`;
-  let body;
-  if (reason === 'other_login') {
-    body = `<p>${escapeHtml(masked ? text.masked(masked) : text.unmasked)}</p><p>${button(differentUrl, text.different, true)}${newAccountUrl ? button(newAccountUrl, text.newAccount, false) : ''}</p>`;
-  } else {
-    body = `<p>${escapeHtml(text.text)}</p>${differentUrl ? `<p>${button(differentUrl, 'Use a different email or account', false)}</p>` : ''}`;
-  }
+  const body = `<p>${escapeHtml(text.text)}</p>${differentUrl ? `<p>${button(differentUrl, 'Use a different email or account', false)}</p>` : ''}`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(text.title)}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"><h1>${escapeHtml(text.title)}</h1>${body}</body></html>`;
+}
+
+function plainPage(title, body) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="referrer" content="same-origin"><title>${escapeHtml(title)}</title></head><body style="font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem"><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
+}
+
+/**
+ * The page a sign-in link opens (GET /api/auth/link). Opening it changes
+ * nothing: email scanners open every link, so signing in takes the button,
+ * a POST from this page.
+ */
+export function signInLinkPage({ email, action, token }) {
+  return plainPage(
+    'Sign in',
+    `<p>Sign in as <strong>${escapeHtml(email)}</strong>.</p><form method="post" action="${escapeHtml(action)}"><input type="hidden" name="t" value="${escapeHtml(token)}"><button type="submit" style="padding:.6rem 1rem;border:0;border-radius:.5rem;background:#1a73e8;color:#fff;font:inherit;font-weight:600;cursor:pointer">Sign in</button></form>`
+  );
+}
+
+/** A sign-in link that cannot be used: the reason in words, and no address. */
+export function signInLinkProblemPage(message) {
+  return plainPage('This link cannot sign you in', `<p>${escapeHtml(message)}</p>`);
 }

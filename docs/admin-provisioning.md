@@ -23,10 +23,13 @@ the whole definition.
   `accountId` is the id the account has everywhere else (on the engine9
   server, its id in the account catalog). A different `accountId` computes a
   different segment, and the person would be an admin of nothing.
-- The person is found by email (`person_email`). When the address is new,
-  core creates the person through the normal inbound pipeline, so the person
-  exists before they ever sign in. A later sign-in with that verified email
-  lands on the same person.
+- On a site with sign-in (`@engine9/schemas/login`), a grant by email
+  gives the address a `granted` login. An address that already has a login
+  keeps its person; an address with none gets a new person, never the
+  record the address is on. A later sign-in with that verified email lands
+  on the grant's person. To grant on an existing record, link the address
+  there first (`npx e9core signin link --email … --person <id>`), then
+  grant.
 - Admin access needs a verified email at Identity Level 3 at sign-in
   (`requiredAuth.minLevel`). Putting someone in the segment does not make
   them sign in at that level; it only says they may.
@@ -190,10 +193,11 @@ await rolesForEmail({ worker, email: 'a@example.org', roleIds: [roleId] }); // [
 
 A grant by email gives the address a login (`npx e9core signin list --email
 a@example.org` shows it, `granted`). The first Delegate account that signs
-in with that verified address is bound to it. If the address was on a record
-someone else already signs in as, the grant made a new person and said so in
-`notes`; `npx e9core signin link --email a@example.org --person <id>` moves
-it if that was not the intent.
+in with that verified address is bound to it. When the address had no login
+but was on a record, the grant made a new person and named that record in
+`notes`. If the admin should sign in to that record, run
+`npx e9core signin link --email a@example.org --person <id>` and grant
+again.
 
 On the engine9 server the new admin opens the account within
 `ENGINE9_ADMIN_LOOKUP_TTL_MS` (default 60 seconds); it reads the account

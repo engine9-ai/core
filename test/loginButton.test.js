@@ -156,6 +156,13 @@ test('a login returning from Delegate is left to onLogin, not overwritten by /au
   assert.deepStrictEqual(plain(calls.updates), []);
 });
 
+test('the button asks Delegate for Level 2 or more, whatever signIn.minLevel says', () => {
+  const widget = (signIn) => JSON.parse(loginButtonScript({ publicApiKey: PUBLIC_KEY, signIn }).match(/var WIDGET = (\{.*?\});/)[1]);
+  assert.equal(widget({}).minLevel, 2);
+  assert.equal(widget({ minLevel: 1 }).minLevel, 2);
+  assert.equal(widget({ minLevel: 4 }).minLevel, 4);
+});
+
 test('values from config cannot break out of the script', async () => {
   const body = await (await getScript(makeApi({ signIn: { brand: { name: '</script><script>alert(1)</script>' } } }))).text();
   assert.ok(!body.includes('</script>'));

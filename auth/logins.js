@@ -4,26 +4,27 @@
   `person_login` (@engine9/schemas/login) is this database's /etc/passwd. One
   row is one login: a Delegate account (`delegate`, by Domain UNID) or a
   verified email address (`email`, by email_hash_v1), and the person it signs
-  in as. Sign-in, an admin's grant, and the `e9core signin` commands write it.
-  The people pipeline (dedupe) never does, so nothing a public form writes can
-  change who someone signs in as. Dedupe is asked in two places only: a first
-  sign-in and a first grant, to find a person to adopt.
+  in as. Sign-in, an admin's grant, the `e9core signin` commands, and the
+  login plugin's upgrade write it. The people pipeline (dedupe) never does,
+  and a sign-in never asks dedupe who someone is: nothing a public form
+  writes can change who someone signs in as.
 
   Rules (docs/sign-in.md, "Who is signing in"; PERMISSIONS.md PL-13):
 
-  - Below Identity Level 2 nothing is written. An existing login signs in with
-    self-join roles only; otherwise the visitor is found by Domain UNID, as
-    before this table existed.
-  - At Level 2 and above, subject first (OpenID Connect Core 5.7): the
+  - Sign-in starts at Identity Level 2 (a confirmed address or phone).
+    Core never asks Delegate for less and refuses a token or session below
+    it (`level_too_low`). People who do not sign in are found by what they
+    send (forms, imports), never through Delegate.
+  - Subject first (OpenID Connect Core 5.7): the
     subject's row, else a `merged_from` row, else the email's row. An address
     first used by another Delegate account stops (`login_reassigned`). A
     locked or retired login stops (`login_locked`), except that a retired
     address used by a new account makes a new person.
-  - No row: dedupe names a person. Nobody signs in as it: adopt it (`adopted`,
-    self-join roles only). Nobody: a new person (`created`). Somebody already
-    signs in as it: stop with `other_login`, which shows one of that person's
-    addresses masked, unless the person chose "This isn't me" in the Login
-    button (`newAccount`), which makes a new person.
+  - No row: a new person (`created`). Never a record found by the
+    address or the Domain UNID: dedupe holds both, and other paths write
+    them. Never a record found by the address. Joining a
+    login to existing history is an explicit act: `e9core signin link`
+    before the person signs in, or a merge tool (docs/merge-tools.md).
   - A subject that signed in without a verified address yields, once, to a
     granted address: see subjectYields.
 
@@ -36,8 +37,8 @@
     install is older). Every caller keeps the lookup it used before, until
     `e9core upgrade` turns sign-in on; `e9core status` fails `login.table`.
   - `off`: no table after that upgrade. The database has no sign-in: every
-    sign-in stops with `sign_in_off`, sessions hold nothing, and nothing
-    ever falls back to dedupe.
+    sign-in stops with `sign_in_off`, and sessions and roles behave as they
+    did before this table existed.
 */
 import crypto from 'node:crypto';
 import { createDefaultIdentifierStore } from '../lib/id/index.js';
@@ -46,7 +47,9 @@ import semver from 'semver';
 
 export const LOGIN_TABLE = 'person_login';
 export const LOGIN_TYPES = ['email', 'delegate'];
-export const LOGIN_STOP_REASONS = ['other_login', 'login_reassigned', 'login_locked', 'sign_in_off'];
+export const LOGIN_STOP_REASONS = ['login_reassigned', 'login_locked', 'sign_in_off'];
+/** Thrown (as `reason`) for an identity below LOGIN_MIN_LEVEL. Not a stop: core never asks for one. */
+export const LEVEL_TOO_LOW = 'level_too_low';
 /** The plugin that holds person_login. A database without it has no sign-in. */
 export const LOGIN_PLUGIN_PATH = '@engine9/schemas/login';
 /** The @engine9/schemas release that made sign-in its own plugin. Older databases are `legacy`. */
@@ -54,7 +57,7 @@ export const LOGIN_PLUGIN_SINCE = '1.15.0';
 /** What a person sees, and what a 409 says, on a database with no sign-in. */
 export const SIGN_IN_OFF_MESSAGE =
   'This site does not have sign-in. Its database needs the login plugin: npx e9core upgrade --plugin @engine9/schemas/login';
-/** Identity Level at which a sign-in may write or claim a login (Contact Confirmed). */
+/** The lowest Identity Level core signs anyone in at (Contact Confirmed). */
 export const LOGIN_MIN_LEVEL = 2;
 
 const COLUMNS = 'type, value_hash, subject, person_id, how, state, last_sign_in_at';
@@ -63,19 +66,6 @@ const READY_RECHECK_MS = 30000;
 /** SHA-256 hex of the trimmed, lowercased value. For email this is email_hash_v1. */
 export function loginHash(value) {
   return crypto.createHash('sha256').update(String(value ?? '').trim().toLowerCase(), 'utf8').digest('hex');
-}
-
-/**
- * One address, masked the same way for every address: the first and last
- * character of the local part and of the first domain label, three stars in
- * between whatever the length, and the rest of the domain. A part of one or
- * two characters shows only its first. `vic.tor@gmail.com` -> `v***r@g***l.com`.
- */
-export function maskEmail(address) {
-  const [local = '', domain = ''] = String(address ?? '').trim().toLowerCase().split('@');
-  const part = (p) => (p.length <= 2 ? `${p[0] || ''}***` : `${p[0]}***${p[p.length - 1]}`);
-  const [label = '', ...rest] = domain.split('.');
-  return `${part(local)}@${part(label)}${rest.length ? `.${rest.join('.')}` : ''}`;
 }
 
 const modeCache = new WeakMap();
@@ -137,7 +127,6 @@ export function signInOffError() {
 
 function stop(reason, extra = {}) {
   const messages = {
-    other_login: 'This email address belongs to someone here who signs in with a different address.',
     login_reassigned: 'This address signs in to an account here through a different Delegate account.',
     login_locked: 'This sign-in is turned off.',
     sign_in_off: SIGN_IN_OFF_MESSAGE
@@ -181,14 +170,6 @@ export async function loginsOfPerson(worker, personId) {
   return data.map(rowOut);
 }
 
-async function personHasLogin(worker, personId) {
-  const { data } = await worker.query({
-    sql: `select 1 as x from ${LOGIN_TABLE} where person_id=? limit 1`,
-    values: [personId]
-  });
-  return data.length > 0;
-}
-
 async function personHoldsSegments(worker, personId) {
   const { data } = await worker.query({
     sql: 'select 1 as x from person_segment where person_id=? limit 1',
@@ -229,9 +210,14 @@ async function touchLogins(worker, rows) {
   }
 }
 
-/* ------------------------------------------------------------- dedupe */
+/* ---------------------------------------------- identifiers sign-in owns */
 
-async function dedupePerson(worker, idType, value) {
+/*
+  The identifier store's owner of one identifier. Sign-in asks it only
+  whether an identifier it is about to file on its own person (the verified
+  address, or the Domain UNID) is free. Never to decide who someone is.
+*/
+async function identifierOwner(worker, idType, value) {
   if (!value) return null;
   const store = await createDefaultIdentifierStore(worker);
   const idValue = idType === 'email_hash_v1' ? loginHash(value) : String(value).trim().toLowerCase();
@@ -239,61 +225,33 @@ async function dedupePerson(worker, idType, value) {
   return rows?.[0]?.person_id != null ? Number(rows[0].person_id) : null;
 }
 
-/** The person dedupe holds for this address, or null. */
-export const dedupePersonForEmail = (worker, email) => dedupePerson(worker, 'email_hash_v1', email);
+/** The person the identifier store files this address under, or null (data only, never sign-in). */
+export const dedupePersonForEmail = (worker, email) => identifierOwner(worker, 'email_hash_v1', email);
 
-async function newPerson(worker, { pluginId, email, subject, remoteInputId, inputType }) {
-  // A new address: the pipeline creates the person and files the address, as an import would.
-  if (email && (await dedupePersonForEmail(worker, email)) == null) {
-    const summary = await worker.processPeople({ pluginId, remoteInputId, inputType, batch: [{ email }] });
-    if (summary.personIds?.[0]) return Number(summary.personIds[0]);
-  }
-  // No address: the Domain UNID files the person, so a Level 0 visit and a later sign-in agree.
-  if (!email && subject && (await dedupePerson(worker, 'delegate', subject)) == null) {
-    const summary = await worker.processPeople({ pluginId, remoteInputId, inputType, batch: [{ delegate_id: subject }] });
-    if (summary.personIds?.[0]) return Number(summary.personIds[0]);
-  }
-  // The address or subject belongs to someone else: an empty person.
+/* A new, empty person. Sign-in data is filed on it afterwards (recordSignInData). */
+async function newPerson(worker) {
   const [id] = await insertPersons(worker, [{}]);
   return Number(id);
 }
 
-/* ------------------------------------------------------- the mask */
-
-/**
- * One active email login of this person, masked, most recently used first.
- * Null on a PII-free account (no person_email table) or when there is none.
- */
-export async function maskedLoginOf(worker, personId) {
-  let emails;
-  try {
-    ({ data: emails } = await worker.query({
-      sql: 'select email from person_email where person_id=?',
-      values: [personId]
-    }));
-  } catch {
-    return null;
-  }
-  const logins = (await loginsOfPerson(worker, personId)).filter((r) => r.type === 'email' && r.state === 'active');
-  const byHash = new Map(logins.map((r) => [r.value_hash, r]));
-  const hits = (emails || [])
-    .map((r) => ({ email: r.email, row: byHash.get(loginHash(r.email)) }))
-    .filter((x) => x.row);
-  hits.sort((a, b) => String(b.row.last_sign_in_at || '').localeCompare(String(a.row.last_sign_in_at || '')));
-  return hits[0] ? maskEmail(hits[0].email) : null;
-}
-
 /* ------------------------------------------------------------ sign-in */
 
-function identityLevel(identity) {
-  if (typeof identity.level === 'number') return identity.level;
-  return identity.email ? LOGIN_MIN_LEVEL : 0;
+/** The identity's level; a token with no level counts as Level 2 only with a verified address. */
+export function identityLevel(identity) {
+  if (typeof identity?.level === 'number') return identity.level;
+  return identity?.email ? LOGIN_MIN_LEVEL : 0;
+}
+
+/** An error with `reason` level_too_low (core signs nobody in below Level 2). */
+export function levelTooLow() {
+  const e = new Error(`Sign-in needs Identity Level ${LOGIN_MIN_LEVEL} or more (a confirmed address or phone)`);
+  e.reason = LEVEL_TOO_LOW;
+  return e;
 }
 
 /*
-  A subject that signed in without a verified address (a Level 0 visit
-  cannot write one; Microsoft or Facebook, or a phone at Level 2, can) made
-  an empty person. When the same account later proves an address an admin
+  A subject that signed in without a verified address (Microsoft or
+  Facebook, or a phone) made an empty person. When the same account later proves an address an admin
   named (granted or backfilled) that no account has used yet, the subject
   moves there. Only when the empty person has no email login and no segment,
   so nothing it holds is lost.
@@ -312,18 +270,16 @@ async function subjectYields(worker, rSub, rEmail) {
  *
  * identity: { subject (Domain UNID), mergedFrom?, email? (verified only), level }
  * options:
- *   newAccount  the person chose "This isn't me" after an other_login stop
- *   readOnly    find only: never write, adopt, or stop with a prompt (agents)
- *   person      fields to record on the person after sign-in (as today)
+ *   readOnly    find only: never write (agents)
+ *   person      fields to record on the person after a Level 2 sign-in
  *
  * Returns { personId, how, foundBy }. Throws an error with `reason`
- * other_login (and `masked`), login_reassigned, or login_locked.
+ * login_reassigned, login_locked, sign_in_off, or level_too_low.
  */
 export async function personForSignIn({
   worker,
   pluginId,
   identity,
-  newAccount = false,
   readOnly = false,
   person = {},
   remoteInputId = 'delegate',
@@ -335,24 +291,11 @@ export async function personForSignIn({
   if (!(await loginTableReady(worker))) throw stop('sign_in_off');
   const subject = identity?.subject ? String(identity.subject) : null;
   if (!subject) throw new Error('personForSignIn requires identity.subject (the Domain UNID)');
-  const level = identityLevel(identity);
+  if (identityLevel(identity) < LOGIN_MIN_LEVEL) throw levelTooLow();
   const rSub = await loginRow(worker, 'delegate', subject);
-
-  /* Level 0 and 1: read only. */
-  if (level < LOGIN_MIN_LEVEL) {
-    if (rSub && rSub.state !== 'active') throw stop('login_locked');
-    if (rSub) return { personId: rSub.person_id, how: rSub.how, foundBy: 'subject' };
-    if (readOnly) return { personId: null, how: null, foundBy: 'none' };
-    const record = { ...person, delegate_id: subject };
-    if (identity.mergedFrom && identity.mergedFrom !== subject) record.delegate_merged_from = identity.mergedFrom;
-    const summary = await worker.processPeople({ pluginId, remoteInputId, inputType, batch: [record] });
-    const personId = Number(summary.personIds?.[0]);
-    if (!personId) throw new Error('delegate person resolution did not produce a person_id');
-    return { personId, how: null, foundBy: 'visitor' };
-  }
-
+  const mergedFrom = identity.mergedFrom && identity.mergedFrom !== subject ? String(identity.mergedFrom) : null;
   const email = identity.email ? String(identity.email).trim().toLowerCase() : null;
-  const rMerged = identity.mergedFrom && identity.mergedFrom !== subject ? await loginRow(worker, 'delegate', identity.mergedFrom) : null;
+  const rMerged = mergedFrom ? await loginRow(worker, 'delegate', mergedFrom) : null;
   const rEmail = email ? await loginRow(worker, 'email', email) : null;
   let personId;
   let how;
@@ -376,7 +319,7 @@ export async function personForSignIn({
     throw stop('login_locked');
   } else if (rEmail && rEmail.state === 'retired') {
     if (readOnly) return { personId: null, how: null, foundBy: 'none' };
-    personId = await newPerson(worker, { pluginId, email: null, subject: null, remoteInputId, inputType });
+    personId = await newPerson(worker);
     how = 'created';
     foundBy = 'retired_address';
     await putLogin(worker, { type: 'email', value: email, personId, how, subject });
@@ -385,26 +328,12 @@ export async function personForSignIn({
     ({ person_id: personId, how } = rEmail);
     foundBy = 'email';
   } else {
+    // No login: a new person. Never a record found by the address or by a
+    // Domain UNID (both are data another path can write).
     if (readOnly) return { personId: null, how: null, foundBy: 'none' };
-    const candidate = email ? await dedupePersonForEmail(worker, email) : await dedupePerson(worker, 'delegate', subject);
-    const claimed = candidate != null && (await personHasLogin(worker, candidate));
-    if (candidate != null && !claimed) {
-      personId = candidate;
-      how = 'adopted';
-      foundBy = 'dedupe';
-    } else if (claimed && !newAccount) {
-      throw stop('other_login', { masked: await maskedLoginOf(worker, candidate) });
-    } else {
-      personId = await newPerson(worker, {
-        pluginId,
-        email: candidate == null ? email : null,
-        subject: candidate == null ? subject : null,
-        remoteInputId,
-        inputType
-      });
-      how = 'created';
-      foundBy = claimed ? 'new_account' : 'new';
-    }
+    personId = await newPerson(worker);
+    foundBy = 'new';
+    how = 'created';
   }
   if (readOnly) return { personId, how, foundBy };
 
@@ -418,12 +347,14 @@ export async function personForSignIn({
       values: [subject, emailNow.value_hash]
     });
   }
+  // Only this person's logins are marked used: an address whose login is on
+  // another person (the subject won) is not this sign-in's.
   const used = [{ type: 'delegate', value_hash: loginHash(subject) }];
-  if (email) used.push({ type: 'email', value_hash: loginHash(email) });
+  if (email && (!emailNow || emailNow.person_id === personId)) used.push({ type: 'email', value_hash: loginHash(email) });
   await touchLogins(worker, used);
 
-  if (foundBy === 'new_account' || moveSubject) {
-    await auditLogin(worker, audit, foundBy === 'new_account' ? 'login.new_account' : 'login.subject_moved', {
+  if (moveSubject) {
+    await auditLogin(worker, audit, 'login.subject_moved', {
       person_id: personId,
       subject_hash: loginHash(subject).slice(0, 16)
     });
@@ -433,9 +364,11 @@ export async function personForSignIn({
 }
 
 /*
-  The sign-in's own data (fields the site passed, a new address) goes on the
-  person through the pipeline, as before. An address dedupe files under
-  someone else stays there: data dedupe is not changed by a sign-in.
+  The sign-in's own data (fields the site passed, its verified address) goes
+  on the person through the pipeline. The verified address is filed on this
+  person even when dedupe files it under another record: the person proved
+  it. That record keeps its copy, and dedupe keeps filing forms there
+  (joining the two is a merge tool's job, docs/merge-tools.md).
 */
 async function recordSignInData(worker, { pluginId, personId, email, subject, person, remoteInputId, inputType }) {
   const fields = { ...(person || {}) };
@@ -445,14 +378,11 @@ async function recordSignInData(worker, { pluginId, personId, email, subject, pe
   let identifier = null;
   let isNew = false;
   if (email) {
-    const owner = await dedupePersonForEmail(worker, email);
-    if (owner == null || owner === personId) {
-      identifier = { email };
-      isNew = owner == null;
-    }
+    identifier = { email };
+    isNew = (await dedupePersonForEmail(worker, email)) !== personId;
   } else if (subject) {
     // No verified address: the Domain UNID, as sign-in always filed it.
-    const owner = await dedupePerson(worker, 'delegate', subject);
+    const owner = await identifierOwner(worker, 'delegate', subject);
     if (owner == null || owner === personId) {
       identifier = { delegate_id: subject };
       isNew = owner == null;
@@ -480,41 +410,33 @@ export async function loginForSession(worker, session) {
 /**
  * Role ids (from `roleIds`) this session holds now, through its login.
  *
- * - An active login on the session's person carries the person's roles; an
- *   adopted login, or a session below Level 2, only self-join roles at or
- *   below the session's level (`join_min_level`).
- * - A Level 0 or 1 visitor with no login keeps the self-join roles its person
- *   holds at its level.
- * - Otherwise (a locked or retired login, a login on another person, a
- *   session from before the upgrade with no login): none.
+ * - An active login on the session's person carries the person's roles.
+ * - Otherwise (a session below Level 2, a locked or retired login, a login
+ *   on another person, a session from before the upgrade with no login):
+ *   none.
  */
 export async function loginRoleIds({ worker, session, roleIds }) {
   const ids = (roleIds || []).filter(Boolean);
   const personId = Number(session?.personId);
   if (!ids.length || !Number.isInteger(personId)) return [];
+  // A session counts at the level it carries; one with none holds no role.
   const level = typeof session.level === 'number' ? session.level : 0;
+  if (level < LOGIN_MIN_LEVEL) return [];
   const row = await loginForSession(worker, session);
-  const visitor = !row && level < LOGIN_MIN_LEVEL;
-  if (!visitor && (!row || row.state !== 'active' || row.person_id !== personId)) return [];
+  if (!row || row.state !== 'active' || row.person_id !== personId) return [];
   const { data } = await worker.query({
-    sql: `select ps.segment_id, s.join_min_level from person_segment ps
-      left join segment s on s.id=ps.segment_id
-      where ps.person_id=? and ps.segment_id in (${ids.map(() => '?').join(',')})`,
+    sql: `select segment_id from person_segment
+      where person_id=? and segment_id in (${ids.map(() => '?').join(',')})`,
     values: [personId, ...ids]
   });
-  const selfJoinOnly = visitor || level < LOGIN_MIN_LEVEL || row.how === 'adopted';
-  const held = new Set(
-    data
-      .filter((r) => !selfJoinOnly || (r.join_min_level != null && r.join_min_level !== '' && level >= Number(r.join_min_level)))
-      .map((r) => r.segment_id)
-  );
+  const held = new Set(data.map((r) => r.segment_id));
   return ids.filter((id) => held.has(id));
 }
 
 /**
  * Role ids an email's login holds (a host that knows only the address, such
  * as the engine9 server). An active email row only; it never reads
- * person_email and never adopts. Pass `subject` when known, so an address
+ * person_email or dedupe. Pass `subject` when known, so an address
  * first used by another Delegate account is refused.
  */
 export async function loginRoleIdsForEmail({ worker, email, subject, roleIds, level = 3 }) {
@@ -528,33 +450,25 @@ export async function loginRoleIdsForEmail({ worker, email, subject, roleIds, le
 
 /**
  * The person an admin's grant by email reaches, writing its `granted` login.
- * A login for the address: its person (an adopted one becomes granted). No
- * login: an unclaimed dedupe person, or a new person. Never a person someone
- * else already signs in as; `note` says when dedupe named one.
+ * A login for the address: its person. No login: a new person, never a
+ * record found by the address. To grant a role to an existing record, link
+ * the address there first (`e9core signin link --email … --person <id>`),
+ * then grant. `onFile` names the person the address is on as data, so the
+ * admin can choose to link it; the grant does not use it.
  */
 export async function personForGrant({ worker, pluginId, email, remoteInputId = 'roles', inputType = 'api' }) {
   const address = String(email ?? '').trim().toLowerCase();
   const row = await loginRow(worker, 'email', address);
-  if (row && row.state !== 'retired') {
-    if (row.how === 'adopted') {
-      await worker.query({
-        sql: `update ${LOGIN_TABLE} set how='granted' where person_id=? and how='adopted'`,
-        values: [row.person_id]
-      });
-    }
-    return { personId: row.person_id, login: 'existing' };
-  }
-  const candidate = await dedupePersonForEmail(worker, address);
-  const claimed = candidate != null && (await personHasLogin(worker, candidate));
-  let personId;
-  let note;
-  if (candidate != null && !claimed) personId = candidate;
-  else {
-    if (!pluginId) throw new Error('a grant to a new address requires pluginId');
-    personId = await newPerson(worker, { pluginId, email: candidate == null ? address : null, subject: null, remoteInputId, inputType });
-    if (claimed) note = `${address} is on person ${candidate}, who signs in with another address; made person ${personId}. Use e9core signin link to put the address on person ${candidate} instead.`;
-  }
+  if (row && row.state !== 'retired') return { personId: row.person_id, login: 'existing' };
+  const onFile = await dedupePersonForEmail(worker, address);
+  const personId = await newPerson(worker);
+  // The address goes on the new person too (the record it is on keeps its copy).
+  if (pluginId) await worker.processPeople({ pluginId, remoteInputId, inputType, batch: [{ email: address, person_id: personId }] });
   await putLogin(worker, { type: 'email', value: address, personId, how: 'granted' });
+  const note =
+    onFile == null
+      ? undefined
+      : `${address} is also on person ${onFile}. The grant made person ${personId}; if ${address} should sign in as person ${onFile}, run e9core signin link --email ${address} --person ${onFile}, then grant again.`;
   return { personId, login: 'granted', ...(note ? { note } : {}) };
 }
 
@@ -653,19 +567,11 @@ export async function explainLogin({ worker, email, subject, roleIds = [] }) {
       outcome = { result: 'sign_in', person_id: personId, why: rEmail.subject ? 'the address has a login on this person' : `the address has a ${rEmail.how} login that no account has used yet; the first account to sign in with it binds to it` };
     }
   } else {
-    const candidate = email ? await dedupePersonForEmail(worker, email) : subject ? await dedupePerson(worker, 'delegate', subject) : null;
-    if (candidate == null) outcome = { result: 'new_person', why: 'no login, and dedupe has no person for it' };
-    else if (await personHasLogin(worker, candidate)) {
-      outcome = {
-        result: 'stop',
-        reason: 'other_login',
-        dedupe_person_id: candidate,
-        masked: await maskedLoginOf(worker, candidate),
-        why: `dedupe files it under person ${candidate}, who already signs in with another login; the person is asked to sign in with that one, or choose "This isn't me"`
-      };
-    } else {
-      personId = candidate;
-      outcome = { result: 'adopt', person_id: candidate, why: `no login; dedupe files it under person ${candidate}, whom nobody signs in as yet. The login would carry self-join roles only` };
+    const onFile = email ? await dedupePersonForEmail(worker, email) : null;
+    outcome = { result: 'new_person', why: 'no login; a first sign-in makes a new person and never finds a record by its address' };
+    if (onFile != null) {
+      outcome.address_on_person_id = onFile;
+      outcome.link = `to sign in as person ${onFile}, run e9core signin link --email ${email} --person ${onFile} first`;
     }
   }
   out.outcome = outcome;
@@ -681,6 +587,69 @@ export async function explainLogin({ worker, email, subject, roleIds = [] }) {
 }
 
 /** `signin link`: add a login to a person (granted), or move an existing one there. */
+/* ------------------------------------------------------ sign-in links */
+
+/*
+  Sign-in links: an admin emails a person a link that signs them in without
+  Delegate (auth/delegate.js makes and checks the signed link; these two
+  functions are its reads and writes of person_login).
+
+  - Only for an address that already has an active login: an admin links or
+    grants it first (link, then invite). A link never makes a login.
+  - It works once. The link carries the login's last sign-in as stored, and
+    works only while that is unchanged: using it, or any later sign-in with
+    the address, ends it. Compared as stored, never parsed, so the
+    database's time zone does not matter.
+  - The session is Identity Level 2, like Delegate's emailed code: roles that
+    need Level 3 (admin) do not apply.
+*/
+function signInStamp(row) {
+  const v = row?.last_sign_in_at;
+  if (v == null) return null;
+  return v instanceof Date ? v.toISOString() : String(v);
+}
+
+function linkRefused(reason, message) {
+  const e = new Error(message);
+  e.reason = reason;
+  return e;
+}
+
+/** The login a sign-in link is for, checked and audited (admin side). Returns { email, personId, stamp }. */
+export async function signInLinkTarget({ worker, email, audit, actor, expiresAt }) {
+  if (!(await loginTableReady(worker))) throw stop('sign_in_off');
+  const address = String(email || '').trim().toLowerCase();
+  if (!address.includes('@')) throw new Error('name the address: --email <address>');
+  const row = await loginRow(worker, 'email', address);
+  if (!row) {
+    throw linkRefused(
+      'no_login',
+      `${address} has no login. Link it to the person first (e9core signin link --email ${address} --person <id>) or grant a role, then make the link.`
+    );
+  }
+  if (row.state !== 'active') throw stop('login_locked');
+  await auditLogin(worker, audit, 'login.signin_link', {
+    type: 'email',
+    value_hash: row.value_hash,
+    person_id: row.person_id,
+    expires_at: expiresAt,
+    ...(actor || {})
+  });
+  return { email: address, personId: row.person_id, stamp: signInStamp(row) };
+}
+
+/** Use a checked sign-in link: the login's person, and the login marked as signed in. */
+export async function useSignInLink({ worker, email, stamp }) {
+  if (!(await loginTableReady(worker))) throw stop('sign_in_off');
+  const row = await loginRow(worker, 'email', email);
+  if (!row || row.state !== 'active') throw stop('login_locked');
+  if (signInStamp(row) !== (stamp ?? null)) {
+    throw linkRefused('link_used', 'This sign-in link was already used, or the address has signed in since it was sent.');
+  }
+  await touchLogins(worker, [{ type: 'email', value_hash: row.value_hash }]);
+  return { personId: row.person_id, how: row.how };
+}
+
 export async function linkLogin({ worker, email, subject, personId, audit, actor }) {
   const pid = Number(personId);
   if (!Number.isInteger(pid)) throw new Error('signin link requires --person <person_id>');
@@ -740,6 +709,10 @@ export async function addSignInAddress({ worker, session, identity, audit }) {
     if (row && row.person_id !== current.person_id) {
       return { refused: 'login_belongs_to_another_account', error: 'That address already signs in to another account here.' };
     }
+    // An administrator locked or retired it: adding it again does not undo that.
+    if (row && row.state !== 'active') {
+      return { refused: 'login_locked', error: "That sign-in is turned off. Ask the site's administrator." };
+    }
   }
   await putLogin(worker, { type: 'delegate', value: identity.subject, personId: current.person_id, how: current.how });
   if (email) await putLogin(worker, { type: 'email', value: email, personId: current.person_id, how: current.how, subject: identity.subject });
@@ -755,20 +728,22 @@ export default {
   LOGIN_TABLE,
   LOGIN_PLUGIN_PATH,
   loginHash,
-  maskEmail,
   loginMode,
   loginTableReady,
   signInOffError,
   forgetLoginTable,
   loginRow,
   loginsOfPerson,
+  identityLevel,
+  levelTooLow,
+  signInLinkTarget,
+  useSignInLink,
   personForSignIn,
   loginForSession,
   loginRoleIds,
   loginRoleIdsForEmail,
   personForGrant,
   personForLoginEmail,
-  maskedLoginOf,
   listLogins,
   explainLogin,
   linkLogin,

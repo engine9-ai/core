@@ -114,6 +114,15 @@ test('GET /auth/start redirects to Delegate without an API key', async () => {
   assert.match(login, /^e9_login=.+HttpOnly; Secure$/);
 });
 
+test('start always asks Delegate for Level 2 or more: people who do not sign in never go there', async () => {
+  const minLevel = async (signIn) =>
+    new URL((await (await setup({ signIn })).get('/api/auth/start?returnTo=/')).headers.get('location')).searchParams.get('min_level');
+  assert.equal(await minLevel({}), '2');
+  assert.equal(await minLevel({ minLevel: 1 }), '2', 'a lower setting is raised');
+  assert.equal(await minLevel({ minLevel: 0 }), '2');
+  assert.equal(await minLevel({ minLevel: 3 }), '3', 'a higher one is kept');
+});
+
 test('start: reason=access_denied means the share screen, with the reason; other reasons are dropped', async () => {
   const { get } = await setup();
   const denied = new URL(
@@ -326,7 +335,7 @@ test('requireRole: signed in without the role (or below the role level) gets a 4
   });
   assert.equal(anyone.ok, true);
 
-  const lowLevel = await setup({ level: 1 });
+  const lowLevel = await setup({ level: 2 });
   const lowCookie = await signedIn(lowLevel);
   const low = await requireRole({
     auth: lowLevel.delegateAuth,

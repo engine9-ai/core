@@ -139,7 +139,7 @@ return Response.redirect(auth.identityUrl({
   returnTo: new URL('/auth/callback', request.url).toString(),
   prompt: 'select',
   reason: 'access_denied', // only on an access-denied page
-  minLevel: 1,
+  minLevel: 2, // core signs nobody in below Level 2
   fields: ['display_name', 'email'],
 }), 302);
 ```

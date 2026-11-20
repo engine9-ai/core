@@ -146,6 +146,7 @@ export function delegateIdentityUrl(options: {
    * another address or account. Send it with `prompt: 'select'`.
    */
   reason?: 'access_denied';
+  /** Identity Level to ask for: 2 or more (a lower value is raised to 2). */
   minLevel?: number;
   maxLevel?: number;
   fields?: string[] | string;
@@ -202,21 +203,20 @@ export interface ResolveDelegateLoginOptions {
   remoteInputId?: string;
   inputType?: string;
   person?: Record<string, unknown>;
-  /** The person chose "This isn't me" after an other_login stop: a new person. */
-  newAccount?: boolean;
-  /** Find only: never write, adopt, or stop with a prompt (agents). */
+  /** Find only: never write (agents). */
   readOnly?: boolean;
 }
 
 /**
  * Who a Delegate sign-in is, from person_login (auth/logins.js) once
- * `e9core upgrade` has created it; before that, the people pipeline. Throws a
- * login failure with `reason` other_login (and `masked`), login_reassigned,
- * or login_locked.
+ * `e9core upgrade` has created it; before that, the people pipeline. A first
+ * sign-in with no login is a new person, never a record found by its
+ * address. Throws a login failure with `reason` login_reassigned,
+ * login_locked, or sign_in_off.
  */
 export function resolveDelegateLogin(options: ResolveDelegateLoginOptions): Promise<{
   personId: number;
-  how: 'created' | 'adopted' | 'granted' | 'backfill' | null;
+  how: 'created' | 'granted' | 'backfill' | null;
   foundBy: string;
 }>;
 
@@ -327,6 +327,7 @@ export interface DelegateAuth {
     prompt?: string;
     /** `access_denied` on an access-denied page; send with `prompt: 'select'`. */
     reason?: 'access_denied';
+    /** Identity Level to ask for: 2 or more (a lower value is raised to 2). */
     minLevel?: number;
     maxLevel?: number;
     fields?: string[] | string;
@@ -391,8 +392,6 @@ export interface DelegateAuth {
       returnTo?: string;
       domain?: string;
       fallbackDomain?: string;
-      /** "This isn't me": honored only after an other_login stop of this same account (its retryCookie). */
-      newAccount?: boolean;
     }
   ): Promise<{
     session: DelegateSession;
@@ -413,6 +412,24 @@ export interface DelegateAuth {
     cookieName?: string;
   }): { data?: unknown } | null;
   /**
+   * A sign-in link for an address with an active login, for an admin to
+   * email (no Delegate). Works once, for `ttlSeconds` (default 24 hours, at
+   * most 7 days); the session is Identity Level 2. Writes the audit log
+   * (`login.signin_link`). Throws `reason: 'no_login'` for an address with
+   * no login: link it first.
+   */
+  createSignInLink(options: {
+    email: string;
+    next?: string;
+    ttlSeconds?: number;
+    audit?: { log(record: unknown): unknown };
+    actor?: Record<string, unknown>;
+  }): Promise<{ token: string; email: string; person_id: number; expires_at: string }>;
+  /** A sign-in link's contents when genuine and unexpired, else null. Reads nothing. */
+  readSignInLink(token: string | null | undefined): { email: string; next?: string; login: true } | null;
+  /** Use a sign-in link once: the Core Session it starts. Throws `reason` link_invalid, link_used, login_locked, or sign_in_off. */
+  finishSignInLink(token: string): Promise<{ session: DelegateSession; token: string; next?: string }>;
+  /**
    * Complete login from an Identity Token JWT. JWT aud is `options.domain`,
    * else the configured domain, else domainFromUrl(returnTo), else
    * `fallbackDomain` (createApi passes the request's Origin/Host).
@@ -426,8 +443,6 @@ export interface DelegateAuth {
       fallbackDomain?: string;
       /** The nonce this browser sent; a different token nonce throws `state_mismatch`. */
       nonce?: string;
-      /** "This isn't me" (a new person instead of an other_login stop). finishLogin decides when it is allowed. */
-      newAccount?: boolean;
     }
   ): Promise<{
     session: DelegateSession;

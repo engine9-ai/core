@@ -72,8 +72,9 @@
                                    Same as PersonWorker.erasePeople.
 
   Auth layers (see package README):
-    1. API key (required on all routes except /ok, the two sign-in
-       navigations, and the read-only status page)
+    1. API key (required on all routes except /ok, the sign-in
+       navigations (/auth/start, /auth/callback, /auth/link), the Login
+       button script, and the read-only status page)
     2. Role (role_id = segment UUID; scopes from role registry ∩ key scopes)
     3. Delegate credential level (session.auth + session.level; requiredAuth on roles)
 
@@ -102,8 +103,12 @@
         reads: {
           content: { table: 'content', segmentId: null, columns: ['*'] }
         },
+        linkIssuers: [{ name, publicKey }],
+                          // optional: senders whose link tokens (options.linkToken
+                          // on POST /people) file a one-click row on the email's
+                          // recipient. auth/linkTokens.js; E9_LINK_ISSUERS
         signIn: {                  // optional: GET /auth/start and /auth/callback
-          minLevel: 1,             // default 1
+          minLevel: 2,             // default 2, and never lower
           fields: ['email'],       // default ['email']
           brand: { name: 'My Site', color: '#7a1fa2' },
           loginProviders: ['google'],
@@ -127,7 +132,8 @@ import {
   resolveDelegateLogin,
   isDelegateIdentityJwt,
   domainFromUrl,
-  resolveRoleId
+  resolveRoleId,
+  createDelegateLoginFailure
 } from '../auth/delegate.js';
 import {
   loginTableReady,
@@ -166,10 +172,14 @@ import {
   sessionTokenFromCookie,
   withQueryParam,
   changeSignInUrl,
-  loginStopPage
+  loginStopPage,
+  signInMinLevel,
+  signInLinkPage,
+  signInLinkProblemPage
 } from '../auth/signIn.js';
 import { parseOriginList } from './origins.js';
-import { filterPublicRows, SIGN_IN_INPUT_ID } from './publicRows.js';
+import { filterPublicRows, applyLinkToken, isSignInInput } from './publicRows.js';
+import { parseLinkIssuers, verifyLinkToken } from '../auth/linkTokens.js';
 import { extractApiKey, hashApiKey, isEngine9ApiKeyToken, signingSecretProblem, signingSecretMessage } from '../auth/index.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { requireRole } from '../auth/gate.js';
@@ -220,7 +230,7 @@ function extractBearer(headers) {
 const debug = debug$0('client:api');
 
 /** Sign-in stops (auth/logins.js): the Login button shows each one. */
-const STOP_REASONS = new Set(['other_login', 'login_reassigned', 'login_locked', 'sign_in_off']);
+const STOP_REASONS = new Set(['login_reassigned', 'login_locked', 'sign_in_off']);
 
 const SCOPES = {
   PEOPLE_WRITE: 'people:write',
@@ -302,6 +312,11 @@ export function requestDomain(headers) {
  * function returning either, read on each request. Origins are configuration
  * (`E9_ALLOWED_ORIGINS`), never read from the database.
  */
+/** True for an HTML form's body (application/x-www-form-urlencoded). */
+export function isFormBody(contentType) {
+  return /^application\/x-www-form-urlencoded\b/i.test(String(contentType || ''));
+}
+
 export function createApi({
   worker,
   keyStore,
@@ -332,8 +347,13 @@ export function createApi({
     roles: configRoles,
     superadmins: configSuperadmins = null,
     allowedOrigins: configAllowedOrigins = [],
-    signIn: configSignIn = {}
+    signIn: configSignIn = {},
+    // Senders whose link tokens POST /people accepts (auth/linkTokens.js), and
+    // the audience they sign for (default: the account handle).
+    linkIssuers: configLinkIssuers = [],
+    linkAudience = worker.accountHandle || worker.accountId
   } = config;
+  const linkIssuers = parseLinkIssuers(configLinkIssuers);
   const signIn = configSignIn || {};
   const sessionCookieName = signIn.sessionCookie || DEFAULT_SESSION_COOKIE;
 
@@ -512,6 +532,11 @@ export function createApi({
     return scopes.map((x) => String(x).trim()).includes(SCOPES.PUBLIC);
   }
 
+  async function personExists(personId) {
+    const { data } = await worker.query({ sql: 'select id from person where id=?', values: [personId] });
+    return data.length > 0;
+  }
+
   async function postPeople({ body, apiKey, query, session }) {
     const ctx = authContextFor({ apiKey, query, body, session });
     // `public` (e9publickey_) is the signup-form scope; it may add people and
@@ -534,10 +559,22 @@ export function createApi({
       const filtered = filterPublicRows(people, { session });
       batch = filtered.rows;
       warnings.push(...filtered.warnings);
-      if (remoteInputId === SIGN_IN_INPUT_ID) {
+      if (isSignInInput(remoteInputId)) {
         remoteInputId = undefined;
         warnings.push({ field: 'options.remoteInputId', reason: 'reserved for sign-in' });
       }
+    }
+    // A link token from an email (auth/linkTokens.js): one row, filed on the
+    // recipient when the row names nobody (api/publicRows.js, applyLinkToken).
+    let linkUsed = null;
+    if (options.linkToken) {
+      let link = await verifyLinkToken(String(options.linkToken), { issuers: linkIssuers, audience: linkAudience });
+      if (link.ok && !(await personExists(link.personId))) link = { ok: false, reason: 'the link token names a person this site does not have' };
+      if (!link.ok) warnings.push({ field: 'options.linkToken', reason: link.reason });
+      const applied = applyLinkToken(batch, link, { defaultSourceCode: options.sourceCode });
+      batch = applied.rows;
+      warnings.push(...applied.warnings);
+      if (link.ok) linkUsed = { issuer: link.issuer, filed: applied.filed };
     }
     const requestedSegments = segmentIdsOnPeople(people, options);
     if (requestedSegments.length) {
@@ -579,7 +616,11 @@ export function createApi({
         personIds: summary.personIds,
         apiKeyId: apiKey?.id,
         roleId: ctx.roleId,
-        meta: { remoteInputId: remoteInputId || defaultRemoteInputId, ...(warnings.length ? { warnings: warnings.length } : {}) }
+        meta: {
+          remoteInputId: remoteInputId || defaultRemoteInputId,
+          ...(linkUsed ? { link_issuer: linkUsed.issuer, link_filed: linkUsed.filed } : {}),
+          ...(warnings.length ? { warnings: warnings.length } : {})
+        }
       });
     }
     return json(200, {
@@ -1085,7 +1126,7 @@ export function createApi({
       returnTo: callback,
       data: { next },
       secure: callback.startsWith('https:'),
-      minLevel: signIn.minLevel ?? 1,
+      minLevel: signInMinLevel(signIn),
       maxLevel: signIn.maxLevel,
       fields: signIn.fields ?? ['email'],
       optionalFields: signIn.optionalFields,
@@ -1132,7 +1173,6 @@ export function createApi({
         state: query.state,
         cookie,
         secure,
-        newAccount: query.new_account === '1',
         returnTo: `${apiBase}/auth/callback`,
         fallbackDomain: requestDomain(headers)
       });
@@ -1144,15 +1184,12 @@ export function createApi({
         // The Login button's dialog, for a browser without JavaScript.
         const next = nextFor();
         const differentUrl = changeSignInUrl(next, { startPath: `${new URL(apiBase).pathname}/auth/start`, reason: 'access_denied' });
-        const newAccountUrl = e.retryCookie
-          ? `${new URL(apiBase).pathname}/auth/callback?${new URLSearchParams({ delegate_token: query.delegate_token, state: query.state, new_account: '1' })}`
-          : null;
         return {
           status: 403,
-          body: loginStopPage({ reason: e.reason, masked: e.masked ?? null, differentUrl, newAccountUrl }),
+          body: loginStopPage({ reason: e.reason, differentUrl }),
           contentType: 'text/html; charset=utf-8',
           headers: { 'cache-control': 'no-store' },
-          cookies: [e.retryCookie || e.clearCookie || clearLogin]
+          cookies: [e.clearCookie || clearLogin]
         };
       }
       return redirect(withQueryParam(nextFor(), 'login_error', String(e.reason || 'login_failed')), [
@@ -1164,6 +1201,55 @@ export function createApi({
       sessionCookie(result.token, { cookieName: sessionCookieName, maxAge: sessionMaxAge, secure }),
       result.clearCookie
     ]);
+  }
+
+  /* ---------------------------------------------------------------------
+     Sign-in links (no Delegate): an admin makes one with
+     `e9core signin invite` and emails it.
+
+       GET  /auth/link?t=…   a page with a Sign in button; changes nothing
+                             (email scanners open every link)
+       POST /auth/link  t=…  from that page (Origin is this site): uses the
+                             link once, sets e9_session, 303 to its return path
+  --------------------------------------------------------------------- */
+
+  function htmlPage(status, body) {
+    return {
+      status,
+      body,
+      contentType: 'text/html; charset=utf-8',
+      headers: { 'cache-control': 'no-store', 'referrer-policy': 'same-origin' }
+    };
+  }
+
+  function getAuthLink({ query, apiBase }) {
+    if (!delegateAuth?.readSignInLink) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    const link = delegateAuth.readSignInLink(query.t);
+    if (!link) return htmlPage(400, signInLinkProblemPage(createDelegateLoginFailure('link_invalid').userMessage));
+    return htmlPage(200, signInLinkPage({ email: link.email, action: `${new URL(apiBase).pathname.replace(/\/$/, '')}/auth/link`, token: query.t }));
+  }
+
+  async function postAuthLink({ body, headers, apiBase }) {
+    if (!delegateAuth?.finishSignInLink) return notConfigured();
+    if (!apiBase) return json(500, { error: 'cannot tell this site\'s address; pass apiBase to handle()' });
+    if (!sameSiteOrigin(headers, apiBase)) {
+      return htmlPage(403, signInLinkProblemPage('Open the link from your email, then press Sign in on that page.'));
+    }
+    const secure = apiBase.startsWith('https:');
+    let result;
+    try {
+      result = await delegateAuth.finishSignInLink(body?.t);
+    } catch (e) {
+      debug('postAuthLink error:', e);
+      const message = e.userMessage || createDelegateLoginFailure('link_invalid').userMessage;
+      return htmlPage(e.reason === 'login_locked' ? 403 : 400, signInLinkProblemPage(message));
+    }
+    const next = safeReturnPath(result.next, { origin: new URL(apiBase).origin });
+    return json(303, null, {
+      headers: { location: next, 'cache-control': 'no-store' },
+      cookies: [sessionCookie(result.token, { cookieName: sessionCookieName, maxAge: sessionMaxAge, secure })]
+    });
   }
 
   /* ---------------------------------------------------------------------
@@ -1224,7 +1310,6 @@ export function createApi({
         state: body?.state,
         cookie: getHeader(headers, 'Cookie'),
         secure,
-        newAccount: body?.new_account === true,
         returnTo: body?.return_to || body?.returnTo,
         domain: body?.domain,
         fallbackDomain: requestDomain(headers)
@@ -1243,12 +1328,11 @@ export function createApi({
     } catch (e) {
       debug('postAuthLogin (cookie) error:', e);
       if (STOP_REASONS.has(e.reason)) {
-        // The Login button shows the stop and its choices. other_login can be
-        // finished as a new person once: POST again with new_account: true.
+        // The Login button shows the stop and its choices.
         return json(
           403,
-          { error: e.userMessage, reason: e.reason, masked: e.masked ?? null, new_account: Boolean(e.retryCookie) },
-          { headers: { 'cache-control': 'no-store' }, cookies: [e.retryCookie || e.clearCookie || clearLogin] }
+          { error: e.userMessage, reason: e.reason },
+          { headers: { 'cache-control': 'no-store' }, cookies: [e.clearCookie || clearLogin] }
         );
       }
       const status = e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
@@ -1280,11 +1364,7 @@ export function createApi({
     } catch (e) {
       debug('postAuthLogin error:', e);
       const status = STOP_REASONS.has(e.reason) ? 403 : e.reason === 'invalid_domain' ? 400 : e.kind === 'configuration' ? 503 : 401;
-      return json(status, {
-        error: e.userMessage || String(e.message || e),
-        reason: e.reason,
-        ...(STOP_REASONS.has(e.reason) ? { masked: e.masked ?? null } : {})
-      });
+      return json(status, { error: e.userMessage || String(e.message || e), reason: e.reason });
     }
   }
 
@@ -1340,9 +1420,26 @@ export function createApi({
 
   /*
     POST /admin/logins { action, email?, subject?, person_id? } (admin): the
-    `e9core signin` commands through a deployed site.
+    `e9core signin` commands through a deployed site. `invite`
+    ({ email, hours?, return_to? }) answers { url, email, person_id,
+    expires_at }: a sign-in link for the admin to email.
   */
-  async function postAdminLogins({ body, apiKey, query, session }) {
+  async function makeSignInLink({ body, apiBase, actor }) {
+    if (!delegateAuth?.createSignInLink) throw new Error('sign-in links need login turned on (SESSION_SECRET)');
+    if (!apiBase) throw new Error("cannot tell this site's address; pass apiBase to handle()");
+    const hours = Number(body?.hours);
+    const next = body?.return_to ? safeReturnPath(String(body.return_to), { origin: new URL(apiBase).origin }) : undefined;
+    const link = await delegateAuth.createSignInLink({
+      email: body?.email,
+      next,
+      ttlSeconds: Number.isFinite(hours) && hours > 0 ? hours * 3600 : undefined,
+      audit: auditLog,
+      actor
+    });
+    return { url: `${apiBase}/auth/link?t=${encodeURIComponent(link.token)}`, email: link.email, person_id: link.person_id, expires_at: link.expires_at };
+  }
+
+  async function postAdminLogins({ body, apiKey, query, session, apiBase }) {
     const ctx = authContextFor({ apiKey, query, body: null, session });
     const denied = requireScope(ctx, SCOPES.ADMIN);
     if (denied) return denied;
@@ -1362,7 +1459,8 @@ export function createApi({
       link: () => linkLogin(args),
       lock: () => lockLogin(args),
       unlock: () => unlockLogin(args),
-      retire: () => retireLogin(args)
+      retire: () => retireLogin(args),
+      invite: () => makeSignInLink({ body, apiBase, actor: args.actor })
     };
     if (!actions[action]) return json(400, { error: `body.action must be one of ${Object.keys(actions).join(', ')}` });
     try {
@@ -1734,6 +1832,13 @@ export function createApi({
       const route = parts[1] === 'start' ? getAuthStart : getAuthCallback;
       return route({ query: req.query || {}, headers: req.headers, apiBase: req.apiBase });
     }
+    // A sign-in link from an email: a link cannot send an API key. Opening it
+    // changes nothing; its button (a POST from that page) signs in.
+    if (parts[0] === 'auth' && parts[1] === 'link' && parts.length === 2 && (method === 'GET' || method === 'POST')) {
+      return method === 'GET'
+        ? getAuthLink({ query: req.query || {}, apiBase: req.apiBase })
+        : postAuthLink({ body: req.body, headers: req.headers, apiBase: req.apiBase });
+    }
     // The Login button script: a script tag cannot send an API key either.
     if (method === 'GET' && parts[0] === 'auth' && parts.length === 2 && parts[1] === 'login.js') {
       return getLoginButton();
@@ -1806,7 +1911,7 @@ export function createApi({
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'retire-address') {
       result = await postAuthRetireAddress({ body: req.body, session });
     } else if (method === 'POST' && parts[0] === 'admin' && parts[1] === 'logins') {
-      result = await postAdminLogins({ body: req.body, apiKey, query: req.query || {}, session });
+      result = await postAdminLogins({ body: req.body, apiKey, query: req.query || {}, session, apiBase: req.apiBase });
     } else if (method === 'GET' && parts[0] === 'auth' && parts[1] === 'me') {
       result = await getAuthMe({ session });
     } else if (method === 'POST' && parts[0] === 'auth' && parts[1] === 'logout') {
@@ -1874,7 +1979,10 @@ export function createApi({
     let body = null;
     if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
       try {
-        body = await request.json();
+        // A plain HTML form (the sign-in link's button) posts urlencoded; everything else is JSON.
+        body = isFormBody(request.headers.get('content-type'))
+          ? Object.fromEntries(new URLSearchParams(await request.text()))
+          : await request.json();
       } catch {
         return new Response(JSON.stringify({ error: 'invalid JSON body' }), {
           status: 400,

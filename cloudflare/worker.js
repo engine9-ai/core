@@ -34,8 +34,11 @@
                           share one hostname.
     E9_SIGN_IN         -- optional JSON for GET /api/auth/start (one-link sign-in):
                           {"brand":{"name":"My Site","color":"#7a1fa2"},"fields":["email"]}.
-                          Default: Level 1, email, Google only. Delegate opens
-                          a single provider by itself.
+                          Default: Level 2 (core never asks for less), email,
+                          Google only. Delegate opens a single provider by itself.
+    E9_LINK_ISSUERS    -- optional JSON array of { name, publicKey }: senders whose
+                          link tokens file a one-click form on the email's
+                          recipient (docs/link-tokens.md). Public keys only.
     The setup wizard is not mounted here. It runs only on `e9core serve`.
 
   Roles (segment UUIDs with scopes / requiredAuth) are site code: add them to
@@ -107,6 +110,7 @@ export default {
         upsertTables: ['person_name', 'person_email', 'person_phone', 'person_address', 'person_segment'],
         allowedOrigins: env.E9_ALLOWED_ORIGINS || '',
         signIn: parseSignIn(env.E9_SIGN_IN),
+        linkIssuers: env.E9_LINK_ISSUERS || [],
         roles: {
           // '<segment-uuid>': { name: 'Admin', scopes: ['admin'], requiredAuth: { minLevel: 3 } }
         },

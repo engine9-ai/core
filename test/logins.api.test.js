@@ -2,8 +2,8 @@
   person_login through the HTTP API and the upgrade:
   - POST /people with a public key: the fields that point a row at a record
     are removed, with warnings; everything else is as before;
-  - the other_login stop on the Login button's route (POST /auth/login with
-    cookie: true) and its "This isn't me", once, for the same account only;
+  - a first sign-in is a new person even when its address is on a record;
+    an admin's link, made first, is how a login reaches that record;
   - the no-JavaScript fallback page on /auth/callback;
   - roles read through the login on every request (lock takes effect at once);
   - POST /admin/logins (e9core signin --url);
@@ -26,6 +26,8 @@ import { rolesForEmail } from '../auth/roles.js';
 import { getPluginUUID } from '../lib/utilities.js';
 import { runStatus } from '../lib/status/index.js';
 import { applyWebsitePlugins, ensurePluginRow } from './helpers/applySchemas.js';
+import { insertPersons } from '../lib/id/sqlStore.js';
+import { backfillPersonLogin } from '@engine9/schemas/login/upgrades.js';
 
 const DELEGATE_URL = 'https://delegate.network';
 const HOST = 'site.example.com';
@@ -84,7 +86,7 @@ async function setup() {
   const jar = (cookies) => cookies.filter((c) => !/=$/.test(c)).join('; ');
 
   /* The Login button's sign-in: begin, then POST /auth/login with cookie: true. */
-  async function buttonSignIn({ sub, email, level = 3, newAccount = false, retry = null }) {
+  async function buttonSignIn({ sub, email, level = 3, retry = null }) {
     let begin = retry;
     if (!begin) {
       const b = await call('POST', '/auth/begin');
@@ -92,7 +94,7 @@ async function setup() {
     }
     const token = await sign({ sub, email, level, nonce: begin.nonce });
     const res = await call('POST', '/auth/login', {
-      body: { delegate_token: token, state: begin.state, cookie: true, ...(newAccount ? { new_account: true } : {}) },
+      body: { delegate_token: token, state: begin.state, cookie: true },
       cookie: begin.cookie
     });
     return { ...res, begin: { ...begin, cookie: jar(res.cookies) || begin.cookie }, session: jar(res.cookies.filter((c) => c.startsWith('e9_session='))) };
@@ -149,7 +151,7 @@ test('POST /people with a public key: steering fields removed with warnings, the
   }
 });
 
-test('Login button: other_login shows a masked address; "This isn\'t me" makes a new person once, for that account only', async () => {
+test('a first sign-in is a new person, even when its address is on a record; a link made first is how it reaches that record', async () => {
   const t = await setup();
   try {
     const crm = getPluginUUID('logins', 'crm');
@@ -159,64 +161,50 @@ test('Login button: other_login shows a masked address; "This isn\'t me" makes a
 
     const robin = await t.buttonSignIn({ sub: unid('robin'), email: 'robin@home.example' });
     assert.equal(robin.status, 200, JSON.stringify(robin.body));
-    assert.equal(robin.body.session.personId, pid, 'the first sign-in adopts the imported person');
-
+    assert.notEqual(robin.body.session.personId, pid, 'a new person: a sign-in never finds a record by its address');
     const casey = await t.buttonSignIn({ sub: unid('casey'), email: 'casey@home.example' });
-    assert.equal(casey.status, 403);
-    assert.equal(casey.body.reason, 'other_login');
-    assert.equal(casey.body.masked, 'r***n@h***e.example');
-    assert.equal(casey.body.new_account, true);
-    assert.ok(!casey.text.includes('robin@home.example'), 'no full address');
-    assert.ok(!casey.text.includes(`"personId"`), 'no person id');
-    assert.equal(casey.session, '', 'no session');
+    assert.equal(casey.status, 200, JSON.stringify(casey.body));
+    assert.notEqual(casey.body.session.personId, pid);
+    assert.notEqual(casey.body.session.personId, robin.body.session.personId, 'and no stop: two people, two records');
+    assert.equal((await t.buttonSignIn({ sub: unid('robin'), email: 'robin@home.example' })).body.session.personId, robin.body.session.personId, 'the login keeps it');
 
-    // Another account cannot use Casey's "This isn't me".
-    const other = await t.buttonSignIn({ sub: unid('mallory'), email: 'casey@home.example', newAccount: true, retry: casey.begin });
-    assert.equal(other.status, 401);
-    assert.equal(other.body.reason, 'state_mismatch');
-
-    const again = await t.buttonSignIn({ sub: unid('casey'), email: 'casey@home.example' });
-    const mine = await t.buttonSignIn({ sub: unid('casey'), email: 'casey@home.example', newAccount: true, retry: again.begin });
-    assert.equal(mine.status, 200, JSON.stringify(mine.body));
-    assert.notEqual(mine.body.session.personId, pid, 'a new person');
-    assert.ok(mine.session.startsWith('e9_session='));
-    const later = await t.buttonSignIn({ sub: unid('casey'), email: 'casey@home.example' });
-    assert.equal(later.body.session.personId, mine.body.session.personId, 'and it stays theirs');
+    // Link first, then invite: the address's first sign-in lands on the record.
+    const [donor] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'dana@donor.example', remote_person_id: `${crm}.2` }] })).personIds;
+    const explained = await t.call('POST', '/admin/logins', { key: t.keys.adminKey, body: { action: 'explain', email: 'dana@donor.example' } });
+    assert.equal(explained.body.outcome.result, 'new_person');
+    assert.equal(explained.body.outcome.address_on_person_id, donor, 'explain names the record, for the admin to link');
+    const link = await t.call('POST', '/admin/logins', { key: t.keys.adminKey, body: { action: 'link', email: 'dana@donor.example', person_id: donor } });
+    assert.equal(link.status, 200, JSON.stringify(link.body));
+    const dana = await t.buttonSignIn({ sub: unid('dana'), email: 'dana@donor.example' });
+    assert.equal(dana.body.session.personId, donor, 'the linked record');
+    const linkOnly = await t.call('POST', '/admin/logins', { key: t.keys.publicKey, body: { action: 'link', email: 'x@donor.example', person_id: donor } });
+    assert.equal(linkOnly.status, 403, 'linking is admin only');
   } finally {
     await t.worker.destroy();
   }
 });
 
-test('no-JavaScript fallback: /auth/callback shows the stop with both choices', async () => {
+test('no-JavaScript fallback: /auth/callback shows a stop with its choice', async () => {
   const t = await setup();
   try {
-    const crm = getPluginUUID('logins', 'crm');
-    await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'lee@work.example', remote_person_id: `${crm}.2` }] });
-    await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'lee@home.example', remote_person_id: `${crm}.2` }] });
-    assert.equal((await t.buttonSignIn({ sub: unid('lee-w'), email: 'lee@work.example' })).status, 200);
+    assert.equal((await t.buttonSignIn({ sub: unid('lee'), email: 'lee@work.example' })).status, 200);
+    await t.call('POST', '/admin/logins', { key: t.keys.adminKey, body: { action: 'lock', email: 'lee@work.example' } });
 
     const start = await t.api.handleFetch(new Request(`${SITE}/api/auth/start?returnTo=/members`));
     const location = new URL(start.headers.get('location'));
     const state = location.searchParams.get('state');
     const nonce = location.searchParams.get('nonce');
     const loginCookie = t.jar(start.headers.getSetCookie().map((c) => c.split(';')[0]));
-    const token = await t.sign({ sub: unid('lee-h'), email: 'lee@home.example', nonce });
+    const token = await t.sign({ sub: unid('lee-2'), email: 'lee@work.example', nonce });
     const callback = await t.api.handleFetch(
       new Request(`${SITE}/api/auth/callback?${new URLSearchParams({ delegate_token: token, state })}`, { headers: { cookie: loginCookie } })
     );
     assert.equal(callback.status, 403);
     const html = await callback.text();
-    assert.match(html, /l\*\*\*e@w\*\*\*k\.example/);
-    assert.match(html, /Sign in with a different address/);
-    assert.match(html, /This isn&#39;t me|This isn't me/);
-    assert.ok(!html.includes('lee@work.example'));
+    assert.match(html, /This sign-in is turned off/);
+    assert.match(html, /Use a different email or account/);
     assert.match(html, /reason=access_denied/);
-    const href = html.match(/href="([^"]*new_account=1[^"]*)"/)[1].replace(/&amp;/g, '&');
-    const retryCookie = t.jar(callback.headers.getSetCookie().map((c) => c.split(';')[0]));
-    const done = await t.api.handleFetch(new Request(`${SITE}${href}`, { headers: { cookie: retryCookie } }));
-    assert.equal(done.status, 302);
-    assert.equal(done.headers.get('location'), '/members');
-    assert.ok(done.headers.getSetCookie().some((c) => c.startsWith('e9_session=')));
+    assert.ok(!callback.headers.getSetCookie().some((c) => c.startsWith('e9_session=') && !/e9_session=;/.test(c)), 'no session');
   } finally {
     await t.worker.destroy();
   }
@@ -302,6 +290,122 @@ test('upgrade: a database from before person_login keeps signing in, then the ba
     }
     const again = await t.worker.upgrade({ dry_run: true });
     assert.equal(again.upgrades.find((u) => u.id === 'person_login').status, 'current', 'it runs once');
+  } finally {
+    await t.worker.destroy();
+  }
+});
+
+test('upgrade copy: addresses sign-in wrote keep their record; imported ones are not copied by default; all_addresses is refused afterwards', async () => {
+  const t = await setup();
+  try {
+    const crm = getPluginUUID('logins', 'crm');
+    const [quinn] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'quinn@example.com', remote_person_id: `${crm}.20` }] })).personIds;
+    await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'shared@example.com', remote_person_id: `${crm}.21` }] });
+    const [shared2] = await insertPersons(t.worker, [{}]);
+    await t.worker.upsertArray({ table: 'person_email', array: [{ person_id: Number(shared2), email: 'shared@example.com' }] });
+    await asPreReleaseDatabase(t.worker);
+
+    // Before the upgrade, a first sign-in files its address under the sign-in input.
+    const early = await t.buttonSignIn({ sub: unid('early'), email: 'early@example.com' });
+    assert.equal(early.status, 200, JSON.stringify(early.body));
+    const earlyPid = early.body.session.personId;
+
+    const run = await t.worker.upgrade({});
+    assert.equal(run.ok, true, JSON.stringify(run));
+    forgetLoginTable(t.worker);
+    assert.equal((await loginRow(t.worker, 'email', 'early@example.com'))?.person_id, earlyPid, 'an address sign-in wrote is a login');
+    assert.equal(await loginRow(t.worker, 'email', 'quinn@example.com'), null, 'an imported address is not, by default');
+    const again = await t.buttonSignIn({ sub: unid('early'), email: 'early@example.com' });
+    assert.equal(again.body.session.personId, earlyPid, 'who signed in before keeps their record');
+
+    // Every address is copied only by the run that creates person_login.
+    assert.equal((await t.worker.upgrade({ dry_run: true, all_addresses: true })).upgrades.find((u) => u.id === 'person_login').status, 'current');
+    await t.worker.upgrade({ all_addresses: true, backfill_logins: true });
+    assert.equal(await loginRow(t.worker, 'email', 'quinn@example.com'), null, 'all_addresses is refused once the table exists');
+
+    // Joined later (here by a form), an address is never a login without a link.
+    await t.call('POST', '/people', { body: { people: [{ email: 'late@example.com', phone: '202-555-0144' }] } });
+    const late = await t.buttonSignIn({ sub: unid('late'), email: 'late@example.com' });
+    assert.equal(late.status, 200);
+    assert.equal((await t.worker.upgrade({ dry_run: true })).upgrades.find((u) => u.id === 'person_login').status, 'current');
+  } finally {
+    await t.worker.destroy();
+  }
+});
+
+test('upgrade copy: all_addresses on the run that creates the table copies every address once; an address on two records is skipped', async () => {
+  const t = await setup();
+  try {
+    const crm = getPluginUUID('logins', 'crm');
+    const [quinn] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'quinn@example.com', remote_person_id: `${crm}.20` }] })).personIds;
+    const [shared1] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'shared@example.com', remote_person_id: `${crm}.21` }] })).personIds;
+    const [shared2] = await insertPersons(t.worker, [{}]);
+    await t.worker.upsertArray({ table: 'person_email', array: [{ person_id: Number(shared2), email: 'shared@example.com' }] });
+    await asPreReleaseDatabase(t.worker);
+    const dry = (await t.worker.upgrade({ dry_run: true, all_addresses: true })).upgrades.find((u) => u.id === 'person_login');
+    assert.equal(dry.status, 'pending');
+    assert.equal(dry.conflict_count, 1);
+    assert.deepEqual(dry.conflicts[0].person_ids, [shared1, Number(shared2)].sort((a, b) => a - b));
+    const all = await t.worker.upgrade({ all_addresses: true });
+    assert.equal(all.ok, true, JSON.stringify(all));
+    forgetLoginTable(t.worker);
+    assert.equal((await loginRow(t.worker, 'email', 'quinn@example.com'))?.person_id, quinn);
+    assert.equal(await loginRow(t.worker, 'email', 'shared@example.com'), null, 'an address on two records is a login for neither');
+    const q = await t.buttonSignIn({ sub: unid('quinn'), email: 'quinn@example.com' });
+    assert.equal(q.body.session.personId, quinn);
+  } finally {
+    await t.worker.destroy();
+  }
+});
+
+test('upgrade copy, run again: an address a form joined to an admin later is never copied', async () => {
+  const t = await setup();
+  try {
+    const [boss] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'boss@example.com', phone: '202-555-0143' }] })).personIds;
+    await t.worker.upsertArray({ table: 'person_segment', array: [{ person_id: boss, segment_id: t.admin }] });
+    await asPreReleaseDatabase(t.worker);
+    assert.equal((await t.worker.upgrade({})).ok, true);
+    forgetLoginTable(t.worker);
+    assert.equal((await loginRow(t.worker, 'email', 'boss@example.com'))?.person_id, boss);
+    // A form joins an address to the admin's record by phone, after sign-in is on.
+    await t.call('POST', '/people', { body: { people: [{ email: 'evil@attacker.test', phone: '202-555-0143' }] } });
+    await t.worker.upgrade({ backfill_logins: true });
+    assert.equal(await loginRow(t.worker, 'email', 'evil@attacker.test'), null, 'the admin already signs in: nothing is added to them');
+    const evil = await t.buttonSignIn({ sub: unid('evil'), email: 'evil@attacker.test' });
+    assert.notEqual(evil.body.session.personId, boss);
+    assert.deepEqual(evil.body.session.roles, []);
+  } finally {
+    await t.worker.destroy();
+  }
+});
+
+test('upgrade copy: a sign-in in the seconds the copy runs is moved to the record the copy names', async () => {
+  const t = await setup();
+  try {
+    const crm = getPluginUUID('logins', 'crm');
+    const [adminPid] = (await t.worker.processPeople({ pluginId: t.pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'ada@example.com', remote_person_id: `${crm}.9` }] })).personIds;
+    await t.worker.upsertArray({ table: 'person_segment', array: [{ person_id: adminPid, segment_id: t.admin }] });
+    await removeLoginPlugin(t.worker);
+    // The table appears, and Ada signs in before the copy writes her row.
+    const racing = {
+      query: (q) => t.worker.query(q),
+      describe: (q) => t.worker.describe(q),
+      install: async (o) => {
+        const out = await t.worker.install(o);
+        forgetLoginTable(t.worker);
+        const r = await t.buttonSignIn({ sub: unid('ada'), email: 'ada@example.com' });
+        assert.notEqual(r.body.session.personId, adminPid, 'the table has no row for her yet: a new person');
+        return out;
+      }
+    };
+    const result = await backfillPersonLogin({ sqlWorker: racing, options: {} });
+    assert.equal(result.moved, 1);
+    forgetLoginTable(t.worker);
+    assert.equal((await loginRow(t.worker, 'email', 'ada@example.com')).person_id, adminPid);
+    assert.equal((await loginRow(t.worker, 'delegate', unid('ada'))).person_id, adminPid, 'her Delegate account moves with it');
+    const r = await t.buttonSignIn({ sub: unid('ada'), email: 'ada@example.com' });
+    assert.equal(r.body.session.personId, adminPid);
+    assert.deepEqual(r.body.session.roles, [t.admin]);
   } finally {
     await t.worker.destroy();
   }

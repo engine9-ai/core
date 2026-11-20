@@ -21,3 +21,9 @@ export function changeSignInUrl(
 ): string;
 /** A page load (link, form, address bar), not `fetch()` from page code. */
 export function isPageRequest(request: Request): boolean;
+/** The Identity Level core asks Delegate for: `signIn.minLevel`, never below 2. */
+export function signInMinLevel(signIn?: { minLevel?: number }): number;
+/** The page a sign-in link opens: a Sign in button that POSTs the link back. */
+export function signInLinkPage(options: { email: string; action: string; token: string }): string;
+/** A sign-in link that cannot be used, with the reason in words. */
+export function signInLinkProblemPage(message: string): string;

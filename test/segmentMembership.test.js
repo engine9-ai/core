@@ -236,18 +236,29 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
     const rsvp = getVersionedUUID();
     await worker.insertArray({
       table: 'segment',
-      array: [{ id: rsvp, plugin_id: pluginId, name: 'RSVP', build_type: 'manual', join_min_level: 1, leave_min_level: 2 }]
+      array: [{ id: rsvp, plugin_id: pluginId, name: 'RSVP', build_type: 'manual', join_min_level: 2, leave_min_level: 3 }]
     });
     const patHeaders = {
       authorization: `Bearer ${key}`,
       'x-engine9-session': delegateAuth.issueToken({
         personId: pat.byEmail['pat@example.com'],
         roles: [clubId],
-        level: 1,
+        level: 2,
         auth: {},
         domainUnid: 'seg-http.example'
       })
     };
+    // A session below Level 2 (from an earlier release) is not a sign-in.
+    const levelOne = await api.handle({
+      method: 'POST',
+      path: '/auth/segments',
+      headers: {
+        authorization: `Bearer ${key}`,
+        'x-engine9-session': delegateAuth.issueToken({ personId: pat.byEmail['pat@example.com'], roles: [clubId], level: 1, auth: {} })
+      },
+      body: { add: [{ segment_id: rsvp }] }
+    });
+    assert.equal(levelOne.status, 401, JSON.stringify(levelOne.body));
     const joined = await api.handle({
       method: 'POST',
       path: '/auth/segments',
@@ -262,9 +273,9 @@ test('POST /auth/segments and POST /people honor segment policy', async () => {
       headers: patHeaders,
       body: { remove: [rsvp] }
     });
-    assert.equal(left.status, 403, 'level 1 cannot remove themselves when leave_min_level is 2');
+    assert.equal(left.status, 403, 'level 2 cannot remove themselves when leave_min_level is 3');
     assert.equal(left.body.subject, 'self');
-    assert.match(left.body.error, /cannot remove yourself from 'RSVP': requires Identity Level 2, you are at 1/);
+    assert.match(left.body.error, /cannot remove yourself from 'RSVP': requires Identity Level 3, you are at 2/);
 
     const other = await api.handle({
       method: 'POST',

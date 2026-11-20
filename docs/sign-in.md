@@ -43,6 +43,18 @@ npx e9core upgrade --plugin @engine9/schemas/login --url https://www.example.com
 A site set up in GitHub only runs the deploy workflow by hand with command
 `upgrade` and options `--plugin @engine9/schemas/login`.
 
+**Sign-in starts at Identity Level 2**, a confirmed email address or phone.
+Core always asks Delegate for at least Level 2 (a lower
+`signIn.minLevel` is raised to 2) and refuses a token or a session below
+it (`level_too_low`). Delegate is for people who sign in. People who do
+not sign in never go there, even in large numbers: when an email asks two
+million people to sign a petition, the email provider's plugin imports
+each send and click with the address (or the provider's id for it), and
+the petition form posts the address with the public key. Dedupe files all
+three on the same person, with no sign-in and no call to Delegate. A
+one-click petition, where nobody types an address, carries a link token
+from the sender ([link-tokens.md](link-tokens.md)).
+
 ## Who does what
 
 | Layer | Owns | Never does |
@@ -73,7 +85,7 @@ createApi({
   delegate: { sessionSecret: env.SESSION_SECRET },
   config: {
     roles: 'standard',
-    signIn: { minLevel: 1, fields: ['display_name', 'email'], brand: { name: 'My Site' } },
+    signIn: { minLevel: 2, fields: ['display_name', 'email'], brand: { name: 'My Site' } },
   },
 });
 ```
@@ -107,9 +119,9 @@ step 3) shows as signed in, from `/api/auth/me`.
   this is how its pages get one. It is the same key any page using
   `@engine9/id` carries: it adds people and logs in, nothing else.
 - **What Delegate asks for** is `config.signIn`, the same settings as
-  `/api/auth/start`: `minLevel`, `fields`, `optionalFields`, `loginLevel`,
-  `loginProviders`, and `brand` (on the shipped Worker, the `E9_SIGN_IN`
-  JSON). The dialog's name is `brand.name`, else the hostname, or set
+  `/api/auth/start`: `minLevel` (2 or more), `fields`, `optionalFields`,
+  `loginLevel`, `loginProviders`, and `brand` (on the shipped Worker, the
+  `E9_SIGN_IN` JSON). The dialog's name is `brand.name`, else the hostname, or set
   `signIn.loginButton: { siteName }`.
 - **Optional.** Nothing appears until a page includes the script.
   `signIn.loginButton: false` turns the route off (404).
@@ -231,26 +243,81 @@ shows each one in its dialog:
 
 | The person sees | Why | Choices in the dialog |
 | --- | --- | --- |
-| This email address belongs to someone here who signs in with a different address: `v***x@g***l.com` | The address is on a record that someone already signs in to with another address | **Sign in with a different address**, or **This isn't me: continue with this address** (two people on one record, such as a household) |
-| This address signs in here through a different Delegate account. Ask the site's administrator | The address now belongs to a different Delegate account | None; an administrator fixes it |
-| This sign-in is turned off. Ask the site's administrator | An administrator locked it, or the person was offboarded | None |
+| This address signs in here through a different Delegate account. Ask the site's administrator | The address now belongs to a different Delegate account | **Sign in with a different address**; an administrator fixes the rest |
+| This sign-in is turned off. Ask the site's administrator | An administrator locked it, or the person was offboarded | **Sign in with a different address** |
+| This site does not have sign-in yet | The database has no `@engine9/schemas/login` ([Add login](../README.md#add-login)) | None; for the site's owner |
 
 The dialog also has **Add a sign-in address**: a signed-in person proves a
 second Delegate account, and both sign in as them from then on. It then
 offers to stop using the old address.
 
 These are the Login button's, and only the Login button's. Do not add a
-"This isn't me" link, a "wrong account" page, or a way to add an address
-anywhere else on the site. Without JavaScript, `/api/auth/callback` shows
-the same message and choices; that page is core's, not the site's.
+"wrong account" page or a way to add an address anywhere else on the site.
+Without JavaScript, `/api/auth/callback` shows the same message and choice;
+that page is core's, not the site's.
 
 <a id="who-is-signing-in"></a>
+
 **Who is signing in.** The rules are in
 [auth/README.md](../auth/README.md#who-is-signing-in-logins-people-deduplication):
-the Delegate account's login first, then the address's login, and only for a
-first sign-in a record nobody signs in as yet (it then carries only roles a
-person can join themselves). Admins manage logins with `e9core signin`
-(list, explain, link, lock, unlock, retire).
+the Delegate account's login first, then the address's login. A first
+sign-in with neither is a new person. It is never a record found by the
+address, even when that address is on file: forms join addresses to records
+through other details, such as a phone, so an address on a record does not
+show who owns the record.
+
+To have someone sign in to a record that already exists (a donor, a
+member, a staff member), link the address to it before they sign in, then
+invite them:
+
+```bash
+npx e9core signin explain --email dana@example.org        # names the record the address is on
+npx e9core signin link --email dana@example.org --person 1234
+```
+
+Their first sign-in with a verified copy of that address lands on person
+1234. To send the invitation as a link that signs them in without Delegate,
+see [Sign-in links](#sign-in-links). The invitation email is only a message; the proof is Delegate's check
+of the address. To grant a role on that record, link first, then grant.
+Linking is an admin action (`POST /api/admin/logins` with `action: "link"`
+on a deployed site). Tools that join records or link logins in bulk follow
+[docs/merge-tools.md](merge-tools.md).
+
+Admins manage logins with `e9core signin` (list, explain, link, lock,
+unlock, retire).
+
+<a id="sign-in-links"></a>
+
+## Sign-in links (no Delegate)
+
+An admin can email someone a link that signs them in, for sites or people
+that do not use Delegate. Link first, then invite:
+
+```bash
+npx e9core signin link   --email dana@example.org --person 1234 --url https://www.example.org
+npx e9core signin invite --email dana@example.org --url https://www.example.org [--hours 24] [--return-to /members]
+```
+
+`invite` prints a URL (`/api/auth/link?t=…`). Send it in your own email.
+
+- **Only for an address that already has a login.** `invite` never makes
+  one, so a link reaches only a record an admin chose with `link` or a
+  grant.
+- **Opening it changes nothing.** The page shows the address and a **Sign
+  in** button. Email security scanners open every link; only the button
+  (a POST from that page) signs in.
+- **It works once.** Using it, or any later sign-in with that address,
+  ends it. It expires after 24 hours by default (`--hours`, at most 7
+  days). Make another to resend.
+- **Identity Level 2**, like Delegate's emailed code. Roles that need Level
+  3, including `admin` and superadmins, do not apply; admins use Delegate or
+  the admin key.
+- A locked or retired login cannot use one. Each `invite` writes the audit
+  log (`login.signin_link`).
+
+Core makes and checks these links with the site's `SESSION_SECRET`; no
+outside sender can make one. They are not [link tokens](link-tokens.md),
+which only file a form row.
 
 ## How the widget sign-in is kept safe
 
@@ -306,7 +373,7 @@ blank page. Each one has a core feature that replaces it.
 | Keep the session in `localStorage` or `sessionStorage` on a site whose server gates pages | `session: 'cookie'`. Your server cannot see browser storage, so the gate reads "signed out" |
 | Have one route sign people in and a separate admin route check a different cookie | One session (`e9_session`) and `requireRole` everywhere |
 | Read `session.roles` from the cookie for an access decision | `requireRole`, or `auth.rolesForSession(session)` |
-| Build a "This isn't me", "wrong account", or "add an address" link or page | The Login button's dialog (step 6) |
+| Build a "wrong account" or "add an address" link or page | The Login button's dialog (step 6) |
 | Add the Login button to a site whose database has no `@engine9/schemas/login` | `npx e9core upgrade --plugin @engine9/schemas/login` first. Without it every sign-in stops |
 | Answer every failure the same way | 401 for signed out, 403 for signed in without access |
 | Hide the address the person is signed in with | Show `email`. The fix is usually another address |

@@ -122,12 +122,23 @@
         through package.json "engine9", as install does. Both exit 1 when an
         entry does not meet the standard.
 
+    e9core link-token keys --name <sender>
+        A key pair for a sender of link tokens (one-click forms in email).
+        The sender keeps privateKey; the site adds issuer to
+        E9_LINK_ISSUERS (config.linkIssuers). docs/link-tokens.md
+    e9core link-token make --key <private key file> --issuer <sender> --audience <account handle>
+                           --person <id> [--src <source code>] [--days 90]
+        One token, for a test.
+
     e9core signin list    --person <id> | --email <address> | --subject <Domain UNID>
-    e9core signin explain --email <address> [--subject <Domain UNID>] | --person <id>
+    e9core signin explain --email <address> [--subject <Domain UNID>]
     e9core signin link    --email <address> | --subject <Domain UNID>  --person <id>
     e9core signin lock    --email … | --subject … | --person <id>
     e9core signin unlock  --email … | --subject … | --person <id>
     e9core signin retire  --email … | --subject … | --person <id>
+    e9core signin invite  --email <address> --url <site> [--hours 24] [--return-to /path]
+                          A sign-in link for an address that has a login, for
+                          you to email. Works once; Identity Level 2.
         Who can sign in, and as which person (the person_login table). list
         and explain only read. link gives a person a login (or moves one
         there); lock stops a login; unlock turns it back on; retire is
@@ -228,6 +239,7 @@ import { readSuperadminsFile, addSuperadmins, removeSuperadmins } from './supera
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cliAccount } from './cliAccount.js';
+import { generateLinkIssuer, createLinkToken } from '../auth/linkTokens.js';
 
 function emailsFromArgs(args) {
   const out = [];
@@ -297,8 +309,44 @@ async function withSiteAdminKey(args, url, fn) {
   return fn(adminKey({ key: explicit, target: envArg(args), url }));
 }
 
+/** `e9core link-token keys | make`: link tokens for one-click forms (auth/linkTokens.js). */
+async function linkTokenCommand(args) {
+  const [, action] = args._;
+  const value = (name) => (args[name] && args[name] !== true ? String(args[name]).trim() : undefined);
+  try {
+    if (action === 'keys') {
+      const { privateKey, issuer } = await generateLinkIssuer({ name: value('name') });
+      console.log(JSON.stringify({ privateKey, issuer }, null, 2));
+      console.error('The sender keeps privateKey secret. The site adds issuer to E9_LINK_ISSUERS (a JSON array).');
+      return;
+    }
+    if (action === 'make') {
+      const file = value('key');
+      if (!file) throw new Error('--key <file> holds the private key (the privateKey of e9core link-token keys)');
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      const days = Number(value('days') || 90);
+      console.log(
+        await createLinkToken({
+          privateKey: parsed.privateKey || parsed,
+          issuer: value('issuer'),
+          audience: value('audience'),
+          personId: value('person'),
+          sourceCode: value('src'),
+          expiresIn: Math.round(days * 86400)
+        })
+      );
+      return;
+    }
+    console.error('Usage: e9core link-token keys --name <sender> | make --key <file> --issuer <sender> --audience <handle> --person <id> [--src <code>] [--days 90]');
+    process.exit(1);
+  } catch (e) {
+    console.error(String(e.message || e));
+    process.exit(1);
+  }
+}
+
 /** `e9core signin <action>`: person_login, through --db or a deployed site (--url). */
-const SIGNIN_ACTIONS = ['list', 'explain', 'link', 'lock', 'unlock', 'retire'];
+const SIGNIN_ACTIONS = ['list', 'explain', 'link', 'lock', 'unlock', 'retire', 'invite'];
 
 function signinArgs(args) {
   const value = (name) => (args[name] && args[name] !== true ? String(args[name]).trim() : undefined);
@@ -323,10 +371,21 @@ async function signinCommand(args) {
     console.error(String(e.message || e));
     process.exit(1);
   }
+  if (action === 'invite' && !url) {
+    console.error('e9core signin invite makes a link on the site itself: pass --url <site> (http://localhost:8787 for a local preview).');
+    process.exit(1);
+  }
+  const extra =
+    action === 'invite'
+      ? {
+          ...(args.hours && args.hours !== true ? { hours: Number(args.hours) } : {}),
+          ...(args['return-to'] && args['return-to'] !== true ? { return_to: String(args['return-to']) } : {})
+        }
+      : {};
   try {
     if (url) {
       const result = await withSiteAdminKey(args, url, (key) =>
-        callSite({ url, key, method: 'POST', route: '/admin/logins', body: { action, ...target } })
+        callSite({ url, key, method: 'POST', route: '/admin/logins', body: { action, ...target, ...extra } })
       );
       console.log(JSON.stringify(result, null, 2));
       return;
@@ -912,6 +971,10 @@ async function main() {
       await signinCommand(args);
       break;
     }
+    case 'link-token': {
+      await linkTokenCommand(args);
+      break;
+    }
     case 'build-plugins': {
       const result = buildPlugins({
         cwd: process.cwd(),
@@ -932,7 +995,7 @@ async function main() {
     default:
       if (!command || args.help) console.log(SETUP_HELP);
       console.log(
-        'Other commands: e9core <serve|setup-keys|create-api-key|segment|signin|sqlite-ddl|install|upgrade|status|build-plugins|catalog>'
+        'Other commands: e9core <serve|setup-keys|create-api-key|segment|signin|link-token|sqlite-ddl|install|upgrade|status|build-plugins|catalog>'
       );
       console.log('Flags for setup: npx e9core setup --help');
       process.exit(command ? 1 : 0);

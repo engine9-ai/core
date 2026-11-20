@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import PersonWorker from '../lib/PersonWorker.js';
 import { SqlApiKeyStore } from '../auth/index.js';
 import { JsonlFileLogger, NullLogger } from '../logging/index.js';
-import { createApi, isRawBody } from '../api/index.js';
+import { createApi, isRawBody, isFormBody } from '../api/index.js';
 import { renderWizardHtml, timingSafeEqualString } from '../api/setupPage.js';
 import { createWizard, mintSetupToken } from './wizard.js';
 import { isSetupFinished, setSetupFinished } from './setupFlow.js';
@@ -288,7 +288,9 @@ export async function serve(options = {}) {
           const chunks = [];
           for await (const chunk of req) chunks.push(chunk);
           const raw = Buffer.concat(chunks).toString('utf8');
-          if (raw) {
+          if (raw && isFormBody(req.headers['content-type'])) {
+            body = Object.fromEntries(new URLSearchParams(raw));
+          } else if (raw) {
             try {
               body = JSON.parse(raw);
             } catch {

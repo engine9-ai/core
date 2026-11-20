@@ -40,7 +40,18 @@ import {
 } from './roles.js';
 import { ROLE_NAMES } from './roleNames.js';
 import { isSuperadmin } from './superadmins.js';
-import { loginMode, loginTableReady, personForSignIn, loginRoleIds, loginHash, addSignInAddress, SIGN_IN_OFF_MESSAGE } from './logins.js';
+import {
+  loginMode,
+  loginTableReady,
+  personForSignIn,
+  loginRoleIds,
+  addSignInAddress,
+  identityLevel,
+  signInLinkTarget,
+  useSignInLink,
+  LOGIN_MIN_LEVEL,
+  SIGN_IN_OFF_MESSAGE
+} from './logins.js';
 
 /** In-memory JWKS (createLocalJWKSet) keyed by delegateUrl. */
 const delegateJwksCache = new Map();
@@ -91,11 +102,6 @@ const DELEGATE_LOGIN_ERRORS = {
     message: 'This identity token is not valid for this domain. Please sign in again.'
   },
   // The sign-in stops (auth/logins.js). The Login button shows each with its choices.
-  other_login: {
-    kind: 'auth',
-    message:
-      'This email address belongs to someone here who signs in with a different address. Sign in with that address, or choose "This isn\'t me".'
-  },
   login_reassigned: {
     kind: 'auth',
     message:
@@ -104,6 +110,21 @@ const DELEGATE_LOGIN_ERRORS = {
   login_locked: {
     kind: 'auth',
     message: 'This sign-in is turned off. Ask the site\'s administrator.'
+  },
+  // Core signs nobody in below Identity Level 2 and never asks Delegate for
+  // less, so this is a token from somewhere else or an old session.
+  level_too_low: {
+    kind: 'auth',
+    message: 'This site signs you in with a confirmed email address or phone. Please sign in again.'
+  },
+  // Sign-in links (an admin emails one; no Delegate).
+  link_invalid: {
+    kind: 'auth',
+    message: 'This sign-in link is not valid or has expired. Ask the person who sent it for a new one.'
+  },
+  link_used: {
+    kind: 'auth',
+    message: 'This sign-in link was already used, or you have signed in since it was sent. Ask for a new one.'
   },
   // The database has no @engine9/schemas/login: the site has no sign-in.
   sign_in_off: {
@@ -234,7 +255,10 @@ export function createDelegateLoginFailure(reason, { detail } = {}) {
  */
 export const LOGIN_TOKEN_TTL_SECONDS = 300;
 
-/** Browser URL that starts Identity Token authorize. */
+/**
+ * Browser URL that starts Identity Token authorize. `min_level` is always 2
+ * or more: core signs nobody in below Level 2, so it never asks for less.
+ */
 export function delegateIdentityUrl({
   delegateUrl,
   domain,
@@ -264,7 +288,7 @@ export function delegateIdentityUrl({
   // Why the site sends a signed-in person back: Delegate shows its share
   // screen with a notice in its own words. The only value is access_denied.
   if (reason === 'access_denied') url.searchParams.set('reason', reason);
-  if (minLevel !== undefined) url.searchParams.set('min_level', String(minLevel));
+  url.searchParams.set('min_level', String(Math.max(LOGIN_MIN_LEVEL, Number(minLevel) || 0)));
   if (maxLevel !== undefined) url.searchParams.set('max_level', String(maxLevel));
   if (fields) url.searchParams.set('fields', Array.isArray(fields) ? fields.join(',') : fields);
   if (optionalFields) {
@@ -565,11 +589,15 @@ export function delegateConfirmedEmail(delegateUser) {
 /*
   Find the person a Delegate login signs in as.
 
+  Sign-in starts at Identity Level 2. A token below it stops with
+  level_too_low before anything is read or written, in every mode: people
+  who do not sign in are never sent to Delegate.
+
   With person_login (after `e9core upgrade` creates it), the login table
-  decides, never dedupe alone: see auth/logins.js. A sign-in can stop with
-  other_login (and a masked address), login_reassigned, or login_locked; the
-  thrown failure carries `reason` and `masked`. `newAccount` is the
-  person's "This isn't me" after an other_login stop.
+  decides, never dedupe: see auth/logins.js. A first sign-in with no login
+  is a new person. A sign-in
+  can stop with login_reassigned or login_locked; the thrown failure
+  carries `reason`.
 
   Before the upgrade (loginMode 'legacy'), the lookup from earlier
   releases: a confirmed email through the people pipeline, else the Domain
@@ -586,12 +614,14 @@ export async function resolveDelegateLogin({
   remoteInputId = 'delegate',
   inputType = 'api',
   person = {},
-  newAccount = false,
   readOnly = false
 }) {
   if (!worker) throw new Error('resolveDelegatePersonId requires a worker (PersonWorker)');
   if (!delegateUser?.domainUnid) throw new Error('resolveDelegatePersonId requires delegateUser.domainUnid');
   const email = delegateConfirmedEmail(delegateUser);
+  if (identityLevel({ level: delegateUser.level, email }) < LOGIN_MIN_LEVEL) {
+    throw createDelegateLoginFailure('level_too_low', { detail: `Identity Level ${delegateUser.level ?? 'none'}` });
+  }
   const mode = await loginMode(worker);
   if (mode === 'off') throw createDelegateLoginFailure('sign_in_off');
   if (mode === 'on') {
@@ -601,16 +631,13 @@ export async function resolveDelegateLogin({
         pluginId,
         identity: { subject: delegateUser.domainUnid, mergedFrom: delegateUser.mergedFrom, email, level: delegateUser.level },
         person,
-        newAccount,
         readOnly,
         remoteInputId,
         inputType
       });
     } catch (e) {
       if (!e?.loginStop) throw e;
-      const failure = createDelegateLoginFailure(e.reason, { detail: e.message });
-      if (e.masked !== undefined) failure.masked = e.masked;
-      throw failure;
+      throw createDelegateLoginFailure(e.reason, { detail: e.message });
     }
   }
   if (readOnly) throw new Error('readOnly sign-in lookups need person_login: run e9core upgrade');
@@ -657,6 +684,11 @@ export async function resolveDelegatePersonId(options) {
 
 export const SESSION_TOKEN_TYPE = 'e9.session';
 export const LOGIN_REQUEST_TOKEN_TYPE = 'e9.login';
+/** A sign-in link an admin emails (createSignInLink). Never accepted as a session. */
+export const SIGN_IN_LINK_TOKEN_TYPE = 'e9.signin_link';
+/** How long a sign-in link works by default, and at most. */
+export const SIGN_IN_LINK_SECONDS = 24 * 3600;
+export const SIGN_IN_LINK_MAX_SECONDS = 7 * 24 * 3600;
 
 function randomToken() {
   return crypto.randomBytes(16).toString('base64url');
@@ -982,6 +1014,8 @@ export function createDelegateAuth({
   function verify(token) {
     const payload = verifySessionToken(token, { secret: sessionSecret });
     if (!payload || !Number.isInteger(payload.personId)) return null;
+    // A sign-in below Level 2 (from an earlier release) is not a sign-in.
+    if (typeof payload.level === 'number' && payload.level < LOGIN_MIN_LEVEL) return null;
     return withSuperadmin({
       personId: payload.personId,
       roles: Array.isArray(payload.roles) ? payload.roles.filter((id) => typeof id === 'string') : [],
@@ -1159,14 +1193,8 @@ export function createDelegateAuth({
     cookie, other state, other nonce) throws `state_mismatch`: send the
     browser to sign in again, do not show an error. Always send
     `clearCookie` (also on the thrown error) so the request is used once.
-
-    One exception: an `other_login` stop keeps the request open for the
-    person's "This isn't me". The error carries `retryCookie` (send it
-    instead of clearCookie), a copy of the request marked with the Delegate
-    account that stopped. finishLogin(sameToken, { state, cookie, newAccount:
-    true }) then signs in as a new person, once, for that account only.
   */
-  async function finishLogin(token, { state, cookie, cookieName = 'e9_login', secure, newAccount = false, ...loginOptions } = {}) {
+  async function finishLogin(token, { state, cookie, cookieName = 'e9_login', secure, ...loginOptions } = {}) {
     const raw = readCookie(cookie, cookieName);
     const pending = raw
       ? verifySessionToken(raw, { secret: sessionSecret, typ: LOGIN_REQUEST_TOKEN_TYPE })
@@ -1179,29 +1207,11 @@ export function createDelegateAuth({
       failure.clearCookie = clearCookie;
       throw failure;
     }
-    // "This isn't me" is honored only for the account this request stopped.
-    const allowNew = Boolean(newAccount) && typeof pending.stopped === 'string' && pending.stopped.length > 0;
     try {
-      const result = await login(token, {
-        ...loginOptions,
-        nonce: pending.nonce,
-        newAccount: allowNew,
-        ...(allowNew ? { requireSubjectHash: pending.stopped } : {})
-      });
+      const result = await login(token, { ...loginOptions, nonce: pending.nonce });
       return { ...result, clearCookie, data: pending.data };
     } catch (err) {
-      if (err && typeof err === 'object') {
-        err.clearCookie = clearCookie;
-        if (err.reason === 'other_login' && err.stoppedSubjectHash && !allowNew) {
-          const ttl = Math.max(60, Math.min(LOGIN_REQUEST_TTL_SECONDS, (pending.exp || 0) - Math.floor(Date.now() / 1000)));
-          const value = createSessionToken(
-            { state: pending.state, nonce: pending.nonce, ...(pending.data === undefined ? {} : { data: pending.data }), stopped: err.stoppedSubjectHash },
-            { secret: sessionSecret, ttlSeconds: ttl, typ: LOGIN_REQUEST_TOKEN_TYPE }
-          );
-          err.retryCookie = createSessionCookieHeaders(value, { cookieName, maxAge: ttl, secure: Boolean(secure) });
-        }
-        delete err.stoppedSubjectHash;
-      }
+      if (err && typeof err === 'object') err.clearCookie = clearCookie;
       throw err;
     }
   }
@@ -1254,7 +1264,7 @@ export function createDelegateAuth({
   */
   async function login(
     token,
-    { person = {}, returnTo, domain: domainOverride, fallbackDomain, nonce, newAccount = false, requireSubjectHash } = {}
+    { person = {}, returnTo, domain: domainOverride, fallbackDomain, nonce } = {}
   ) {
     if (classifyDelegateLoginToken(token) !== 'jwt') {
       throw createDelegateLoginFailure('invalid_identity_token', {
@@ -1272,25 +1282,14 @@ export function createDelegateAuth({
       fetchImpl
     });
 
-    const subjectHash = loginHash(delegateUser.domainUnid);
-    if (requireSubjectHash && requireSubjectHash !== subjectHash) {
-      throw createDelegateLoginFailure('state_mismatch', { detail: '"This isn\'t me" belongs to a different sign-in' });
-    }
-    let personId;
-    try {
-      ({ personId } = await resolveDelegateLogin({
-        worker,
-        delegateUser,
-        pluginId,
-        remoteInputId,
-        inputType,
-        person,
-        newAccount
-      }));
-    } catch (err) {
-      if (err?.reason === 'other_login') err.stoppedSubjectHash = subjectHash;
-      throw err;
-    }
+    const { personId } = await resolveDelegateLogin({
+      worker,
+      delegateUser,
+      pluginId,
+      remoteInputId,
+      inputType,
+      person
+    });
     const base = { personId, domainUnid: delegateUser.domainUnid, email: delegateUser.email, level: delegateUser.level };
     const sessionRoles = loadRolesOnLogin
       ? (await loginTableReady(worker))
@@ -1315,6 +1314,53 @@ export function createDelegateAuth({
     return { session: withSuperadmin(session), token: issueToken(session), delegateUser };
   }
 
+  /*
+    Sign-in links: an admin emails a person a link that signs them in
+    without Delegate. Core makes and checks it with SESSION_SECRET (it is
+    core's own, never an outside sender's); `login: true` and its own token
+    type keep it apart from sessions and link tokens. It works once, for an
+    address with an active login (auth/logins.js, signInLinkTarget), and
+    the session is Identity Level 2.
+  */
+  async function createSignInLink({ email, next, ttlSeconds = SIGN_IN_LINK_SECONDS, audit, actor } = {}) {
+    const seconds = Math.min(Math.max(Math.floor(Number(ttlSeconds) || SIGN_IN_LINK_SECONDS), 60), SIGN_IN_LINK_MAX_SECONDS);
+    const expiresAt = new Date(Date.now() + seconds * 1000).toISOString();
+    const target = await signInLinkTarget({ worker, email, audit, actor, expiresAt });
+    const token = createSessionToken(
+      { login: true, email: target.email, after: target.stamp, ...(next ? { next: String(next) } : {}) },
+      { secret: sessionSecret, ttlSeconds: seconds, typ: SIGN_IN_LINK_TOKEN_TYPE }
+    );
+    return { token, email: target.email, person_id: target.personId, expires_at: expiresAt };
+  }
+
+  /** A sign-in link's contents ({ email, next? }) when it is genuine and unexpired, else null. Reads nothing. */
+  function readSignInLink(token) {
+    const link = token ? verifySessionToken(String(token), { secret: sessionSecret, typ: SIGN_IN_LINK_TOKEN_TYPE }) : null;
+    return link && link.login === true && typeof link.email === 'string' ? link : null;
+  }
+
+  /** Use a sign-in link: { session, token, next }. Throws a login failure with `reason`. */
+  async function finishSignInLink(token) {
+    const link = readSignInLink(token);
+    if (!link) throw createDelegateLoginFailure('link_invalid');
+    let personId;
+    try {
+      ({ personId } = await useSignInLink({ worker, email: link.email, stamp: link.after ?? null }));
+    } catch (e) {
+      if (e?.reason) throw createDelegateLoginFailure(e.reason, { detail: e.message });
+      throw e;
+    }
+    const session = {
+      personId,
+      roles: [],
+      email: link.email,
+      auth: { signInProvider: 'email_link', twoFactor: false },
+      level: LOGIN_MIN_LEVEL
+    };
+    if (loadRolesOnLogin) session.roles = await loginRoleIds({ worker, session, roleIds });
+    return { session: withSuperadmin(session), token: issueToken(session), next: link.next };
+  }
+
   return {
     /** The Delegate host this provider verifies tokens from (the browser must use the same). */
     delegateUrl,
@@ -1324,6 +1370,9 @@ export function createDelegateAuth({
     finishLogin,
     finishAddAddress,
     readLoginRequest,
+    createSignInLink,
+    readSignInLink,
+    finishSignInLink,
     login,
     verify,
     verifySession,

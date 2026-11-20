@@ -9,10 +9,12 @@
   table is tested on its own.
 
   Invariants (internal audit plan): I1 a login carries a non-self-join role
-  only if an admin named it; I3 two Delegate accounts never share a person
-  unless an admin linked them or one added the other; I4 an account keeps
-  its person; I8 a stop carries no person_id and no full address; I10 below
-  Level 2 nothing is written and no strong role is carried.
+  only if an admin named it; I2 a first sign-in never lands on a record found
+  by its address or Domain UNID (only a login, or a new person);
+  I3 two Delegate accounts never share a person unless an admin linked them
+  or one added the other; I4 an account keeps its person; I8 a stop carries
+  no person_id and no full address; I10 a token below Level 2 is refused and
+  writes nothing, and a session below Level 2 holds no role.
 
   The randomized runs use fixed seeds; FUZZ_OPS changes their length.
 */
@@ -47,9 +49,7 @@ import {
   linkLogin,
   retireLogin,
   unlockLogin,
-  addSignInAddress as addSignInAddressReal,
-  maskEmail,
-  maskedLoginOf
+  addSignInAddress as addSignInAddressReal
 } from '../auth/logins.js';
 import { filterPublicRows } from '../api/publicRows.js';
 import { backfillPersonLogin } from '@engine9/schemas/login/upgrades.js';
@@ -66,15 +66,14 @@ async function graphByEmail(w, email) {
 
 const FOUND_BY = { granted_email: 'granted-email', retired_address: 'retired-address' };
 
-/** Sign in with a token { email?, sub, mergedFrom?, level }. A stop is { stop, masked }. */
-async function signIn(ctx, tok, { notMine = false } = {}) {
+/** Sign in with a token { email?, sub, mergedFrom?, level }. A stop is { stop }. */
+async function signIn(ctx, tok) {
   const level = tok.level ?? 3;
   try {
     const r = await personForSignIn({
       worker: ctx.worker,
       pluginId: ctx.pluginId,
-      identity: { subject: tok.sub, mergedFrom: tok.mergedFrom, email: tok.email, level },
-      newAccount: notMine
+      identity: { subject: tok.sub, mergedFrom: tok.mergedFrom, email: tok.email, level }
     });
     return {
       personId: r.personId,
@@ -82,8 +81,8 @@ async function signIn(ctx, tok, { notMine = false } = {}) {
       session: { personId: r.personId, sub: tok.sub, domainUnid: tok.sub, email: tok.email, level }
     };
   } catch (e) {
-    if (!e.loginStop) throw e;
-    return e.reason === 'other_login' ? { stop: e.reason, masked: e.masked ?? null } : { stop: e.reason };
+    if (!e.loginStop && e.reason !== 'level_too_low') throw e;
+    return { stop: e.reason };
   }
 }
 
@@ -175,22 +174,19 @@ for (const [name, importRow, plant] of [
   ['C remote id', { email: ADMIN, remote_person_id: `${getPluginUUID('acct', 'crm')}.1001` }, () => ({ email: INVADER, remote_person_id: `${getPluginUUID('acct', 'crm')}.1001` })],
   ['G identifiers', { email: ADMIN }, () => ({ email: INVADER, identifiers: [{ path: 'person_email', type: 'email_hash_v1', value: emailHash(ADMIN) }] })]
 ]) {
-  test(`attack ${name}: invader stops at other_login, sees only the admin's masked address; "This isn't me" is an empty person`, async () => {
+  test(`attack ${name}: a poisoned graph does not reach sign-in; the invader is a new person with no role`, async () => {
     const ctx = await setup();
-    await ctx.trustedImport([importRow]);
-    const { personId: adminPid } = await grant(ctx, ADMIN, ctx.admin);
+    const [imported] = await ctx.trustedImport([importRow]);
+    await link(ctx, { email: ADMIN }, imported);
+    await grant(ctx, ADMIN, ctx.admin);
     await signIn(ctx, ctx.tok(ADMIN));
-    await ctx.publicPost([plant(adminPid)]);
-    assert.equal(await graphByEmail(ctx.worker, INVADER), adminPid, 'graph is poisoned');
+    await ctx.publicPost([plant(imported)]);
+    assert.equal(await graphByEmail(ctx.worker, INVADER), imported, 'graph is poisoned');
     assert.deepEqual(await rolesForEmail(ctx, INVADER), none);
     const r = await signIn(ctx, ctx.tok(INVADER));
-    assert.equal(r.stop, 'other_login');
-    assert.equal(r.masked, maskEmail(ADMIN), 'the admin address, masked: the enumeration cost of the mask before the input patch');
-    assertStopLeaksNothing(r, ADMIN);
-    // "Sign in with a different address": Delegate's share screen. The invader holds no token for ADMIN.
-    const mine = await signIn(ctx, ctx.tok(INVADER), { notMine: true });
-    assert.notEqual(mine.personId, adminPid);
-    assert.deepEqual(await rolesForSession(ctx, mine.session), none);
+    assert.equal(r.stop, undefined, 'no stop, and nothing about the admin');
+    assert.notEqual(r.personId, imported);
+    assert.deepEqual(await rolesForSession(ctx, r.session), none);
     assert.deepEqual(await rolesForSession(ctx, (await signIn(ctx, ctx.tok(ADMIN))).session), [ctx.admin]);
   });
 }
@@ -211,26 +207,26 @@ test("attack E: pre-plant the future admin's address on the invader's own person
   const mine = await signIn(ctx, ctx.tok(INVADER));
   await ctx.publicPost([{ email: ADMIN, person_id: mine.personId }]);
   const g = await grant(ctx, ADMIN, ctx.admin);
-  assert.notEqual(g.personId, mine.personId);
-  assert.match(g.note, /signs in with another address/);
+  assert.notEqual(g.personId, mine.personId, 'a grant never lands on a record found by the address');
+  assert.match(g.note, new RegExp(`also on person ${mine.personId}`), 'the note names it, for the admin to judge');
   assert.deepEqual(await rolesForSession(ctx, (await signIn(ctx, ctx.tok(INVADER))).session), none);
   const a = await signIn(ctx, ctx.tok(ADMIN));
   assert.equal(a.personId, g.personId);
   assert.deepEqual(await rolesForSession(ctx, a.session), [ctx.admin]);
 });
 
-test("attack E': pre-plant on a person nobody signs in as; the grant lands there, the invader stops", async () => {
+test("attack E': pre-plant on a person nobody signs in as; the grant makes its own person, the invader gets nothing", async () => {
   const ctx = await setup();
   const [planted] = await ctx.publicPost([{ email: INVADER }]);
   await ctx.publicPost([{ email: ADMIN, person_id: planted }]);
   const g = await grant(ctx, ADMIN, ctx.admin);
-  assert.equal(g.personId, planted);
+  assert.notEqual(g.personId, planted);
   const r = await signIn(ctx, ctx.tok(INVADER));
-  assert.equal(r.stop, 'other_login');
-  assert.equal(r.masked, maskEmail(ADMIN), 'a granted address is an active email login even before its first sign-in');
-  assertStopLeaksNothing(r, ADMIN);
+  assert.equal(r.stop, undefined);
+  assert.ok(![planted, g.personId].includes(r.personId), 'the invader is a new person');
+  assert.deepEqual(await rolesForSession(ctx, r.session), none);
   const a = await signIn(ctx, ctx.tok(ADMIN));
-  assert.equal(a.personId, planted);
+  assert.equal(a.personId, g.personId);
   assert.deepEqual(await rolesForSession(ctx, a.session), [ctx.admin]);
 });
 
@@ -238,25 +234,28 @@ test("attack: the victim's address planted on the invader's person cannot lock t
   const ctx = await setup();
   const inv = await signIn(ctx, ctx.tok(INVADER));
   await ctx.publicPost([{ email: VICTIM, person_id: inv.personId }]);
-  const r = await signIn(ctx, ctx.tok(VICTIM));
-  assert.equal(r.stop, 'other_login');
-  assert.equal(r.masked, maskEmail(INVADER), "the victim sees the invader's address masked: useless to them");
-  const v = await signIn(ctx, ctx.tok(VICTIM), { notMine: true });
-  assert.notEqual(v.personId, inv.personId);
+  const v = await signIn(ctx, ctx.tok(VICTIM));
+  assert.equal(v.stop, undefined, 'no stop');
+  assert.notEqual(v.personId, inv.personId, "the victim never lands on the invader's person");
   assert.equal((await signIn(ctx, ctx.tok(VICTIM))).personId, v.personId, 'and stays their own');
 });
 
-test('attack: a role written by person_id onto an adopted person reaches no adopted login', async () => {
+test('attack: a planted phone does not carry the invader into the victim\'s record, in either order', async () => {
   const ctx = await setup();
   const [victim] = await ctx.trustedImport([{ email: VICTIM, phone: '202-555-0199' }]);
   await ctx.publicPost([{ email: INVADER, phone: '202-555-0199' }]);
+  assert.equal(await graphByEmail(ctx.worker, INVADER), victim, 'dedupe joined the address by phone');
   const inv = await signIn(ctx, ctx.tok(INVADER));
-  assert.equal(inv.personId, victim, 'RESIDUAL without the input patch: invader adopts the unclaimed imported person');
+  assert.notEqual(inv.personId, victim, 'sign-in never finds a record by its address');
   await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: victim, segment_id: ctx.admin }] });
   assert.deepEqual(await rolesForSession(ctx, inv.session), none);
-  const g = await grant(ctx, VICTIM, ctx.admin);
-  assert.notEqual(g.personId, victim, 'grant by email to a claimed person makes a new person');
-  assert.deepEqual(await rolesForSession(ctx, (await signIn(ctx, ctx.tok(INVADER))).session), none);
+  // The other order: signed in first, then the plant.
+  const ctx2 = await setup();
+  const first = await signIn(ctx2, ctx2.tok(INVADER));
+  const [victim2] = await ctx2.trustedImport([{ email: VICTIM, phone: '202-555-0199' }]);
+  await ctx2.publicPost([{ email: INVADER, phone: '202-555-0199' }]);
+  assert.equal((await signIn(ctx2, ctx2.tok(INVADER))).personId, first.personId);
+  assert.notEqual(first.personId, victim2);
 });
 
 test('attack: reassigned address (new Delegate account, same email) stops at login_reassigned', async () => {
@@ -276,14 +275,14 @@ test('attack: reassigned address (new Delegate account, same email) stops at log
   assert.equal((await signIn(ctx, ctx.tok(ADMIN))).stop, 'login_locked', 'the old account cannot come back on its own');
 });
 
-test('attack: unlink by DELETE would reopen the person for adoption (why unlink locks)', async () => {
+test('attack: deleting logins never hands the person to the next holder of the address (and strands its owner: why unlink retires)', async () => {
   const ctx = await setup();
-  const [pid] = await ctx.trustedImport([{ email: ADMIN }]);
-  await grant(ctx, ADMIN, ctx.admin);
+  const g = await grant(ctx, ADMIN, ctx.admin);
   await signIn(ctx, ctx.tok(ADMIN));
-  await ctx.worker.query({ sql: `delete from person_login where person_id=?`, values: [pid] });
+  await ctx.worker.query({ sql: `delete from person_login where person_id=?`, values: [g.personId] });
   const n = await signIn(ctx, ctx.tok(ADMIN, { n: 1 }));
-  assert.equal(n.personId, pid, 'deleting the rows lets the next holder of the address adopt the old person');
+  assert.notEqual(n.personId, g.personId, 'a new person');
+  assert.deepEqual(await rolesForSession(ctx, n.session), none);
 });
 
 test('use: an admin with several addresses from before the release (a herd of cats)', async () => {
@@ -324,9 +323,16 @@ test('attack: self-service add-address cannot take a login that belongs to someo
 });
 
 /* ================= use cases ================= */
-test('use: imported person, granted by email, signs in (subject bound on first sign-in)', async () => {
+test('use: imported person: link the address, then grant; the first sign-in lands there (subject bound on first sign-in)', async () => {
   const ctx = await setup();
   const [pid] = await ctx.trustedImport([{ email: ADMIN, phone: '202-555-0143' }]);
+  const plain = await setup();
+  const [pid2] = await plain.trustedImport([{ email: ADMIN }]);
+  const g2 = await grant(plain, ADMIN, plain.admin);
+  assert.notEqual(g2.personId, pid2, 'a grant alone makes its own person');
+  assert.match(g2.note, new RegExp(`signin link --email ${ADMIN} --person ${pid2}`));
+
+  await link(ctx, { email: ADMIN }, pid);
   assert.equal((await grant(ctx, ADMIN, ctx.admin)).personId, pid);
   const s = await signIn(ctx, ctx.tok(ADMIN));
   assert.equal(s.personId, pid);
@@ -376,34 +382,29 @@ test('use: admin lost the old account; another admin links the new address', asy
   assert.deepEqual(await rolesForSession(ctx, s.session), [ctx.admin]);
 });
 
-test('use: work and personal address on one person, two Delegate accounts', async () => {
+test('use: work and personal address on one record: an admin links one, the person adds the other', async () => {
   const ctx = await setup();
   const crm = getPluginUUID('acct', 'crm');
   const [pid] = await ctx.trustedImport([{ email: 'pat@work.example', remote_person_id: `${crm}.7` }]);
   await ctx.trustedImport([{ email: 'pat@home.example', remote_person_id: `${crm}.7` }]);
+  await link(ctx, { email: 'pat@work.example' }, pid);
   const work = await signIn(ctx, ctx.tok('pat@work.example'));
   assert.equal(work.personId, pid);
-  const home = await signIn(ctx, ctx.tok('pat@home.example'));
-  assert.equal(home.stop, 'other_login');
-  assert.equal(home.masked, maskEmail('pat@work.example'), 'the prompt shows which address to use');
-  // Delegate share screen -> "Use a different account": the person signs in as their work Delegate User.
-  const viaCode = await signIn(ctx, ctx.tok('pat@work.example'));
-  assert.equal(viaCode.personId, pid);
-  assert.ok((await addSignInAddress(ctx, viaCode.session, ctx.tok('pat@home.example'))).ok);
+  assert.ok((await addSignInAddress(ctx, work.session, ctx.tok('pat@home.example'))).ok);
   assert.equal((await signIn(ctx, ctx.tok('pat@home.example'))).personId, pid);
 });
 
-test('use: household on one imported record; the second partner chooses "not my account"', async () => {
+test('use: household on one imported record: each partner signs in to a record of their own', async () => {
   const ctx = await setup();
   const crm = getPluginUUID('acct', 'crm');
   const [pid] = await ctx.trustedImport([{ email: 'john@example.com', remote_person_id: `${crm}.9` }]);
   await ctx.trustedImport([{ email: 'jane@example.com', remote_person_id: `${crm}.9` }]);
-  assert.equal((await signIn(ctx, ctx.tok('john@example.com'))).personId, pid);
+  const john = await signIn(ctx, ctx.tok('john@example.com'));
   const jane = await signIn(ctx, ctx.tok('jane@example.com'));
-  assert.equal(jane.stop, 'other_login');
-  const own = await signIn(ctx, ctx.tok('jane@example.com'), { notMine: true });
-  assert.notEqual(own.personId, pid);
-  assert.equal((await signIn(ctx, ctx.tok('jane@example.com'))).personId, own.personId);
+  assert.equal(jane.stop, undefined);
+  assert.ok(![pid, john.personId].includes(jane.personId));
+  assert.notEqual(john.personId, pid);
+  assert.equal((await signIn(ctx, ctx.tok('jane@example.com'))).personId, jane.personId);
 });
 
 test('use: Facebook/Microsoft admin with no verified email, through the upgrade', async () => {
@@ -413,11 +414,16 @@ test('use: Facebook/Microsoft admin with no verified email, through the upgrade'
   await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: pid, segment_id: ctx.admin }] });
   const rep = await backfill(ctx);
   assert.deepEqual(rep.noAddress, [pid], 'listed under login.review');
+  // No login: a new person, never the record a Domain UNID is filed under
+  // (a people:write key can file one anywhere). The admin grants the role again.
   const s = await signIn(ctx, fb);
-  assert.equal(s.personId, pid, 'adopts the same person by subject');
-  assert.deepEqual(await rolesForSession(ctx, s.session), none, 'admin filtered until linked');
-  await link(ctx, { subject: fb.sub }, pid);
-  assert.deepEqual(await rolesForSession(ctx, (await signIn(ctx, fb)).session), [ctx.admin]);
+  assert.notEqual(s.personId, pid);
+  assert.equal(s.foundBy, 'new');
+  assert.deepEqual(await rolesForSession(ctx, s.session), none, 'no role until an admin grants it to the new record');
+  await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: s.personId, segment_id: ctx.admin }] });
+  const again = await signIn(ctx, fb);
+  assert.equal(again.personId, s.personId);
+  assert.deepEqual(await rolesForSession(ctx, again.session), [ctx.admin]);
 });
 
 test('use: Delegate merged two accounts (merged_from)', async () => {
@@ -452,56 +458,41 @@ test('use: typo in a grant; diagnosis and fix', async () => {
   assert.deepEqual(await rolesForSession(ctx, (await signIn(ctx, ctx.tok('pat@example.com'))).session), [ctx.admin]);
 });
 
-test('use: self-join member role on an adopted login, by level', async () => {
+const rowCount = async (ctx) => Number((await ctx.worker.query({ sql: 'select count(*) as n from person_login' })).data[0].n);
+const personCount = async (ctx) => Number((await ctx.worker.query({ sql: 'select count(*) as n from person' })).data[0].n);
+
+test('level: a session below Level 2 holds no role, not even a self-join one', async () => {
   const ctx = await setup();
-  const [pid] = await ctx.trustedImport([{ email: 'pat@example.com' }]);
   const s = await signIn(ctx, ctx.tok('pat@example.com', { level: 2 }));
-  assert.equal(s.personId, pid);
-  await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: pid, segment_id: ctx.member }] });
+  await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: s.personId, segment_id: ctx.member }] });
   assert.deepEqual(await rolesForSession(ctx, s.session), [ctx.member]);
-  assert.deepEqual(await rolesForSession(ctx, { ...s.session, level: 1 }), [ctx.member]);
+  assert.deepEqual(await rolesForSession(ctx, { ...s.session, level: 1 }), none);
   assert.deepEqual(await rolesForSession(ctx, { ...s.session, level: 0 }), none);
 });
 
-const rowCount = async (ctx) => Number((await ctx.worker.query({ sql: 'select count(*) as n from person_login' })).data[0].n);
-
-test('level: Level 0 and Level 1 sign-ins write no login', async () => {
+test('level: Level 0 and Level 1 tokens are refused and write nothing', async () => {
   const ctx = await setup();
-  const [pid] = await ctx.trustedImport([{ email: 'pat@example.com' }]);
+  await ctx.trustedImport([{ email: 'pat@example.com' }]);
   const t = ctx.tok('pat@example.com');
-  const v0 = await signIn(ctx, { sub: t.sub, level: 0 });
-  const v1 = await signIn(ctx, { ...t, level: 1 }); // max_level=1 can cap a token whose email is verified
+  const people = await personCount(ctx);
+  assert.equal((await signIn(ctx, { sub: t.sub, level: 0 })).stop, 'level_too_low');
+  assert.equal((await signIn(ctx, { ...t, level: 1 })).stop, 'level_too_low', 'even with a verified address (max_level=1)');
   assert.equal(await rowCount(ctx), 0);
-  assert.equal(v0.personId, v1.personId, 'the visitor is found again by its Domain UNID, as today');
-  assert.notEqual(v1.personId, pid, 'below Level 2 the address does not pick a person');
+  assert.equal(await personCount(ctx), people, 'no person, no Domain UNID filed');
   const real = await signIn(ctx, t);
-  assert.equal(real.personId, pid, 'the first Level 2+ sign-in adopts the imported person');
+  assert.ok(real.personId);
   assert.equal(await rowCount(ctx), 2);
 });
 
-test("level: a Level 0 visit before a granted admin's first sign-in does not take the admin's place", async () => {
+test('level: an existing login below Level 2 is refused too', async () => {
   const ctx = await setup();
   const g = await grant(ctx, ADMIN, ctx.admin);
   const t = ctx.tok(ADMIN);
-  await signIn(ctx, { sub: t.sub, level: 0 });
-  const real = await signIn(ctx, t);
-  assert.equal(real.personId, g.personId);
-  assert.deepEqual(await rolesForSession(ctx, real.session), [ctx.admin]);
-});
-
-test('level: below Level 2 an existing login signs in with self-join roles only', async () => {
-  const ctx = await setup();
-  const g = await grant(ctx, ADMIN, ctx.admin);
-  await ctx.worker.upsertArray({ table: 'person_segment', array: [{ person_id: g.personId, segment_id: ctx.member }] });
-  const t = ctx.tok(ADMIN);
-  await signIn(ctx, t);
+  assert.equal((await signIn(ctx, t)).personId, g.personId);
   const before = await rowCount(ctx);
-  const low = await signIn(ctx, { sub: t.sub, level: 1 });
-  assert.equal(low.personId, g.personId);
-  assert.deepEqual(await rolesForSession(ctx, low.session), [ctx.member]);
+  assert.equal((await signIn(ctx, { sub: t.sub, level: 1 })).stop, 'level_too_low');
   assert.equal(await rowCount(ctx), before);
-  await retirePerson(ctx, g.personId);
-  assert.equal((await signIn(ctx, { sub: t.sub, level: 0 })).stop, 'login_locked');
+  assert.deepEqual(await rolesForSession(ctx, { personId: g.personId, sub: t.sub, email: ADMIN, level: 1 }), none);
 });
 
 test('use: Microsoft (unverified) before Google (verified) for a granted admin', async () => {
@@ -554,41 +545,19 @@ test('use: erasing a person removes the logins; the next sign-in is a new person
   assert.ok(again.personId);
 });
 
-test('use: one Delegate User holds both addresses; the granted one is picked on the share screen', async () => {
+test('use: one Delegate User holds both addresses and signs in with the other one first; an admin links the account', async () => {
   const ctx = await setup();
-  const crm = getPluginUUID('acct', 'crm');
-  const [pid] = await ctx.trustedImport([{ email: 'pat@work.example', remote_person_id: `${crm}.5` }]);
-  await ctx.trustedImport([{ email: 'pat@home.example', remote_person_id: `${crm}.5` }]);
-  await grant(ctx, 'pat@work.example', ctx.admin);
+  const g = await grant(ctx, 'pat@work.example', ctx.admin);
   const sub = subFor('pat'); // one Delegate User, two addresses
   const home = await signIn(ctx, { email: 'pat@home.example', sub, level: 3 });
-  assert.equal(home.stop, 'other_login');
-  assert.equal(home.masked, maskEmail('pat@work.example'));
-  const picked = await signIn(ctx, { email: 'pat@work.example', sub, level: 3 }); // picked on Delegate's share screen
-  assert.equal(picked.personId, pid);
-  assert.deepEqual(await rolesForSession(ctx, picked.session), [ctx.admin]);
-  const later = await signIn(ctx, { email: 'pat@home.example', sub, level: 3 });
-  assert.equal(later.personId, pid, 'the subject is bound now, so either address works');
-});
-
-test('use: PII-free site shows no masked address', async () => {
-  const ctx = await setup();
-  const crm = getPluginUUID('acct', 'crm');
-  await ctx.trustedImport([{ email: 'pat@work.example', remote_person_id: `${crm}.6` }]);
-  await ctx.trustedImport([{ email: 'pat@home.example', remote_person_id: `${crm}.6` }]);
-  await signIn(ctx, ctx.tok('pat@work.example'));
-  // A PII-free account keeps hashes only: no person_email table to read an address from.
-  await ctx.worker.query('drop table person_email');
-  const r = await signIn(ctx, ctx.tok('pat@home.example'));
-  assert.equal(r.stop, 'other_login');
-  assert.equal(r.masked, null);
-});
-
-test('mask format', () => {
-  assert.equal(maskEmail('vinox@gmail.com'), 'v***x@g***l.com');
-  assert.equal(maskEmail('Ab@x.org'), 'a***@x***.org');
-  assert.equal(maskEmail('jo@mail.example.co.uk'), 'j***@m***l.example.co.uk');
-  assert.equal(maskEmail('a.very.long.name@company.com'), 'a***e@c***y.com', 'length does not show');
+  assert.notEqual(home.personId, g.personId, 'a new person: the address it used has no login');
+  const picked = await signIn(ctx, { email: 'pat@work.example', sub, level: 3 });
+  assert.equal(picked.personId, home.personId, 'subject first: the account stays on its person');
+  assert.deepEqual(await rolesForSession(ctx, picked.session), none);
+  await link(ctx, { subject: sub }, g.personId); // e9core signin link --subject
+  const after = await signIn(ctx, { email: 'pat@work.example', sub, level: 3 });
+  assert.equal(after.personId, g.personId);
+  assert.deepEqual(await rolesForSession(ctx, after.session), [ctx.admin]);
 });
 
 /* ================= the input filter =================
@@ -642,32 +611,19 @@ for (const [name, importRow, plant] of [
   });
 }
 
-test('filter: a phone on the admin record joins the graph, but sign-in stops and holds no role', async () => {
+test('filter: a phone on the admin record joins the graph, but sign-in never reaches it', async () => {
   const ctx = await setup();
-  await ctx.trustedImport([{ email: ADMIN, phone: '202-555-0143' }]);
-  const { personId: adminPid } = await grant(ctx, ADMIN, ctx.admin);
+  const [adminPid] = await ctx.trustedImport([{ email: ADMIN, phone: '202-555-0143' }]);
+  await link(ctx, { email: ADMIN }, adminPid);
+  await grant(ctx, ADMIN, ctx.admin);
   await signIn(ctx, ctx.tok(ADMIN));
   await ctx.patchedPost([{ email: INVADER, phone: '(202) 555-0143' }]);
   assert.equal(await graphByEmail(ctx.worker, INVADER), adminPid, 'dedupe joins by phone, as before');
   const r = await signIn(ctx, ctx.tok(INVADER));
-  assert.equal(r.stop, 'other_login', 'the admin signs in as that person: the invader stops');
-  const mine = await signIn(ctx, ctx.tok(INVADER), { notMine: true });
-  assert.notEqual(mine.personId, adminPid);
-  assert.deepEqual(await rolesForSession(ctx, mine.session), none);
-  assert.deepEqual(await rolesForEmail(ctx, INVADER), none);
-});
-
-test('filter: closes the masked-address enumeration through a planted person_id', async () => {
-  const ctx = await setup();
-  const { personId: adminPid } = await grant(ctx, ADMIN, ctx.admin);
-  const before = await setup();
-  const g2 = await grant(before, ADMIN, before.admin);
-  await before.publicPost([{ email: 'probe1@attacker.example', person_id: g2.personId }]);
-  assert.equal((await signIn(before, before.tok('probe1@attacker.example'))).masked, maskEmail(ADMIN), 'unfiltered: the probe reads the mask');
-  await ctx.patchedPost([{ email: 'probe1@attacker.example', person_id: adminPid }]);
-  const r = await signIn(ctx, ctx.tok('probe1@attacker.example'));
-  assert.equal(r.stop, undefined, 'filtered: the probe is just a new person');
+  assert.equal(r.stop, undefined);
   assert.notEqual(r.personId, adminPid);
+  assert.deepEqual(await rolesForSession(ctx, r.session), none);
+  assert.deepEqual(await rolesForEmail(ctx, INVADER), none);
 });
 
 test("filter: the victim's address cannot be put on the invader's person", async () => {
@@ -680,23 +636,21 @@ test("filter: the victim's address cannot be put on the invader's person", async
   assert.equal(victim.stop, undefined, 'the victim signs in normally');
 });
 
-test('known gap: a planted phone reaches an unclaimed person (no login, no role); adoption carries no role', async () => {
-  // Dedupe joins by phone, so an invader who knows the phone of a person
-  // nobody signs in as is adopted into that record at a first sign-in. No
-  // role: an adopted login carries self-join roles only. Documented in
-  // CHANGELOG 1.22.0 ("What this release does not change").
+test('closed: a planted phone no longer reaches a person nobody signs in as (the gap before every first sign-in was a new person)', async () => {
   const ctx = await setup();
   const [victim] = await ctx.trustedImport([{ email: VICTIM, phone: '202-555-0199' }]);
   await ctx.patchedPost([{ email: INVADER, phone: '202-555-0199' }]);
   const inv = await signIn(ctx, ctx.tok(INVADER));
-  assert.equal(inv.personId, victim);
-  assert.deepEqual(await rolesForSession(ctx, inv.session), none);
+  assert.notEqual(inv.personId, victim);
+  const v = await signIn(ctx, ctx.tok(VICTIM));
+  assert.equal(v.stop, undefined, 'and the owner is not locked out');
+  assert.notEqual(v.personId, inv.personId);
 });
 
 /* ================= randomized invariants ================= */
 function prng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32); }
 for (const seed of [1, 2, 3, 4, 5, 6]) {
-  test(`fuzz seed ${seed}: no public write raises anyone's roles; no two humans share a person; stops leak no address`, async () => {
+  test(`fuzz seed ${seed}: no public write raises anyone's roles; no sign-in lands on an imported record; no two humans share a person; stops leak no address`, async () => {
     const ctx = await setup();
     const rnd = prng(seed);
     const pick = (a) => a[Math.floor(rnd() * a.length)];
@@ -706,6 +660,7 @@ for (const seed of [1, 2, 3, 4, 5, 6]) {
     const granted = new Set();
     const personOf = new Map();
     const knownPids = new Set();
+    const importedNew = new Set(); // people an import created
     const ops = [];
     const N = Number(process.env.FUZZ_OPS || 45);
     for (let i = 0; i < N; i++) {
@@ -723,7 +678,10 @@ for (const seed of [1, 2, 3, 4, 5, 6]) {
       } else if (op === 'import') {
         const row = { email: h.email, phone: pick(phones), remote_person_id: `${crm}.${Math.floor(rnd() * 3)}` };
         ops.push(['import', row]);
-        (await ctx.trustedImport([row])).forEach((p) => p && knownPids.add(p));
+        (await ctx.trustedImport([row])).forEach((p) => {
+          if (p && !knownPids.has(p)) importedNew.add(p);
+          if (p) knownPids.add(p);
+        });
       } else if (op === 'grant') {
         if (!h.verified) continue;
         ops.push(['grant', h.email]);
@@ -731,21 +689,23 @@ for (const seed of [1, 2, 3, 4, 5, 6]) {
         granted.add(h.email);
         knownPids.add(g.personId);
       } else {
-        const level = pick([0, 1, 3, 3, 3, 3]);
+        const level = pick([0, 1, 2, 3, 3, 3]);
         const microsoft = h.verified && rnd() < 0.2; // same Delegate account, no verified address
         const t0 = ctx.tok(h.email, { verified: h.verified && !microsoft });
         const t = { ...t0, level };
         const rowsBefore = await rowCount(ctx);
         let r = await signIn(ctx, t);
         if (r.stop) assertStopLeaksNothing(r, ...humans.map((x) => x.email));
-        if (r.stop === 'other_login') r = await signIn(ctx, t, { notMine: true });
         ops.push(['signin', h.email, level, microsoft ? 'ms' : '', r.stop || r.personId]);
-        if (level < 2) assert.equal(await rowCount(ctx), rowsBefore, `a Level ${level} sign-in wrote a login\n${JSON.stringify(ops)}`);
+        if (level < 2) {
+          assert.equal(r.stop, 'level_too_low', `a Level ${level} sign-in was not refused\n${JSON.stringify(ops)}`);
+          assert.equal(await rowCount(ctx), rowsBefore, `a Level ${level} sign-in wrote a login\n${JSON.stringify(ops)}`);
+        }
         if (r.stop) continue;
         knownPids.add(r.personId);
         const roles = await rolesForSession(ctx, r.session);
         if (roles.includes(ctx.admin)) assert.ok(granted.has(h.email) && level >= 2, `${h.email} is admin without a grant, or below Level 2\n${JSON.stringify(ops)}`);
-        if (r.foundBy === 'visitor') continue; // a Level 0/1 visitor with no login yet
+        assert.ok(!importedNew.has(r.personId), `I2: ${h.email} signed in to a person an import created\n${JSON.stringify(ops)}`);
         if (personOf.has(h.email) && r.foundBy !== 'granted-email') assert.equal(r.personId, personOf.get(h.email), `${h.email} changed person\n${JSON.stringify(ops)}`);
         personOf.set(h.email, r.personId);
         for (const [other, pid] of personOf) if (other !== h.email) assert.notEqual(pid, r.personId, `${h.email} and ${other} share a person\n${JSON.stringify(ops)}`);

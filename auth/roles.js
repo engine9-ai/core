@@ -18,10 +18,9 @@
 
   Email is the key, through the login table. Adding an email to a role
   segment (one the `roles` plugin made, or `login: true`) names a login:
-  the address gets a `granted` row in person_login (auth/logins.js), on the
-  person that address already signs in as, or on an unclaimed person dedupe
-  holds, or on a new person. A grant never lands on a person someone else
-  already signs in as. Whoever signs in with that verified address holds the
+  the address gets a `granted` row in person_login (auth/logins.js): on the
+  person that address already signs in as, else on a new person, never on a
+  record found by the address. Whoever signs in with that verified address holds the
   role. Before `e9core upgrade` creates person_login, on a database with no
   sign-in (no @engine9/schemas/login), and for any other segment, an email is
   found or created through the inbound pipeline. Without sign-in nobody
@@ -451,7 +450,7 @@ export async function personHasRole({ worker, personId, roleId } = {}) {
  * Role ids (segment ids) held by the login for this email, limited to
  * `roleIds`; used by hosts that only know an email (the engine9 server
  * checking an account database at login). With person_login: an active email
- * login only (it never reads person_email or adopts); pass `subject` when
+ * login only (it never reads person_email or dedupe); pass `subject` when
  * known. Before the upgrade: the person who owns the email. A database with
  * no @engine9/schemas/login after the upgrade has no sign-in: no roles.
  */

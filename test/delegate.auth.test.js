@@ -108,52 +108,46 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
     });
     assert.notEqual(other, personId);
 
-    const unverified = await resolveDelegatePersonId({
-      worker,
-      pluginId,
-      delegateUser: {
-        domainUnid: domainUnidOf('site.example.com', 'd'),
-        email: 'unverified-unique@example.com',
-        emailVerified: false,
-        level: 0
-      }
-    });
-    const { data: unverifiedEmails } = await worker.query({
-      sql: 'select email from person_email where person_id=?',
-      values: [unverified]
-    });
-    assert.equal(unverifiedEmails.length, 0, 'unverified level 0 email is not copied onto the person');
-    const unverifiedAgain = await resolveDelegatePersonId({
-      worker,
-      pluginId,
-      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'd'), level: 1 }
-    });
-    assert.equal(unverifiedAgain, unverified, 'with no confirmed email the Domain UNID finds the person');
+    // Sign-in starts at Level 2: Level 0 and 1 tokens are refused, and nothing is written.
+    const peopleBefore = (await worker.query('select id from person')).data.length;
+    for (const level of [0, 1, undefined]) {
+      await assert.rejects(
+        resolveDelegatePersonId({
+          worker,
+          pluginId,
+          delegateUser: { domainUnid: domainUnidOf('site.example.com', 'd'), email: 'unverified@example.com', emailVerified: false, level }
+        }),
+        (e) => e.reason === 'level_too_low',
+        `Level ${level} is refused`
+      );
+    }
+    assert.equal((await worker.query('select id from person')).data.length, peopleBefore, 'no person for a refused token');
     const { data: delegateIds } = await worker.query('select person_id from person_id_delegate');
     assert.deepEqual(
-      delegateIds.map((r) => Number(r.person_id)).sort((a, b) => a - b),
-      [phoneOnly, unverified].sort((a, b) => a - b),
-      'only the logins without a confirmed email stored a Domain UNID'
+      delegateIds.map((r) => Number(r.person_id)),
+      [phoneOnly],
+      'only the login without a confirmed email stored a Domain UNID'
     );
 
     const browserOne = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'e') }
+      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'e'), level: 2 }
     });
     const mergedBrowser = await resolveDelegatePersonId({
       worker,
       pluginId,
       delegateUser: {
         domainUnid: domainUnidOf('site.example.com', 'f'),
-        mergedFrom: domainUnidOf('site.example.com', 'e')
+        mergedFrom: domainUnidOf('site.example.com', 'e'),
+        level: 2
       }
     });
     assert.equal(mergedBrowser, browserOne, 'merged_from links the earlier Domain UNID to the same person');
     const afterMerge = await resolveDelegatePersonId({
       worker,
       pluginId,
-      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'f') }
+      delegateUser: { domainUnid: domainUnidOf('site.example.com', 'f'), level: 2 }
     });
     assert.equal(afterMerge, browserOne, 'the canonical Domain UNID now resolves on its own');
   } finally {
@@ -161,17 +155,18 @@ test('delegate identities dedupe through the person pipeline (id_type "delegate"
   }
 });
 
-test('one Delegate account is one person; an address core already has is adopted once', async () => {
+test('one Delegate account is one person; a first sign-in is a new person, even for an address core already has', async () => {
   const worker = new PersonWorker({ accountId: 'test', auth: { database_connection: 'sqlite://:memory:' } });
   try {
     await applyWebsitePlugins(worker);
     const pluginId = getPluginUUID('engine9.test', 'test-delegate-plugin');
     await ensurePluginRow(worker, { id: pluginId, path: 'test-delegate-plugin', name: 'Test Delegate Plugin' });
-    const login = (email, unid = UNID_A) =>
-      resolveDelegatePersonId({ worker, pluginId, delegateUser: { domainUnid: unid, email, emailVerified: true, level: 3 } });
+    const login = (email, unid = UNID_A, level = 3) =>
+      resolveDelegatePersonId({ worker, pluginId, delegateUser: { domainUnid: unid, email, emailVerified: true, level } });
     const add = async (record) =>
       (await worker.processPeople({ pluginId, remoteInputId: 'import', inputType: 'api', batch: [record] }))
         .personIds[0];
+    const count = async () => Number((await worker.query('select count(*) as n from person')).data[0].n);
 
     const home = await login('pat@home.example');
     const work = await login('pat@work.example');
@@ -179,14 +174,18 @@ test('one Delegate account is one person; an address core already has is adopted
     assert.equal(await login('pat@home.example'), home);
 
     const roster = await add({ email: 'sam@work.example', given_name: 'Sam' });
-    assert.equal(await login('sam@work.example', domainUnidOf('site.example.com', 'sam')), roster, 'an address core already has is adopted');
+    const before = await count();
+    const sam = await login('sam@work.example', domainUnidOf('site.example.com', 'sam'));
+    assert.notEqual(sam, roster, 'never a record found by the address');
+    assert.equal(await count(), before + 1, 'exactly one new person, no strays');
 
-    // Two addresses core joined, two Delegate accounts: the first adopts the
-    // person, the second is asked to sign in with the first address.
-    const joined = await add({ email: 'lee@home.example' });
-    await add({ person_id: joined, email: 'lee@work.example' });
-    assert.equal(await login('lee@work.example', domainUnidOf('site.example.com', 'lee-w')), joined);
-    await assert.rejects(login('lee@home.example', domainUnidOf('site.example.com', 'lee-h')), (e) => e.reason === 'other_login' && e.masked === 'l***e@w***k.example');
+    // A Domain UNID already on a record (an earlier sign-in, or a people:write
+    // import) does not pick the person: a first sign-in is a new person.
+    const earlierUnid = domainUnidOf('site.example.com', 'earlier');
+    const earlier = (
+      await worker.processPeople({ pluginId, remoteInputId: 'crm', inputType: 'api', batch: [{ email: 'donor@example.com', delegate_id: earlierUnid }] })
+    ).personIds[0];
+    assert.notEqual(await login('vic@example.com', earlierUnid), Number(earlier), 'never the record a Domain UNID is filed under');
   } finally {
     await worker.destroy();
   }

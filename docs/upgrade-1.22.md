@@ -15,10 +15,15 @@ From this release, each site keeps a short list of **who can sign in, and as
 which person**, much like the list of accounts on a computer. Only three
 things add to it:
 
-- someone signing in, which adds them as a new person or a matching record
-  nobody signs in as yet;
-- an administrator giving someone access by email;
-- the upgrade, which copies today's administrators onto the list.
+- someone signing in for the first time, which adds them as a new person;
+- an administrator giving someone access by email, or linking an address to
+  a record that already exists;
+- the upgrade, which copies today's administrators, and everyone who has
+  signed in before, onto the list.
+
+A first sign-in never matches a record because the address is on it. Forms
+can attach an address to a record through other details, such as a phone
+number, so an address on a record does not prove whose record it is.
 
 Forms keep working as before. A form can no longer point its row at
 someone else's record (by a record number or a hidden id), and nothing a form
@@ -37,7 +42,15 @@ The same three steps as every release:
 2. **Deploy.**
 3. **Run the upgrade.** This step matters this time: on a site where people
    sign in, it adds the login plugin, builds the sign-in list, and copies
-   every current administrator onto it, with all of their email addresses.
+   onto it every current administrator, with all of their email addresses,
+   and every address people have already signed in with.
+
+Before step 3, decide one thing: **should people on file who have never
+signed in find their own record the first time they do?** Imported donors
+or members, for example, who should see their history. If yes, add
+`--all-addresses` to the upgrade, once (next section). If not, they get a
+fresh record at their first sign-in, and an administrator can link
+anyone's address to their record later.
 
 **If your site is set up in GitHub only (no terminal):** run the deploy
 workflow (GitHub: Actions, Deploy, Run workflow). It updates, deploys, and
@@ -53,8 +66,33 @@ npx e9core upgrade --url https://www.example.com
 npx e9core status --url https://www.example.com
 ```
 
-The dry run tells you how many administrators it will copy (`person_login`:
+The dry run tells you how many addresses it will copy (`person_login`:
 `role_holders`, `addresses`) and lists anything it cannot copy (below).
+
+### People on file who have never signed in
+
+By default the upgrade copies administrators' addresses and the addresses
+people already signed in with. To copy **every** address on file as well:
+
+```bash
+npx e9core upgrade --url https://www.example.com --all-addresses --dry-run
+npx e9core upgrade --url https://www.example.com --all-addresses
+```
+
+In GitHub only: run the deploy workflow by hand with command `upgrade` and
+options `--all-addresses`.
+
+Do this once, when sign-in is turned on. An address that is on two records
+is copied for neither and listed under `conflicts`. Addresses that arrive
+after the upgrade (a form, an import) are never on the list until an
+administrator links them:
+
+```bash
+npx e9core signin link --email dana@example.org --person 1234
+```
+
+Then invite the person. Their first sign-in lands on record 1234. Tools that
+link many addresses, or join records, follow [merge-tools.md](merge-tools.md).
 
 ### How the upgrade knows your site has sign-in
 
@@ -82,12 +120,17 @@ options `--plugin @engine9/schemas/login`.
 
 ### Between the deploy and the upgrade
 
-Nothing breaks. Until the upgrade runs, sign-in works exactly as it did, and
+Nothing breaks. Until the upgrade runs, sign-in finds people as it did, and
 `e9core status` says so in plain words:
 
 > **Sign-in is still using the old rules: run the upgrade**
 
 Run the upgrade soon: until you do, the site does not have the new protection.
+
+One change starts at the deploy: sign-in now always confirms an email
+address or phone (Identity Level 2). Only a site that signed people in with
+less (`signIn.minLevel` 0 or 1) notices; see
+[What people signing in will notice](#what-people-signing-in-will-notice).
 
 ### After the upgrade
 
@@ -107,9 +150,8 @@ browser as an administrator) shows three new lines:
 
 - **Someone signs in through Facebook or Microsoft and never confirmed an
   email address there.** The upgrade has no address to copy. Their next
-  sign-in finds their record but without administrator access. Another
-  administrator restores it: `npx e9core signin explain --person <id>`,
-  then `npx e9core signin link --subject <the account> --person <id>`.
+  sign-in finds their record by their Delegate account, with their access,
+  and the line clears.
 - **One email address was on two administrators' records.** The upgrade
   cannot tell whose it is, so it copies it for neither and lists it in the
   upgrade result (`conflicts`). Give it to the right person:
@@ -123,26 +165,31 @@ in, even when every administrator is stuck.
 
 Almost always, nothing. The Login button looks the same.
 
-A person who has more than one email address on file, and signs in with a
-different one than last time, now sees a message in the Login button instead
-of quietly getting a second, empty account:
+Someone who is on file but whose address is not on the list (they never
+signed in, and nobody linked them) gets a fresh record at their first
+sign-in. They do not see the old record's history until an administrator
+links their address to it. Two people who share one record, such as a
+household, each get their own.
 
-> This email address belongs to someone here who signs in with a different
-> address: v\*\*\*x@g\*\*\*l.com. Sign in with that address instead.
+Someone who signed in before without an email address (with a phone, or a
+Microsoft or Facebook account that shared none) also gets a fresh record at
+their next sign-in. If they hold a role, `e9core status` lists them under
+`login.review`: give the role to their new record
+(`npx e9core segment add --segment admin --person-id <new id>`).
 
-It offers two choices:
-
-- **Sign in with a different address.** Delegate opens with the person's
-  addresses to pick from, a way to add one, or an emailed code.
-- **This isn't me: continue with this address.** For two people who share
-  one record, such as a household. It makes a separate account.
-
-Two other messages say to ask the site's administrator: an address now used
-by a different Delegate account (someone reused an old colleague's address),
-and a sign-in an administrator turned off.
+Two messages say to ask the site's administrator: an address now used by a
+different Delegate account (someone reused an old colleague's address), and
+a sign-in an administrator turned off.
 
 People can now add a second address themselves, in the Login button's
 dialog, and then stop using the old one.
+
+Sign-in now always confirms an email address or a phone (Identity Level 2).
+On a site that used to sign people in with less (`signIn.minLevel` 0 or 1),
+those people get an emailed code or a provider sign-in, and anyone signed
+in at a lower level is signed out once. People who only fill in forms or
+open emails are not asked to sign in: their petition, their sends, and
+their clicks join by the address they send.
 
 ## For the person who maintains the code
 
@@ -159,9 +206,13 @@ rg -n "person_id|identifiers|remoteInputId|issueToken|rolesForPerson|rolesForEma
 | A form that sends `options.remoteInputId: 'delegate'` with the public key | Ignored, with a warning: that input is sign-in's. Any other value works as before |
 | Code that mints a Core Session with `issueToken({ personId, roles })`, on a site with the login plugin | Roles are read from the database on every request, never from the token. Give the person the role (`person_segment`) and a login (`e9core signin link`). Without the login plugin, sessions work as before |
 | A Delegate sign-in at Identity Level 2 whose email is not verified (a verified phone) | The address is no longer used to find the person. Every site, with or without the login plugin |
-| Code that grants a role by email (`addPeople`, `segment add --email`, `POST /api/auth/segments`) | Works as before. The address gets a login. If the address is on a record someone else signs in as, the grant makes a new person and says so (`notes`); use `e9core signin link` if that was the intent |
+| Code that grants a role by email (`addPeople`, `segment add --email`, `POST /api/auth/segments`) | The address gets a login. An address with no login gets a new person, never the record the address is on; `notes` names that record. To grant on an existing record, `e9core signin link` the address there first, then grant |
+| Code that writes a people row with its own `person_id` | Unchanged, except that the pipeline no longer creates an extra, empty person for it |
+| A tool that merges records or links logins in bulk | Follow [merge-tools.md](merge-tools.md) |
 | The server's `rolesForEmail({ worker, email, roleIds })` | Reads the sign-in list only. Pass `subject` when you have it |
-| A sign-in page of the site's own around `auth.login` | Handle the three new reasons (`other_login`, `login_reassigned`, `login_locked`), or use the Login button, which does |
+| A sign-in page of the site's own around `auth.login` | Handle the new reasons (`login_reassigned`, `login_locked`, `sign_in_off`, `level_too_low`), or use the Login button, which does |
+| `signIn.minLevel` (or `E9_SIGN_IN`) set to 0 or 1, or `identityUrl({ minLevel: 1 })` | Core asks Delegate for Level 2 anyway. Set `2` or remove it. A role with `join_min_level` or `requiredAuth.minLevel` 1 now means anyone signed in |
+| A page that follows people who do not sign in through a Level 0 or 1 Delegate session | Put the address in the form posted with the public key, and import sends and clicks with the email provider's plugin. Delegate is for signing in |
 | An agent host that maps an Agent Credential to a person | Call `personForSignIn({ worker, identity, readOnly: true })` from `@engine9/core/auth/logins` on each request |
 
 New commands, for administrators (`--db` or `--url` with the admin key):
@@ -192,9 +243,11 @@ The upgrade runs once: after it, the list exists and the upgrade reports
 `current`. If the list was created some other way (`e9core install --plugin
 @engine9/schemas/login` on a database that already had administrators),
 `e9core status` shows role holders with no way to sign in. Then:
-`npx e9core upgrade --backfill-logins`.
-It adds missing addresses only and never changes a login that was locked or
-retired.
+`npx e9core upgrade --backfill-logins`. It copies addresses only for role
+holders who have no login at all, and never changes an existing login.
+`--all-addresses` works only on the run that turns sign-in on: an address
+joined to a record after that is never a login until an administrator
+links it.
 
 ### A new site, or a site adding sign-in later
 
@@ -207,7 +260,8 @@ purpose. A new site lists it after the edition in `package.json`, before
 ```
 
 A site that already has a database adds it, and copies today's
-administrators in, with `npx e9core upgrade --plugin @engine9/schemas/login`.
+administrators in, with `npx e9core upgrade --plugin @engine9/schemas/login`
+(add `--all-addresses` to copy every address on file).
 
 ## Reference
 
@@ -215,3 +269,4 @@ administrators in, with `npx e9core upgrade --plugin @engine9/schemas/login`.
   [auth/README.md](../auth/README.md).
 - Requirements: [PERMISSIONS.md](../PERMISSIONS.md) PL-13.
 - The upgrade: `person_login` in `@engine9/schemas/login`.
+- Joining records and linking logins: [merge-tools.md](merge-tools.md).

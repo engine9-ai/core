@@ -17,8 +17,13 @@ Who has to act:
 - **Every site:** upgrade both packages, deploy, run `npx e9core upgrade`
   (a GitHub-only site: run the deploy workflow). On a site where people sign
   in, the upgrade adds the login plugin (`@engine9/schemas/login`), builds
-  the sign-in list, and copies every current admin's addresses onto it.
-  Between the deploy and the upgrade, sign-in works as before.
+  the sign-in list, and copies onto it every current admin's addresses and
+  every address people already signed in with. Between the deploy and the
+  upgrade, sign-in works as before.
+- **A site whose people should find their records at their first sign-in**
+  (donors, members imported from a CRM): decide how before the upgrade.
+  From this release a first sign-in with no login is a new person; see
+  "People on file" below.
 - **A data-only database** (nobody signs in): nothing to do. It gets no
   login plugin, and nothing about it changes except the form filter below.
 - **A new site that signs people in:** add the login plugin on purpose. No
@@ -26,17 +31,28 @@ Who has to act:
 - **Hosts that mint Core Sessions with roles in them**, or that call
   `rolesForEmail`: on a site with the login plugin, roles come through the
   login (tables below).
+- **A site that signs people in at Identity Level 0 or 1**
+  (`signIn.minLevel` 0 or 1): sign-in now starts at Level 2, so those
+  people confirm an address. People who only fill in forms or receive
+  email never needed to sign in: their activity joins by the address they
+  send.
 
 Until now, sign-in and the server's admin check found the person through
 dedupe (the identifier store and `person_email`), which a public form could
 write: a `POST /people` row pairing an attacker's address with an admin's
 `person_id`, phone, `remote_person_id`, or raw `identifiers` made the
 attacker that admin at their next sign-in. Sign-in now reads `person_login`
-(the `@engine9/schemas/login` plugin), which only sign-in, an admin's grant,
-and the admin `signin` commands write ([auth/logins.js](auth/logins.js),
-[PERMISSIONS.md](PERMISSIONS.md) PL-13). The login code is reached only from
-the sign-in routes, role grants by email, status, and the `signin` commands.
-The people pipeline, dedupe, and `POST /people` never read it.
+(the `@engine9/schemas/login` plugin), which only sign-in, an admin's grant
+or link, the admin `signin` commands, and the plugin's upgrade write
+([auth/logins.js](auth/logins.js), [PERMISSIONS.md](PERMISSIONS.md) PL-13).
+A first sign-in with no login is a new person: sign-in never reaches a
+record because its address is on it, so nothing a form joins to a record
+(an address, through a phone) can give anyone that record. Joining a login
+to existing history is an explicit act: an admin's link, the upgrade's
+one-time copy, or a merge tool ([docs/merge-tools.md](docs/merge-tools.md)).
+The login code is reached only from the sign-in routes, role grants by
+email, status, and the `signin` commands. The people pipeline, dedupe, and
+`POST /people` never read it.
 
 ### What behaves differently on every site
 
@@ -45,39 +61,42 @@ The people pipeline, dedupe, and `POST /people` never read it.
 | 1 | **Public form filter.** For a key with the `public` scope, `POST /people` removes the fields that point a row at a record: `person_id` (kept only when it is the signed-in person's own and the row has no email or the signed-in address), `identifiers`, `delegate_id`, `delegate_merged_from`, `email_hash_*`, `phone_hash_*`, `confirmation_status`, and a `<plugin uuid>.<id>` `remote_person_id`. `options.remoteInputId: 'delegate'` is ignored. Each one is listed in a new `warnings` array; the request still succeeds and the rest of the row goes through the pipeline exactly as before. A pure filter of the request (`api/publicRows.js`): no database reads, no sign-in logic | Forms that sent those fields; a profile form that changed a signed-in person's email by sending their `person_id` (the row now files under the new address) | No |
 | 2 | **`delegateConfirmedEmail` trusts `email_verified` only.** Identity Level 2 alone can mean a verified phone, so an unverified address no longer finds a person at sign-in (it is keyed by the Domain UNID instead) | People who sign in at Level 2 with a verified phone and an unverified email | No |
 | 3 | `/api/auth/start?reason=access_denied` asks Delegate for `login_level=2` unless `signIn.loginLevel` says otherwise, so the share screen offers an emailed code | Sites with access-denied links | No |
+| 4 | **A people row that names its `person_id` no longer creates an extra, empty person.** The pipeline gave such a row a new person it never used; the row's data always went on the named person | Counts of `person` rows; nothing else | No |
+| 5 | **Sign-in starts at Identity Level 2** (a confirmed address or phone). Core always asks Delegate for at least Level 2: `/api/auth/start`, the Login button, and `auth.identityUrl` raise a lower `signIn.minLevel` to 2. A token below Level 2 stops with `level_too_low` before anything is read or written; a session below Level 2 is no session; no role is held below Level 2, not even a self-join one. People who do not sign in are joined by what they send (imports, forms), never through Delegate | Sites with `signIn.minLevel` 0 or 1: their people are asked for an emailed code or a provider sign-in. Roles with `join_min_level` or `requiredAuth.minLevel` 1 now mean "anyone signed in" | No |
 
 ### What behaves differently on a site with the login plugin
 
 | # | Change | Who notices | Breaks a build? |
 | --- | --- | --- | --- |
-| 4 | **`person_login` decides who a sign-in is:** the Delegate account's login first, then a `merged_from` login, then the verified address's login. No login: dedupe names a person nobody signs in as (adopted: self-join roles only), or a new person. A person someone already signs in as is never handed to a second account automatically | Everyone who signs in | No |
-| 5 | **Sign-in stops**, shown by the Login button: `other_login` (a masked address, **Sign in with a different address**, **This isn't me**), `login_reassigned`, `login_locked`. `/api/auth/callback` shows the same choices without JavaScript. The dialog is `@engine9/id` 1.17.0 | People with several addresses on file who sign in with a different one; a reused address | No |
-| 6 | **Below Identity Level 2 nothing is written.** A Level 0 or 1 sign-in reads its login (self-join roles only) or is a visitor found by Domain UNID, as before | Sites with `min_level` 0 or 1 | No |
-| 7 | **Roles are read through the login on every request** (PL-8). The `roles` copy in a session token is not used. Locking or retiring a login, or removing a role, takes effect on the next request. One more database read per request with a session. New: `auth.refreshSession`, `auth.heldRolesForSession` | Code that mints sessions with `issueToken({ personId, roles })` for people who have no login | Yes, for that code: give the person a login |
-| 8 | **Grants by email name a login.** `addPeople`, `e9core segment add --email`, and `POST /auth/segments` for a role segment write a `granted` login; a grant never lands on a person someone else signs in as (it makes a new person and says so in `notes`). Other segments: as before | Admins | No |
-| 9 | **`rolesForEmail` reads `person_login` only** (an active email login). Pass `subject` when known | The engine9 server and hosts that check admins by email | No |
-| 10 | **New:** `e9core signin list \| explain \| link \| lock \| unlock \| retire` (`--db`, or `--url` through `POST /api/admin/logins`), each writing the audit log (`login.*`); Add a sign-in address (`POST /api/auth/add-address`) and retiring one of your own (`POST /api/auth/retire-address`), both in the Login button | Admins; people who change address | No |
-| 11 | **Status:** `login.review` (role holders with no way to sign in), `login.stale` (role holders silent for 90 days) | Admins | No |
+| 6 | **`person_login` decides who a sign-in is:** the Delegate account's login first, then a `merged_from` login, then the verified address's login. No login: **a new person**, even when the address, or the Delegate account's Domain UNID, is on a record. Someone who signed in before without an email address (a phone, Microsoft, Facebook) gets a new record at their next sign-in; `login.review` lists the role holders among them, and an admin grants the role to the new record | Everyone who signs in | No |
+| 7 | **People on file who never signed in** get a new person at their first sign-in, unless their address is a login. The upgrade copies role holders' addresses and every address sign-in wrote; `npx e9core upgrade --all-addresses` copies every address on file, once. Later, an admin links an address before inviting the person (`e9core signin link --email … --person <id>`) | Sites that show people their own history (donations, tickets) | No |
+| 8 | **Sign-in stops**, shown by the Login button: `login_reassigned`, `login_locked`, `sign_in_off`. `/api/auth/callback` shows the same message without JavaScript. The dialog is `@engine9/id` 1.17.0 | A reused address; a locked login | No |
+| 9 | **Roles are read through the login on every request** (PL-8). The `roles` copy in a session token is not used. Locking or retiring a login, or removing a role, takes effect on the next request. One more database read per request with a session. New: `auth.refreshSession`, `auth.heldRolesForSession` | Code that mints sessions with `issueToken({ personId, roles })` for people who have no login | Yes, for that code: give the person a login |
+| 10 | **Grants by email name a login.** `addPeople`, `e9core segment add --email`, and `POST /auth/segments` for a role segment write a `granted` login. An address with no login gets a new person; when the address is on a record, `notes` names it so the admin can link it first and grant again. Other segments: as before | Admins | No |
+| 11 | **`rolesForEmail` reads `person_login` only** (an active email login). Pass `subject` when known | The engine9 server and hosts that check admins by email | No |
+| 12 | **New:** `e9core signin list \| explain \| link \| lock \| unlock \| retire` (`--db`, or `--url` through `POST /api/admin/logins`), each writing the audit log (`login.*`); Add a sign-in address (`POST /api/auth/add-address`) and retiring one of your own (`POST /api/auth/retire-address`), both in the Login button | Admins; people who change address | No |
+| 13 | **Status:** `login.review` (role holders with no way to sign in), `login.stale` (role holders silent for 90 days) | Admins | No |
 
 ### A site without the login plugin
 
 | # | Change | Who notices | Breaks a build? |
 | --- | --- | --- | --- |
-| 12 | **Before this release's upgrade** (the database's person plugin was last installed by `@engine9/schemas` older than 1.15.0): sign-in works exactly as before. `login.table` fails: run the upgrade | Every site, between deploy and upgrade | No |
-| 13 | **After it, without the plugin: no sign-in.** Every Delegate sign-in stops with `sign_in_off` (`/api/auth/start` shows a page saying so; the Login button says so), and `rolesForEmail` returns no role. Sessions a host issues itself, and role checks on them, work as before. `login.table` fails when the site has sign-in set up and is silent on a data-only database. `e9core upgrade` adds the plugin where people sign in: the site has sign-in (`POST /admin/upgrade` passes `sign_in`), or someone holds a role. `npx e9core upgrade --plugin @engine9/schemas/login` adds it to any database | Sites with sign-in upgraded with `--db` and no admins yet; new sites that did not add the plugin | No |
+| 14 | **Before this release's upgrade** (the database's person plugin was last installed by `@engine9/schemas` older than 1.15.0): sign-in works exactly as before. `login.table` fails: run the upgrade | Every site, between deploy and upgrade | No |
+| 15 | **After it, without the plugin: no sign-in.** Every Delegate sign-in stops with `sign_in_off` (`/api/auth/start` shows a page saying so; the Login button says so), and `rolesForEmail` returns no role. Sessions a host issues itself, and role checks on them, work as before. `login.table` fails when the site has sign-in set up and is silent on a data-only database. `e9core upgrade` adds the plugin where people sign in: the site has sign-in (`POST /admin/upgrade` passes `sign_in`), or someone holds a role. `npx e9core upgrade --plugin @engine9/schemas/login` adds it to any database | Sites with sign-in upgraded with `--db` and no admins yet; new sites that did not add the plugin | No |
+
+### New, for sites that want them
+
+| # | Change | Who notices | Breaks a build? |
+| --- | --- | --- | --- |
+| 16 | **Link tokens** for one-click forms in email ([docs/link-tokens.md](docs/link-tokens.md)). A sender signs an ES256 JWT (`typ: e9-link+jwt`) naming the recipient's `person_id`; the site lists senders' public keys (`config.linkIssuers`, `E9_LINK_ISSUERS`); `POST /people` with `options.linkToken` files one row that names no address or phone on that person. Never a session, a role, or a sign-in. New: `@engine9/core/auth/linkTokens`, `e9core link-token keys \| make` | Sites with one-click petitions or surveys in email | No |
+| 17 | **Sign-in links** without Delegate ([docs/sign-in.md](docs/sign-in.md#sign-in-links)). `e9core signin invite --email … --url …` (`POST /admin/logins` `action: invite`) makes a link for an address with an active login; `GET /api/auth/link` shows a Sign in button, `POST /api/auth/link` from it signs in once at Level 2. Audited as `login.signin_link`. New: `auth.createSignInLink`, `readSignInLink`, `finishSignInLink`. Form posts (`application/x-www-form-urlencoded`) are now read by `handleFetch` and `e9core serve` | Sites whose people do not use Delegate | No |
 
 ### What this release does not change
 
 - **Dedupe and the people pipeline.** Rows are joined to people exactly as
-  before. A public form that sends a new address with a phone already on
-  file joins that person, as it always has.
-- **One gap that remains, by design:** an invader who knows the phone of a
-  person nobody signs in as can join that record through a form, then sign
-  in as it (adopted). An adopted login carries self-join roles only, never
-  admin; what the invader can see is whatever the site shows a person about
-  their own record. Closing it would change dedupe for every form. Role
-  holders are not affected: they have logins, so the invader stops at
-  `other_login`.
+  before (apart from item 4). A public form that sends a new address with a
+  phone already on file joins that person, as it always has; sign-in does
+  not follow that join.
 - **`POST /people` responses** still include `personIds`, and
   `options.doNotUpsert` lookups still work with the public key.
 - **Superadmins**, matched by a confirmed email from the superadmins file.
@@ -90,11 +109,17 @@ The people pipeline, dedupe, and `POST /people` never read it.
 | Every site | `npm install @engine9/core@^1.22.0 @engine9/schemas@^1.15.0`, deploy, `npx e9core upgrade --url <site>`, then `npx e9core status --url <site>` |
 | A form that sends `person_id`, `identifiers`, hashes, `confirmation_status`, or another system's `remote_person_id` with the public key | Remove them; the server ignores them and lists them in `warnings` |
 | A profile form that changes the signed-in person's email | The Login button's **Add a sign-in address** |
+| A site whose people should see their own history at their first sign-in | Before or at the upgrade: `npx e9core upgrade --all-addresses` (once). After it: `e9core signin link --email <address> --person <id>`, then invite |
+| A tool that merges records or links logins in bulk | Follow [docs/merge-tools.md](docs/merge-tools.md) |
 | A new site that signs people in | `"engine9": { "install": ["@engine9/schemas/editions/contact", "@engine9/schemas/login"] }` before `setup`, or `npx e9core upgrade --plugin @engine9/schemas/login` |
 | A site with sign-in upgraded with `--db` and no admins yet (`login.table` fails afterwards) | `npx e9core upgrade --plugin @engine9/schemas/login --db …` |
-| `issueToken({ personId, roles })` for someone with no login, on a site with the login plugin | `e9core signin link --email <address> --person <id>` (or let them sign in), and the role in `person_segment` |
-| A custom sign-in page around `auth.login` | Use the Login button; or handle `other_login`, `login_reassigned`, `login_locked`, `sign_in_off` |
-| An Agent Credential host's `authenticate` | `personForSignIn({ worker, identity, readOnly: true })` per request |
+| `issueToken({ personId, roles })` for someone with no login, on a site with the login plugin | `e9core signin link --email <address> --person <id>` (or let them sign in), the role in `person_segment`, and a session that names the login and its level: `issueToken({ personId, email, level: 2 })` (or `domainUnid`; `level: 3` for a role that needs it) |
+| A custom sign-in page around `auth.login` | Use the Login button; or handle `login_reassigned`, `login_locked`, `sign_in_off`, `level_too_low` |
+| A one-click form in an email that should land on the recipient | The sender signs a link token per recipient (`e9core link-token keys`); list its public key in `E9_LINK_ISSUERS`; the page posts `options.linkToken` |
+| People who should sign in without Delegate | `e9core signin link --email … --person <id>`, then `e9core signin invite --email … --url <site>`, and email the URL |
+| `signIn.minLevel` 0 or 1, or `E9_SIGN_IN` with `"minLevel": 1` | Nothing to change; core asks for Level 2. Remove the setting, or set `2`, so the config says what happens |
+| Pages that track people who do not sign in through a Level 0 or 1 Delegate session | Send the address with the form (the public key), and import sends and clicks from the email provider's plugin |
+| An Agent Credential host's `authenticate` | After the upgrade: `personForSignIn({ worker, identity, readOnly: true })` per request. Before it (`loginMode` is `legacy`) keep the earlier lookup |
 | Role segments a host made outside the `roles` plugin, upgraded with `--db` | `npx e9core upgrade --db … --role-segments <id>,<id>` (`--url` passes `config.roles` itself) |
 | Offboarding | `npx e9core signin retire --person <id>`, then remove the role |
 

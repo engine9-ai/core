@@ -22,7 +22,7 @@ columns:
 
 | Column on `segment` | Governs | `null` means |
 | --- | --- | --- |
-| `join_min_level` | **add yourself**: lowest Identity Level allowed. `0` = a public form, no login. | not allowed |
+| `join_min_level` | **add yourself**: lowest Identity Level allowed. `0` = a public form, no login. Sign-in starts at Level 2, so `1` and `2` both mean "any signed-in person". | not allowed |
 | `leave_min_level` | **remove yourself**: lowest Identity Level allowed. Never `0`. | not allowed |
 | `manager_role_id` | **add or remove someone else**: the role whose members may. | no one |
 
@@ -268,7 +268,7 @@ await ensureRoleSegments({
     { name: 'curator', description: 'Manages club lists', scopes: ['data:read', 'people:write'],
       requiredAuth: { minLevel: 2 }, leaveMinLevel: 1 },
     { name: 'club', description: 'Signed-up club', scopes: ['data:read'],
-      requiredAuth: { minLevel: 1 }, joinMinLevel: 1, leaveMinLevel: 1, managerRole: 'curator' }
+      requiredAuth: { minLevel: 2 }, joinMinLevel: 2, leaveMinLevel: 2, managerRole: 'curator' }
   ]
 });
 // Then pass { [curatorId]: {…}, [clubId]: {…}, …admin… } in config.roles.
@@ -283,11 +283,11 @@ in core.
 | Case | Segment settings | How it happens |
 | --- | --- | --- |
 | Public newsletter | join `0`, leave `2`, manager = your curator role | Form: `POST /people` with `segment_ids`. Unsubscribe: `remove` yourself after a Level 2 login. Curator: `remove` by email. |
-| Event RSVP | join `1`, leave `2`, manager = your curator role | Signed-in Level 1: `add` yourself. Level 1 cannot `remove` themselves; Level 2 can. Ticketing backend with `tables:write`: `POST /upsert/person_segment`. |
-| Member / club area | a site role with join `1`, leave `1`, manager = curator | After login: `POST /auth/role` with that role id, or `add` yourself. Curator adds a holdout by email. |
+| Event RSVP | join `2`, leave `3`, manager = your curator role | Signed in: `add` yourself. A Level 2 sign-in (an emailed code) cannot `remove` themselves; Level 3 can. Ticketing backend with `tables:write`: `POST /upsert/person_segment`. |
+| Member / club area | a site role with join `2`, leave `2`, manager = curator | After login: `POST /auth/role` with that role id, or `add` yourself. Curator adds a holdout by email. |
 | Make a curator | site role (join `no`, leave `1`) | Admin key: `POST /auth/role` with `person_id`, or `ensureRoleSegments` + `addPeopleToSegment`. They cannot self-appoint; they can step down. |
 | Grant account admin | closed | `npx e9core segment add --segment admin --email …` (`--url <site>` for a deployed site), or `POST /auth/segments` with the admin key. Site curator roles get `403 subject: other`. Public forms get `403 subject: self`. |
-| Level 1 may add themselves, only Level 2 may remove themselves | join `1`, leave `2` | No new role. Same as RSVP. |
+| Anyone signed in may add themselves, only Level 3 may remove themselves | join `2`, leave `3` | No new role. Same as RSVP. |
 | Two teams manage one list | one `manager_role_id` | Put both teams in that one role. A segment has one manager role, like a Unix file has one group. |
 | A custom editor role | new `segment` (`category: 'role'`, `build_type: 'manual'`) + `config.roles` entry | Set `manager_role_id` on the segments editors curate. Do not give it `admin` unless it should bypass everything. |
 | Curated list, no self-service | join `null`, leave `2`, manager = curator | Only the manager role adds. People may remove themselves. |

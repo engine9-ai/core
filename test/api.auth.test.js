@@ -300,7 +300,7 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
       config: { pluginId }
     });
 
-    const token = await signIdentityJwt({ privateKey, kid, level: 1, fields: { given_name: 'Alex' } });
+    const token = await signIdentityJwt({ privateKey, kid, level: 2, fields: { given_name: 'Alex' } });
     const idHeaders = { authorization: `Bearer ${publicKeyValue}`, 'x-api-key': publicKeyValue };
 
     // The public key is the signup-form key: it may add people…
@@ -331,8 +331,18 @@ test('API login from @engine9/id: delegate option, no configured domain', async 
     });
     assert.equal(sameOrigin.status, 200, JSON.stringify(sameOrigin.body));
     assert.equal(sameOrigin.body.session.domainUnid, UNID);
-    assert.equal(sameOrigin.body.session.level, 1);
+    assert.equal(sameOrigin.body.session.level, 2);
     const sessionToken = sameOrigin.body.token;
+
+    // Sign-in starts at Level 2: a Level 1 token is refused before any lookup.
+    const levelOne = await api.handle({
+      method: 'POST',
+      path: '/auth/login',
+      headers: { ...idHeaders, origin: RETURN_ORIGIN, host: DOMAIN },
+      body: { delegate_token: await signIdentityJwt({ privateKey, kid, level: 1, sub: `${DOMAIN}:level-one` }) }
+    });
+    assert.equal(levelOne.status, 401);
+    assert.equal(levelOne.body.reason, 'level_too_low');
 
     // Host only (no Origin header), explicit default port is dropped.
     const hostOnly = await api.handle({

@@ -20,6 +20,7 @@
   the route off with `config.signIn.loginButton: false` (E9_SIGN_IN on the
   shipped Worker: `{"loginButton": false}`).
 */
+import { signInMinLevel } from './signIn.js';
 
 /** Where the script loads `@engine9/id` from when the page has not loaded it. */
 export const DEFAULT_ID_SCRIPT = 'https://unpkg.com/@engine9/id@1/dist/id.iife.js';
@@ -72,7 +73,7 @@ export function loginButtonScript({ publicApiKey, delegateUrl, signIn = {} }) {
   if (signIn.loginProviders) client.loginProviders = signIn.loginProviders;
 
   const widget = {};
-  if (signIn.minLevel) widget.minLevel = signIn.minLevel;
+  widget.minLevel = signInMinLevel(signIn);
   if (signIn.maxLevel) widget.maxLevel = signIn.maxLevel;
   if (signIn.fields) widget.fields = signIn.fields;
   if (signIn.optionalFields) widget.optionalFields = signIn.optionalFields;

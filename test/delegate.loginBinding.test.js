@@ -21,7 +21,7 @@ async function setup({ authOptions = {} } = {}) {
   const { privateKey, publicKey } = await generateKeyPair('ES256');
   const jwk = { ...(await exportJWK(publicKey)), kid, alg: 'ES256', use: 'sig' };
   const sign = ({ nonce } = {}) => {
-    const jwt = new SignJWT({ level: 1, nonce, auth: {} });
+    const jwt = new SignJWT({ level: 2, nonce, auth: {} });
     jwt.setProtectedHeader({ alg: 'ES256', kid, typ: 'JWT' });
     jwt.setIssuer(DELEGATE_URL).setAudience(DOMAIN).setSubject(UNID).setIssuedAt().setExpirationTime('5m');
     return jwt.sign(privateKey);

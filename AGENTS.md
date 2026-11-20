@@ -215,7 +215,8 @@ fallback for `off`, do not add the plugin to `REQUIRED_PLUGINS` or to an
 edition, and keep login code out of the people pipeline, dedupe, and
 `POST /people`: only sign-in routes, role grants by email, status, and the
 `signin` commands read `person_login`. Outside `on`, sessions and roles
-behave exactly as before the plugin existed.
+behave exactly as before the plugin existed, except that sign-in starts at
+Identity Level 2 in every mode.
 
 `exclude_pii` only refuses plaintext contact plugins, and any plugin that
 includes one. It never chooses what to install.
@@ -436,8 +437,40 @@ not in setup docs.
   (`person_email`, the identifier store, `processPeople`): public forms write
   those. Do not add a writer of `person_login` outside `auth/logins.js` and
   the `person_login` upgrade, and do not delete its rows (retire them).
-- Sign-in stops and their choices (`other_login` with "This isn't me",
-  `login_reassigned`, `login_locked`), Add a sign-in address, Switch email,
+- Sign-in starts at Identity Level 2. Core never asks Delegate for less
+  (`signInMinLevel` raises `signIn.minLevel`), refuses a token below it
+  (`level_too_low`, before any read or write, in every `loginMode`), and
+  treats a session below it as no session. Do not bring back a Level 0/1
+  visitor path or self-join roles below Level 2. People who do not sign in
+  are high volume (an email to millions) and are joined by what they send:
+  imports and forms, through dedupe. Never route them through Delegate.
+- Link tokens ([auth/linkTokens.js](auth/linkTokens.js),
+  [docs/link-tokens.md](docs/link-tokens.md)) are an outside sender's ES256
+  JWT (`typ: e9-link+jwt`) naming the person an email went to. They file
+  one `POST /people` row that names no address or phone on that person
+  (`applyLinkToken`), and nothing else: never a session, a role, a read, or
+  a sign-in. The site lists public keys only. Do not let a link token join
+  an identifier, apply to more than one row, or sign anyone in.
+- Sign-in links (`e9core signin invite`, `POST /admin/logins`
+  `action: invite`) are the one sign-in without Delegate. Core alone makes
+  them, with `SESSION_SECRET`; never accept one from an outside sender.
+  Only for an address with an active login (link, then invite); `GET
+  /auth/link` changes nothing; one use, by `POST /auth/link` from that
+  page; the session is Level 2. Do not raise that level or add a setting
+  for it.
+- A first sign-in with no login is a new person: never a record found by
+  its address or its Domain UNID (do not bring back an "own visitor record"
+  lookup; a people:write import can file a Domain UNID anywhere). A grant by
+  email with no login is a new person. Never let a sign-in or a grant reach an existing record by
+  its address, and do not bring back adoption, a "someone else signs in as
+  this person" stop, or "This isn't me". Two rules that are each safe
+  (dedupe joins by phone; sign-in finds by address) combine into a
+  takeover. A login reaches an existing record only through an admin's
+  link (`e9core signin link`), the login plugin's one-time copy, or a merge
+  tool that follows [docs/merge-tools.md](docs/merge-tools.md). Do not add
+  a merge tool or bulk linker to core.
+- Sign-in stops (`login_reassigned`, `login_locked`, `sign_in_off`), Add a
+  sign-in address, Switch email,
   and Log out live in the Login button's dialog only. Do not build a site
   link or page for any of them; `/api/auth/callback` is the no-JavaScript
   fallback.
