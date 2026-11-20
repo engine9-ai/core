@@ -1,6 +1,6 @@
 {
   "name": "@engine9/core",
-  "version": "1.22.3",
+  "version": "1.22.4",
   "publishConfig": {
     "access": "public"
   },
@@ -30,6 +30,7 @@
     "./requiredPlugins": "./lib/requiredPlugins.js",
     "./PersonWorker": "./lib/PersonWorker.js",
     "./peoplePipeline": "./lib/peoplePipeline/index.js",
+    "./transformChain": "./lib/transformChain.js",
     "./auth": "./auth/index.js",
     "./auth/hmac": "./auth/hmac.js",
     "./auth/policy": "./auth/policy.js",
@@ -79,7 +80,7 @@
   "author": "engine9",
   "license": "MIT",
   "dependencies": {
-    "@engine9/input-tools": "^2.7.2",
+    "@engine9/input-tools": "^2.7.3",
     "camelcase": "^9.0.0",
     "dayjs": "^1.11.13",
     "debug": "^4.3.4",
