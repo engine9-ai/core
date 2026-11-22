@@ -35,8 +35,10 @@
         Local website plus the setup wizard at /setup. Listens on 127.0.0.1.
         --setup reopens the wizard after it has been finished.
 
-    e9core setup-keys [--d1 engine9] [--remote [--env staging]] [--rotate]
+    e9core setup-keys [--d1 <name>] [--remote [--env staging]] [--rotate]
         Create/reuse site keys and E9_SETUP_TOKEN (normally done by setup).
+        The D1 database is the one with binding DB in wrangler.jsonc
+        (that environment's, with --env) unless --d1 names another.
         Writes plaintext to .env only (gitignored). Do not add .dev.vars;
         Wrangler prefers that file and ignores the same names in .env.
         Stores only hashes in local D1. A SESSION_SECRET or
@@ -797,7 +799,7 @@ async function main() {
       try {
         const result = await setupKeys({
           cwd: process.cwd(),
-          d1: args.d1 && args.d1 !== true ? String(args.d1) : 'engine9',
+          d1: args.d1 && args.d1 !== true ? String(args.d1) : undefined,
           remote: args.remote === true,
           env: args.env && args.env !== true ? String(args.env) : undefined,
           rotate: args.rotate === true,

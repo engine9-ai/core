@@ -127,6 +127,13 @@ describe('setupKeys', () => {
   });
 });
 
+const WRANGLER = `${JSON.stringify({
+  name: 'site',
+  d1_databases: [{ binding: 'DB', database_name: 'site-db', database_id: 'prod-id' }],
+  env: { staging: { d1_databases: [{ binding: 'DB', database_name: 'site-db-staging', database_id: 'staging-id' }] } }
+})}\n`;
+const d1Targets = (calls) => calls.filter((c) => c.args[0] === 'd1').map((c) => c.args[2]);
+
 describe('setupKeys --remote', () => {
   function recorder() {
     const calls = [];
@@ -140,7 +147,7 @@ describe('setupKeys --remote', () => {
   it('gives each environment its own admin key and session secret', async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-keys-remote-'));
     try {
-      writeFileSync(path.join(cwd, 'wrangler.jsonc'), '{}\n');
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), WRANGLER);
       await setupKeys({ cwd, applySql: async () => {} });
       const local = readFileSync(path.join(cwd, '.env'), 'utf8');
 
@@ -184,6 +191,8 @@ describe('setupKeys --remote', () => {
       const stagingEnv = readFileSync(path.join(cwd, '.env.staging'), 'utf8');
       assert.notEqual(readEnvValue(stagingEnv, 'E9_ADMIN_API_KEY'), readEnvValue(prodEnv, 'E9_ADMIN_API_KEY'));
       assert.ok(staging.calls.every((c) => c.args.includes('--env') && c.args.includes('staging')));
+      assert.deepEqual(d1Targets(prod.calls), ['site-db']);
+      assert.deepEqual(d1Targets(staging.calls), ['site-db-staging']);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -192,7 +201,7 @@ describe('setupKeys --remote', () => {
   it('turns off the local admin key that earlier releases copied to production', async () => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'e9-setup-keys-legacy-'));
     try {
-      writeFileSync(path.join(cwd, 'wrangler.jsonc'), '{}\n');
+      writeFileSync(path.join(cwd, 'wrangler.jsonc'), WRANGLER);
       await setupKeys({ cwd, applySql: async () => {} });
       const statePath = path.join(cwd, '.e9core', 'keys.json');
       const state = JSON.parse(readFileSync(statePath, 'utf8'));
@@ -231,7 +240,7 @@ describe('setupKeys --remote decides from the target', () => {
   }
   function freshRunner() {
     const cwd = mkdtempSync(path.join(tmpdir(), 'e9-keys-runner-'));
-    writeFileSync(path.join(cwd, 'wrangler.jsonc'), '{}\n');
+    writeFileSync(path.join(cwd, 'wrangler.jsonc'), WRANGLER);
     return cwd;
   }
 
@@ -328,6 +337,64 @@ describe('setupKeys --remote decides from the target', () => {
       assert.equal(local.created.public, false);
       assert.ok(inserted.some((sql) => /^INSERT INTO api_key .*'site-public'/.test(sql)), 'its hash goes into the local database');
       assert.ok(inserted.every((sql) => !/OR IGNORE/.test(sql)), 'SQL MySQL accepts too');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('setupKeys picks the D1 database from wrangler.jsonc', () => {
+  function runner(config) {
+    const cwd = mkdtempSync(path.join(tmpdir(), 'e9-keys-db-'));
+    writeFileSync(path.join(cwd, 'wrangler.jsonc'), config);
+    const calls = [];
+    const run = (args) => {
+      calls.push({ args });
+      return '';
+    };
+    return { cwd, calls, run };
+  }
+
+  it('uses the DB binding of a site that named its own database', async () => {
+    const { cwd, calls, run } = runner(`{
+      // a site set up by hand
+      "name": "festival-demo",
+      "d1_databases": [{ "binding": "DB", "database_name": "festival-db", "database_id": "abc" }],
+    }\n`);
+    try {
+      await setupKeys({ cwd, remote: true, wrangler: run });
+      assert.deepEqual(d1Targets(calls), ['festival-db']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('--d1 names another database', async () => {
+    const { cwd, calls, run } = runner(WRANGLER);
+    try {
+      await setupKeys({ cwd, remote: true, d1: 'other-db', wrangler: run });
+      assert.deepEqual(d1Targets(calls), ['other-db']);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to guess a remote database the config does not name, before writing anything', async () => {
+    const { cwd, calls, run } = runner('{ "name": "site" }\n');
+    try {
+      await assert.rejects(setupKeys({ cwd, remote: true, wrangler: run }), /no D1 database with binding "DB" in wrangler\.jsonc.*--d1/);
+      const scoped = runner(`${JSON.stringify({ name: 'site', d1_databases: [{ binding: 'DB', database_name: 'site-db' }] })}\n`);
+      try {
+        await assert.rejects(
+          setupKeys({ cwd: scoped.cwd, remote: true, env: 'staging', wrangler: scoped.run }),
+          /under "env": \{ "staging" \}/,
+          'staging never falls back to the production database'
+        );
+      } finally {
+        rmSync(scoped.cwd, { recursive: true, force: true });
+      }
+      assert.deepEqual(calls, []);
+      assert.ok(!existsSync(path.join(cwd, '.env.production')));
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

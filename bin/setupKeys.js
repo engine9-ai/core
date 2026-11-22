@@ -9,7 +9,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { generateApiKey, generateSigningSecret, hashApiKey, signingSecretProblem } from '../auth/index.js';
-import { workerSecretNames } from './wranglerProject.js';
+import { workerSecretNames, wranglerProject } from './wranglerProject.js';
 
 export const ENV_ADMIN_KEY = 'E9_ADMIN_API_KEY';
 export const ENV_PUBLIC_KEY = 'E9_PUBLIC_API_KEY';
@@ -171,6 +171,26 @@ function hasWranglerConfig(dir) {
   return ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'].some((name) => existsSync(path.join(dir, name)));
 }
 
+/*
+  The D1 database that gets the key hashes: --d1, else the database with
+  binding DB in wrangler.jsonc (that environment's, for --env). `engine9` is
+  the name setup gives a new project, so it is used only where the config
+  cannot name one: a local run, or a wrangler.toml. A remote run never
+  guesses past a wrangler.jsonc, since a wrong name writes keys nowhere, or
+  to another environment's database.
+*/
+export function keysDatabase(cwd, { d1, env, remote }) {
+  if (d1) return String(d1);
+  const project = wranglerProject(cwd);
+  if (!remote || !project) return project?.databaseName || 'engine9';
+  const name = env ? wranglerProject(cwd, env)?.databaseName : project.databaseName;
+  if (name) return name;
+  const where = env ? `under "env": { "${env}" } in ${project.file}` : `in ${project.file}`;
+  throw new Error(
+    `setup-keys --remote: no D1 database with binding "DB" ${where}. Add one to d1_databases, or pass --d1 <database name>.`
+  );
+}
+
 export function runWrangler(args, cwd, input) {
   const result = spawnSync('npx', ['wrangler', ...args], {
     cwd,
@@ -203,16 +223,20 @@ export function runWrangler(args, cwd, input) {
  */
 export async function setupKeys(options = {}) {
   const cwd = options.cwd || process.cwd();
-  const d1Name = options.d1 || 'engine9';
   const local = options.local ?? !options.remote;
   const rotate = options.rotate === true;
+  const wranglerReady = !options.skipWrangler && hasWranglerConfig(cwd);
+  if (options.remote && !wranglerReady) {
+    throw new Error('setup-keys --remote needs wrangler.jsonc or wrangler.toml in this folder.');
+  }
+  const d1Name = keysDatabase(cwd, { d1: options.d1, remote: false });
+  const remoteD1Name = options.remote ? keysDatabase(cwd, { d1: options.d1, env: options.env, remote: true }) : '';
   const state = readState(cwd);
   // Keys earlier releases copied to production, kept until production has its own.
   if (state.remoteApplied && !state.legacyRemote) {
     state.legacyRemote = { adminId: state.adminId, publicId: state.publicId };
   }
   const notes = [];
-  const wranglerReady = !options.skipWrangler && hasWranglerConfig(cwd);
 
   let localResult = null;
   if (local) {
@@ -222,12 +246,9 @@ export async function setupKeys(options = {}) {
 
   let remote = null;
   if (options.remote) {
-    if (!wranglerReady) {
-      throw new Error('setup-keys --remote needs wrangler.jsonc or wrangler.toml in this folder.');
-    }
     remote = remoteKeys({
       cwd,
-      d1Name,
+      d1Name: remoteD1Name,
       env: options.env,
       rotate,
       state,

@@ -7,6 +7,28 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.22.4: `setup-keys` uses the site's own D1 database
+
+`e9core setup-keys` stored key hashes in a D1 database named `engine9`
+unless `--d1` named another. That is the name `e9core setup` gives a new
+project, so a site whose `wrangler.jsonc` names its database something else
+(`festival-db`) failed with `Couldn't find a D1 DB with name or binding
+'engine9'`. `setup-keys` now takes the database with binding `DB` in
+`wrangler.jsonc`, or that environment's with `--env`, as `setup --remote`,
+`status`, and the other `--remote` commands already did. `--d1` still names
+another. A `--remote` run whose `wrangler.jsonc` has no `DB` binding (for
+`--env`, none under that environment) stops before it writes anything,
+rather than guess a name: with `--env staging`, a guess could have put
+staging's keys in production's database.
+
+`CORE_VERSION` matches `package.json` again.
+
+| What a site changes | |
+| --- | --- |
+| A site whose D1 database is not named `engine9` | Drop `--d1 <name>` from `setup-keys` commands and CI, if you like; it still works |
+| A site whose `wrangler.jsonc` has no `d1_databases` entry with binding `DB` | Add one, or pass `--d1 <database name>` to `setup-keys --remote` |
+| Any other site | Nothing |
+
 ## 1.22.2: the status report works on Cloudflare D1
 
 On D1, `GET /api/admin/status` (and its page) failed with

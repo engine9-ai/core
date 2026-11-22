@@ -570,7 +570,7 @@ npx e9core setup-keys --remote      # add --env staging for another environment
 ```
 
 It sends the keys in `.env.production`, and the public key, to that D1
-database again (rows that are already there are left alone) and saves any
+database (the one with binding `DB` in `wrangler.jsonc`) again (rows that are already there are left alone) and saves any
 secret the Worker lacks. Keys are read from the database on every request, so
 no redeploy is needed. The public key comes from `.env`, else
 `.env.production`, else the committed `public/engine9-config.js`: check that
