@@ -47,9 +47,12 @@ releases have a guide in `docs/upgrade-<version>.md`.
   `status`; any other is read table by table. The connection settings come
   from the dialect's `getKnexConfig` and `getSqlVersion`, MySQL's included.
   `SQLWorker.rebuildSqliteTable` and `sqliteRebuildStatements` are gone,
-  and `sqlForDiff` is now async. The identifier stores (`lib/id`) still
-  choose their column types by engine, because the server's workers share
-  them.
+  and `sqlForDiff` is now async. The identifier stores (`lib/id`) read the
+  worker's dialect too: SQLite's declares `identifierStore` (the
+  `person_id_*` column types and the default store kind), `insertIdIsLast`,
+  and `getDropIndexSQL`. A dialect without them behaves as MySQL, so a
+  server worker that carries core's MySQL dialect, or a copy of it with its
+  own `getKnexConfig`, gets the same tables and SQL as before.
 - **The `core.triggers` status check reads `describe`.** It warns for a
   `modified_at` column whose default has no `ON UPDATE`, so it now runs on
   MySQL as well as SQLite and D1. The schema snapshot no longer has a
