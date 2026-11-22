@@ -395,6 +395,36 @@ test('Cloudflare worker: GET /api/admin/status, the plugin_history drop, and ret
     assert.ok(d1.db.prepare("select id from plugin where path='@engine9/schemas/editions/contact'").get());
     assert.ok(!d1.db.prepare("select id from plugin where path like '@engine9/schemas/stacks/%'").get());
     assert.ok(!d1.db.prepare("select name from sqlite_master where name='plugin_history'").get());
+
+    // A hand-made install: api_key without its trigger, setting.id an integer.
+    d1.db.exec(`drop trigger api_key_modified_at_auto_update;
+      alter table setting rename to setting_old;
+      create table setting (
+        id integer not null primary key autoincrement,
+        plugin_id char(36), name varchar(255), value text,
+        created_at datetime not null default CURRENT_TIMESTAMP,
+        modified_at datetime not null default CURRENT_TIMESTAMP
+      );
+      insert into setting (plugin_id, name, value) select plugin_id, name, value from setting_old;
+      drop table setting_old;
+      create unique index uidx_setting_plugin_id_name on setting (plugin_id, name);
+      create trigger setting_modified_at_auto_update after update on setting for each row
+        when NEW.modified_at is OLD.modified_at
+        begin update setting set modified_at = CURRENT_TIMESTAMP where rowid = NEW.rowid; end;`);
+    const handMade = await (await call('GET', '/admin/status')).json();
+    assert.deepEqual(handMade.checks.find((c) => c.id === 'core.triggers').data.tables, ['api_key']);
+    const settingSchema = handMade.checks.find((c) => c.id === 'plugin.schema' && c.plugin === '@engine9/schemas/plugin');
+    assert.match(settingSchema.detail, /setting\.id differs/);
+    assert.ok(settingSchema.sql.length, 'the warning carries the SQL');
+
+    assert.equal((await call('POST', '/admin/upgrade', {})).status, 200);
+    assert.ok(d1.db.prepare("select name from sqlite_master where name='api_key_modified_at_auto_update'").get(), 'the upgrade puts the api_key trigger back');
+    assert.equal(d1.db.prepare('pragma table_info(setting)').all().find((c) => c.name === 'id').type, 'INTEGER', 'the upgrade leaves setting.id alone');
+
+    d1.db.exec(settingSchema.sql.map((s) => `${s};`).join('\n'));
+    const repaired = await (await call('GET', '/admin/status')).json();
+    assert.equal(repaired.checks.find((c) => c.id === 'core.triggers').status, 'pass');
+    assert.equal(repaired.checks.find((c) => c.id === 'plugin.schema' && c.plugin === '@engine9/schemas/plugin').status, 'pass');
     const records = audited.map((line) => JSON.parse(line)).filter((r) => r.engine9_audit);
     assert.ok(records.some((r) => r.action === 'upgrade'), 'with no AUDIT_BUCKET the upgrade is in the Worker log');
   } finally {

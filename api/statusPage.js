@@ -23,7 +23,8 @@ const STYLE = `body{font:15px/1.5 system-ui,sans-serif;max-width:52rem;margin:2r
 h1{font-size:1.4rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:1.5rem 0 .5rem;border-bottom:1px solid #e0e0e0;padding-bottom:.25rem}
 .meta{color:#5f6368;font-size:13px}.summary{font-weight:600;margin:1rem 0}
 ul{list-style:none;padding:0;margin:0}li{margin:.35rem 0}.detail{color:#3c4043;font-size:14px;margin:.15rem 0 0 1.4rem}
-.fix{font-size:14px;margin:.15rem 0 0 1.4rem}.cmd{font:12px ui-monospace,monospace;color:#5f6368;margin:.1rem 0 0 1.4rem;word-break:break-all}`;
+.fix{font-size:14px;margin:.15rem 0 0 1.4rem}.cmd{font:12px ui-monospace,monospace;color:#5f6368;margin:.1rem 0 0 1.4rem;word-break:break-all}
+.sql{font:12px ui-monospace,monospace;background:#f1f3f4;padding:.5rem;margin:.3rem 0 0 1.4rem;white-space:pre-wrap}`;
 
 function checkItem(c) {
   const color = COLOR[c.status] || '#202124';
@@ -32,6 +33,7 @@ function checkItem(c) {
     if (c.detail) lines.push(`<div class="detail">${escapeHtml(c.detail)}</div>`);
     if (c.fix_web) lines.push(`<div class="fix"><strong>Fix:</strong> ${escapeHtml(c.fix_web)}</div>`);
     if (c.fix) lines.push(`<div class="cmd">${c.fix_web ? 'or, with a terminal: ' : 'Fix: '}${escapeHtml(c.fix)}</div>`);
+    if (c.sql) lines.push(`<pre class="sql">${escapeHtml(c.sql.map((s) => `${s};`).join('\n'))}</pre>`);
   }
   lines.push('</li>');
   return lines.join('');

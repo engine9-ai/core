@@ -160,6 +160,80 @@ test('status finds what a failed deploy leaves behind', async () => {
   }
 });
 
+test('upgrade puts back a missing modified_at trigger, on api_key and on a plugin table', async () => {
+  const worker = memory();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/contact');
+    await new SqlApiKeyStore({ worker }).deploy();
+    await worker.query('drop trigger api_key_modified_at_auto_update');
+    await worker.query('drop trigger person_email_modified_at_auto_update');
+
+    const before = await worker.status();
+    assert.deepEqual(byId(before, 'core.triggers')[0].data.tables.sort(), ['api_key', 'person_email']);
+    assert.match(byId(before, 'core.triggers')[0].fix, /e9core upgrade/);
+    const [emailSchema] = byId(before, 'plugin.schema', '@engine9/schemas/person_email');
+    assert.equal(emailSchema.status, 'warn');
+    assert.match(`${emailSchema.title} ${emailSchema.detail}`, /person_email\.modified_at differs \(default_value\)/);
+
+    const dry = await worker.upgrade({ plugins: ['@engine9/schemas/person_email'], dry_run: true, sql: true });
+    assert.ok(dry.plugins[0].sql.some((s) => /create trigger if not exists "person_email_modified_at_auto_update"/.test(s)), 'the dry run shows the SQL');
+
+    await worker.upgrade();
+    assert.deepEqual(bad(await worker.status()), []);
+    const { data } = await worker.query("select name from sqlite_master where type = 'trigger' and name in ('api_key_modified_at_auto_update', 'person_email_modified_at_auto_update')");
+    assert.equal(data.length, 2);
+  } finally {
+    await worker.destroy();
+  }
+});
+
+test('a column type no upgrade changes (an integer setting.id) comes with the SQL that changes it', async () => {
+  const worker = memory();
+  try {
+    await installEdition(worker, '@engine9/schemas/editions/contact');
+    // setting.id was an auto-increment integer before the schema made it a UUID.
+    for (const sql of [
+      'alter table setting rename to setting_old',
+      `create table setting (
+        id integer not null primary key autoincrement,
+        plugin_id char(36), name varchar(255), value text,
+        created_at datetime not null default CURRENT_TIMESTAMP,
+        modified_at datetime not null default CURRENT_TIMESTAMP
+      )`,
+      'insert into setting (plugin_id, name, value) select plugin_id, name, value from setting_old',
+      'drop table setting_old',
+      'create unique index uidx_setting_plugin_id_name on setting (plugin_id, name)',
+      `create trigger setting_modified_at_auto_update after update on setting for each row
+        when NEW.modified_at is OLD.modified_at
+        begin update setting set modified_at = CURRENT_TIMESTAMP where rowid = NEW.rowid; end`
+    ]) await worker.query(sql);
+    const { data: before } = await worker.query('select plugin_id, name, value from setting order by name');
+
+    const report = await worker.status({ webFixes: true });
+    const [schema] = byId(report, 'plugin.schema', '@engine9/schemas/plugin');
+    assert.equal(schema.status, 'warn');
+    assert.match(schema.detail, /setting\.id differs \(auto_increment, column_type\)/);
+    assert.match(schema.fix, /No upgrade changes a column's type/);
+    assert.match(schema.fix_web, /D1, this database, Console/);
+    assert.ok(schema.sql.some((s) => /create table "setting__e9new"[\s\S]*"id" char\(36\) not null[\s\S]*primary key \("id"\)/.test(s)));
+    assert.match(renderStatus({ ...report, sources: ['database'] }), /alter table "setting__e9new" rename to "setting";/);
+
+    for (const sql of schema.sql) await worker.query(sql);
+    const after = await worker.status();
+    assert.equal(byId(after, 'plugin.schema', '@engine9/schemas/plugin')[0].status, 'pass');
+    assert.equal(byId(after, 'core.triggers')[0].status, 'pass', 'the trigger survives the rebuild');
+    const { data: rows } = await worker.query('select plugin_id, name, value from setting order by name');
+    assert.deepEqual(rows, before);
+    const { data: pk } = await worker.query("select name from pragma_table_info('setting') where pk = 1");
+    assert.deepEqual(pk.map((r) => r.name), ['id']);
+    await worker.setSetting({ pluginId: before[0].plugin_id, name: 'after_the_change', value: 'x' });
+    const { data: added } = await worker.query("select id from setting where name='after_the_change'");
+    assert.match(added[0].id, /^[0-9a-f-]{36}$/, 'new settings get a UUID');
+  } finally {
+    await worker.destroy();
+  }
+});
+
 test('site keys are checked by hash: missing, turned off, active', async () => {
   const worker = memory();
   try {

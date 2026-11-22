@@ -314,6 +314,7 @@ export function renderStatus(report) {
       lines.push(`  ${MARK[c.status] || '?'} ${c.title}`);
       if (c.status !== 'pass' && c.detail) lines.push(`      ${c.detail}`);
       if (c.status !== 'pass' && c.fix) lines.push(`      fix: ${c.fix}`);
+      if (c.status !== 'pass' && c.sql) lines.push('', ...c.sql.map((s) => `${s};`), '');
     }
     if (area === 'plugins') {
       const plugins = new Set(checks.map((c) => c.plugin));

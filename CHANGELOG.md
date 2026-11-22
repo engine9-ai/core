@@ -7,6 +7,62 @@ Upgrading a database (`e9core upgrade`) is in [docs/upgrading.md](docs/upgrading
 Only releases from the last week are listed here with site steps. Older
 releases have a guide in `docs/upgrade-<version>.md`.
 
+## 1.22.5: older tables get their trigger back; engines answer through dialect hooks
+
+- **SQLite describes `modified_at` as MySQL does.** MySQL keeps
+  `modified_at` current with `ON UPDATE CURRENT_TIMESTAMP` on the column,
+  and `describe` reports it in the column's default. SQLite keeps it with
+  the `<table>_modified_at_auto_update` trigger, and its `describe` now
+  reports the same default when that trigger is there. A table without the
+  trigger therefore has an ordinary column difference
+  (`modified_at differs (default_value)`), and the SQLite alter plan answers
+  it with `create trigger if not exists`. So `e9core upgrade` puts the
+  trigger back on `api_key` and every `@engine9/schemas` table, and
+  `upgrade --plugin <path>` on any other; `--dry-run --sql` shows the
+  statement. `SchemaWorker` and the upgrade runner are unchanged, and
+  nothing changes on MySQL. The `core.triggers` status check's fix is now
+  the upgrade.
+- **A column type difference comes with its SQL.** No upgrade changes a
+  column's type. When a plugin's table differs in one (`setting.id differs
+  (auto_increment, column_type)` on a database installed before
+  `setting.id` became a UUID), the `plugin.schema` warning carries `sql`:
+  the statements that change it, which `e9core status` and the status page
+  print, to run once by hand. `SQLWorker.changeColumnTypeStatements` makes
+  them (the statements `changeColumnType` runs); a dialect declares a
+  schema column's type with `declaredColumnType`. A dialect without that
+  hook (MySQL) keeps the upgrade as the fix.
+- **A table rebuild keeps a single non-integer primary key.** SQLite and D1
+  rebuild a table to add a `CURRENT_TIMESTAMP` column or to change a
+  column's type. The rebuilt table kept an integer primary key but dropped
+  a `char(36)` one. It is kept now. A table that already lost its key shows
+  `is missing its primary key` in `e9core status`.
+- **Engine differences live in the dialects.** `SQLWorker`, the schema
+  snapshot, the upgrade dry run, and the status report no longer ask whether
+  the database is SQLite. A dialect may carry `ddl` hooks
+  (`createTableStatements`, `alterTablePlan`, `changeColumnTypeStatements`):
+  SQLite and D1 do, and write their schema changes as SQL text. A dialect
+  without them (MySQL) changes the schema through `knex.schema`, and
+  `changeColumnType` falls back to `ALTER TABLE … MODIFY COLUMN`. A dialect
+  with `introspection.readSchema` reads the whole schema at once for
+  `status`; any other is read table by table. The connection settings come
+  from the dialect's `getKnexConfig` and `getSqlVersion`, MySQL's included.
+  `SQLWorker.rebuildSqliteTable` and `sqliteRebuildStatements` are gone,
+  and `sqlForDiff` is now async. The identifier stores (`lib/id`) still
+  choose their column types by engine, because the server's workers share
+  them.
+- **The `core.triggers` status check reads `describe`.** It warns for a
+  `modified_at` column whose default has no `ON UPDATE`, so it now runs on
+  MySQL as well as SQLite and D1. The schema snapshot no longer has a
+  `triggers` list.
+
+| What a site changes | |
+| --- | --- |
+| A site whose status warns `modified_at is not kept current` | `npm install @engine9/core@^1.22.5`, deploy, then `npx e9core upgrade --url <site>` |
+| A site whose status warns `setting.id differs` | Back up the database, then run the SQL under that warning once (D1: save it as a file, `npx wrangler d1 execute <database> --remote --file <file>`) |
+| Code that called `SQLWorker.rebuildSqliteTable` or `sqliteRebuildStatements` | Call `changeColumnType`, or `changeColumnTypeStatements` for the SQL |
+| Code that read `triggers` from `createSchemaSnapshot` | Read `describe`: a kept-current `modified_at` has an `ON UPDATE` default |
+| Any other site | Nothing |
+
 ## 1.22.4: `setup-keys` uses the site's own D1 database
 
 `e9core setup-keys` stored key hashes in a D1 database named `engine9`

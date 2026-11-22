@@ -64,3 +64,32 @@ test('D1 cannot ADD a CURRENT_TIMESTAMP column, so that alter rebuilds the table
   assert.ok(columns.includes('modified_at'));
   db.close();
 });
+
+test('a modified_at default difference is its trigger; other differences stay skipped', () => {
+  const plan = buildAlterTable({
+    table: 'api_key',
+    columns: [
+      { name: 'modified_at', type: 'modified_at', differences: { default_value: { schema: 'x', db: 'y' } } },
+      { name: 'id', type: 'id_uuid', differences: { column_type: { schema: 'uuid', db: 'integer' } } }
+    ]
+  });
+  assert.equal(plan.statements.length, 1);
+  assert.match(plan.statements[0], /^create trigger if not exists "api_key_modified_at_auto_update"/);
+  assert.deepEqual(plan.skipped.map((s) => s.column), ['id']);
+});
+
+test('a rebuild keeps a single non-integer primary key', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec('create table api_key (id char(36) not null, name varchar(255), primary key ("id"))');
+  db.exec("insert into api_key (id, name) values ('a', 'site-admin')");
+  const statements = buildTableRebuild({
+    table: 'api_key',
+    existingColumns: db.prepare('pragma table_info(api_key)').all(),
+    newColumns: [{ name: 'modified_at', type: 'modified_at', nullable: false, default_value: 'current_timestamp()', differences: 'new' }]
+  });
+  for (const sql of statements) db.exec(sql);
+  const pk = db.prepare('pragma table_info(api_key)').all().filter((col) => col.pk > 0).map((col) => col.name);
+  assert.deepEqual(pk, ['id']);
+  assert.throws(() => db.exec("insert into api_key (id, name) values ('a', 'again')"), /UNIQUE|PRIMARY/);
+  db.close();
+});
