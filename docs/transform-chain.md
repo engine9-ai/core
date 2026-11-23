@@ -57,5 +57,10 @@ bound there.
 - Conductor's local runs: the server serves this file
   (`GET /conductor/transform-chain.js`) and Conductor runs it in a sandboxed
   worker on sample rows, with plugin files from a folder on the person's
-  machine. No server accepts transform code: code reaches servers only
-  through the reviewed repository they pull from.
+  machine.
+- `transform-scratch`, a separate Worker that runs draft transforms on
+  sample data in a network-less isolate per code version, with no deploy
+  per edit.
+
+No production server accepts transform code: code reaches production only
+through the reviewed repository it pulls from.
