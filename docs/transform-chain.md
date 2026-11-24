@@ -58,9 +58,10 @@ bound there.
   (`GET /conductor/transform-chain.js`) and Conductor runs it in a sandboxed
   worker on sample rows, with plugin files from a folder on the person's
   machine.
-- `transform-scratch`, a separate Worker that runs draft transforms on
-  sample data in a network-less isolate per code version, with no deploy
-  per edit.
+- The engine9 server's transform scratch: draft transforms from a workspace
+  run in a sandboxed Node process (no environment, no network on Linux, no
+  packages or built-ins), with no deploy per edit. The process is handed
+  this file and the workspace's plugin files.
 
-No production server accepts transform code: code reaches production only
-through the reviewed repository it pulls from.
+Draft code never runs on a schedule: code reaches scheduled production runs
+only through the reviewed repository the servers pull from.
